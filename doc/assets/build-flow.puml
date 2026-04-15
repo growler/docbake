@@ -1,0 +1,60 @@
+@startuml
+
+skinparam sequenceMessageAlign direction
+
+hide footbox
+
+actor "Writer" as w
+
+box "docbake"
+    participant "CLI" as cli
+    participant "Include graph" as graph
+    participant "Markdown parser" as parser
+    participant "Diagram renderer" as diag
+    participant "Typst renderer" as typ
+end box
+
+database "Artifact cache" as cache
+
+box "External tools"
+    participant "plantuml\nmmdc, d2" as tool
+    participant "typst" as typst
+end box
+
+note over w, typst: The writer builds a PDF from a multi-file document
+
+w -> cli: docbake build -f pdf -i index.md
+cli -> graph: load index.md
+graph -> graph: resolve :::include blocks
+graph -> graph: assign heading IDs,\nrewrite .md links
+graph --> cli: document graph
+
+cli -> parser: parse each file
+parser --> cli: AST with diagram nodes
+
+loop for each diagram
+    cli -> diag: render diagram
+    diag -[#00f]> cache: look up hash of source
+    alt #efe cache hit
+        cache -[#00f]-> diag: SVG
+    else #fee cache miss
+        cache -[#00f]-> diag: not found
+        diag -[#70d]> tool: diagram source
+        tool -[#70d]-> diag: SVG
+        diag -[#00f]> cache: store SVG
+    end
+    diag --> cli: SVG
+end
+
+cli -> typ: render AST and SVG files
+typ --> cli: document.typ
+cli -[#70d]> typst: typst compile document.typ
+alt #efe compile succeeds
+    typst -[#70d]-> cli: document.pdf
+    cli -[#090]-> w: document.pdf
+else #fee compile fails
+    typst -[#70d]-> cli: error message
+    cli -[#f00]-> w: build error
+end
+
+@enduml

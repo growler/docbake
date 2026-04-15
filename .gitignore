@@ -1,0 +1,6 @@
+/target
+/.direnv
+/.cache
+.DS_Store
+libnull.a
+*.drawio.bkp
