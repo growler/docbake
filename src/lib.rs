@@ -139,12 +139,18 @@ fn resolve_output(output: &Path, input: &Path, format: OutputFormat) -> Result<(
             let file = dir.join("index.html"); // sentinel; actual pages are written individually
             Ok((file, dir))
         }
+        OutputFormat::Typst => {
+            // typst always produces a self-contained directory with .typ + assets.
+            let dir = output.to_path_buf();
+            let file = dir.join(format!("{stem}.typ"));
+            Ok((file, dir))
+        }
         _ => {
             let ext = match format {
                 OutputFormat::Html => "html",
                 OutputFormat::Pdf => "pdf",
                 OutputFormat::Markdown => "md",
-                OutputFormat::HtmlMulti => unreachable!(),
+                OutputFormat::HtmlMulti | OutputFormat::Typst => unreachable!(),
             };
             // If -o has a recognised extension, treat as a file path.
             if let Some(given_ext) = output.extension() {
@@ -202,10 +208,26 @@ fn build_command(
         return Ok(());
     }
 
+    // ── Working directory for asset preparation ────────────────────────
+    // For PDF output, use a temporary directory so the final output
+    // location contains only the .pdf file.  The temp dir is cleaned up
+    // automatically when `_temp_dir` is dropped at the end of this
+    // function.  For all other formats the working directory *is* the
+    // output directory.
+    let (_temp_dir, work_dir) = match format {
+        OutputFormat::Pdf => {
+            let tmp = tempfile::tempdir()
+                .context("failed to create temporary directory for PDF build")?;
+            let path = tmp.path().to_path_buf();
+            (Some(tmp), path)
+        }
+        _ => (None, output_dir.clone()),
+    };
+
     // ── Collect and copy assets ─────────────────────────────────────────
     let document_assets = build.asset_targets().clone();
-    copy_assets(&base_dir, &output_dir, &document_assets, logger)?;
-    theme.copy_assets_to(&output_dir)?;
+    copy_assets(&base_dir, &work_dir, &document_assets, logger)?;
+    theme.copy_assets_to(&work_dir)?;
 
     // ── Build template context from front matter ────────────────────────
     let metadata = build.document_metadata();
@@ -269,7 +291,7 @@ fn build_command(
         OutputFormat::Pdf => {
             let template = theme.template_for(format)?;
             let renderer = TypstRenderer::new(
-                output_dir.clone(),
+                work_dir.clone(),
                 cache.clone(),
                 diagram_themes.plantuml.clone(),
                 diagram_themes.mermaid.clone(),
@@ -277,13 +299,30 @@ fn build_command(
             );
             let body = renderer.render_document(&build, logger)?;
             let typst = render_pdf_template(&template, &template_context, &body)?;
-            let typst_path = output_file.with_extension("typ");
+            let typst_name = output_file
+                .file_stem()
+                .ok_or_else(|| anyhow!("output path has no file stem"))?;
+            let typst_path = work_dir.join(typst_name).with_extension("typ");
             let pdf_path = output_file.with_extension("pdf");
-            fs::write(&typst_path, typst)
+            fs::write(&typst_path, &typst)
                 .with_context(|| format!("failed to write {}", typst_path.display()))?;
-            logger.log(format!("wrote {}", typst_path.display()));
             compile_typst(&typst_path, &pdf_path)?;
             logger.log(format!("wrote {}", pdf_path.display()));
+        }
+        OutputFormat::Typst => {
+            let template = theme.template_for(format)?;
+            let renderer = TypstRenderer::new(
+                work_dir.clone(),
+                cache.clone(),
+                diagram_themes.plantuml.clone(),
+                diagram_themes.mermaid.clone(),
+                diagram_themes.d2.clone(),
+            );
+            let body = renderer.render_document(&build, logger)?;
+            let typst = render_pdf_template(&template, &template_context, &body)?;
+            fs::write(&output_file, &typst)
+                .with_context(|| format!("failed to write {}", output_file.display()))?;
+            logger.log(format!("wrote {}", output_file.display()));
         }
         OutputFormat::Markdown => unreachable!(),
     }

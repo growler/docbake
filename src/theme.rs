@@ -62,14 +62,14 @@ impl Theme {
         let name = match format {
             OutputFormat::Html => TEMPLATE_HTML,
             OutputFormat::HtmlMulti => TEMPLATE_MULTIPAGE_HTML,
-            OutputFormat::Pdf => TEMPLATE_TYP,
+            OutputFormat::Pdf | OutputFormat::Typst => TEMPLATE_TYP,
             OutputFormat::Markdown => bail!("markdown output does not use a template"),
         };
         match self {
             Theme::Default => Ok(match format {
                 OutputFormat::Html => DEFAULT_TEMPLATE_HTML.to_string(),
                 OutputFormat::HtmlMulti => DEFAULT_TEMPLATE_MULTIPAGE.to_string(),
-                OutputFormat::Pdf => DEFAULT_TEMPLATE_TYP.to_string(),
+                OutputFormat::Pdf | OutputFormat::Typst => DEFAULT_TEMPLATE_TYP.to_string(),
                 OutputFormat::Markdown => unreachable!(),
             }),
             Theme::Custom(dir) => {

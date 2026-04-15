@@ -32,6 +32,7 @@ pub enum OutputFormat {
     Html,
     HtmlMulti,
     Pdf,
+    Typst,
     Markdown,
 }
 
