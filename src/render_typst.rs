@@ -203,6 +203,7 @@ impl TypstRenderer {
                 out.push_str("]\n\n");
             }
             KindData::List(list) => {
+                let tight = list.is_tight();
                 let is_task_list = !list.is_ordered()
                     && arena[node_ref].children(arena).any(|item| {
                         matches!(
@@ -211,11 +212,15 @@ impl TypstRenderer {
                         )
                     });
                 if list.is_ordered() {
-                    write!(out, "#enum(start: {}, ", list.start().max(1))?;
+                    write!(
+                        out,
+                        "#enum(start: {}, tight: {tight}, ",
+                        list.start().max(1)
+                    )?;
                 } else if is_task_list {
-                    out.push_str("#list(marker: none, ");
+                    write!(out, "#list(marker: none, tight: {tight}, ")?;
                 } else {
-                    out.push_str("#list(");
+                    write!(out, "#list(tight: {tight}, ")?;
                 }
                 let mut first = true;
                 for item in arena[node_ref].children(arena) {
@@ -227,15 +232,20 @@ impl TypstRenderer {
                     if is_task_list {
                         if let KindData::ListItem(li) = arena[item].kind_data() {
                             match li.task() {
-                                Some(Task::Checked) => out.push_str("#sym.ballot.cross "),
-                                Some(Task::Unchecked) => out.push_str("#sym.ballot "),
+                                Some(Task::Checked) => {
+                                    out.push_str("#box(width: 1em, height: 1em, baseline: 15%, stroke: 0.5pt + luma(120), radius: 1.5pt, align(center + horizon, text(size: 10pt, weight: \"bold\", sym.checkmark))) ")
+                                }
+                                Some(Task::Unchecked) => {
+                                    out.push_str("#box(width: 1em, height: 1em, baseline: 15%, stroke: 0.5pt + luma(120), radius: 1.5pt) ")
+                                }
                                 // Non-task item in a mixed list — restore the
                                 // bullet that marker: none suppressed.
                                 Some(_) | None => out.push_str("#sym.bullet "),
                             }
                         }
                     }
-                    for child in arena[item].children(arena) {
+                    let item_children: Vec<_> = arena[item].children(arena).collect();
+                    for (ci, &child) in item_children.iter().enumerate() {
                         self.render_block(
                             out,
                             prepared,
@@ -247,6 +257,19 @@ impl TypstRenderer {
                             known_labels,
                             logger,
                         )?;
+                        // In tight lists, collapse the paragraph break between
+                        // a paragraph and a following nested list so they don't
+                        // get extra vertical spacing inside the item.
+                        if tight
+                            && ci + 1 < item_children.len()
+                            && matches!(arena[child].kind_data(), KindData::Paragraph(_))
+                            && matches!(arena[item_children[ci + 1]].kind_data(), KindData::List(_))
+                        {
+                            // The paragraph just wrote "\n\n"; trim to "\n".
+                            if out.ends_with("\n\n") {
+                                out.pop();
+                            }
+                        }
                     }
                     out.push(']');
                 }
