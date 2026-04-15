@@ -11,6 +11,7 @@ mod render_html_common;
 mod render_html_multi;
 mod render_markdown;
 mod render_typst;
+mod serve;
 pub(crate) mod theme;
 
 use std::fs;
@@ -69,6 +70,20 @@ pub fn run(cli: Cli) -> Result<()> {
             print!("{}", build.parse_dump()?);
             Ok(())
         }
+        cli::Command::Serve {
+            format,
+            ref input,
+            ref base,
+            port,
+        } => serve::serve_command(
+            &logger,
+            &cache,
+            &theme,
+            format,
+            input,
+            base.as_deref(),
+            port.unwrap_or(0),
+        ),
         cli::Command::InitTheme { ref target } => {
             Theme::export_to(target)?;
             eprintln!("Default theme exported to {}", target.display());
@@ -78,7 +93,10 @@ pub fn run(cli: Cli) -> Result<()> {
 }
 
 /// Canonicalize an input path and derive the base directory.
-fn resolve_input_and_base(input: &Path, base: Option<&Path>) -> Result<(PathBuf, PathBuf)> {
+pub(crate) fn resolve_input_and_base(
+    input: &Path,
+    base: Option<&Path>,
+) -> Result<(PathBuf, PathBuf)> {
     let source = input
         .canonicalize()
         .with_context(|| format!("failed to resolve input path {}", input.display()))?;

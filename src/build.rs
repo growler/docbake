@@ -122,6 +122,8 @@ pub(crate) fn build_template_context(
     }
     // asset_prefix defaults to empty; multi-page renderer overrides per page.
     context.insert("asset_prefix", "");
+    // live_update defaults to empty; the serve command injects a JS snippet.
+    context.insert("live_update", "");
     Ok(context)
 }
 

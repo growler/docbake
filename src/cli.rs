@@ -8,19 +8,19 @@ use clap::{Parser, Subcommand, ValueEnum};
     about = "Produce single-page HTML, multi-page HTML, or PDF from markdown"
 )]
 pub struct Cli {
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub debug_dump: bool,
 
     /// Theme directory.  When omitted the built-in default theme is used.
-    #[arg(short = 't', long)]
+    #[arg(short = 't', long, global = true)]
     pub theme: Option<PathBuf>,
 
     /// Override the default cache directory for rendered artifacts.
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub cache: Option<PathBuf>,
 
     /// Disable artifact caching entirely.
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub no_cache: bool,
 
     #[command(subcommand)]
@@ -75,6 +75,27 @@ pub enum Command {
         /// Defaults to the parent directory of the input file.
         #[arg(short = 'b', long)]
         base: Option<PathBuf>,
+    },
+
+    /// Serve a document with live-reload on file changes.
+    Serve {
+        /// Output format (only html and html-multi are supported).
+        #[arg(short = 'f', long)]
+        format: OutputFormat,
+
+        /// Root markdown file.
+        #[arg(short = 'i', long)]
+        input: PathBuf,
+
+        /// Base directory for absolute path resolution.
+        /// Defaults to the parent directory of the input file.
+        #[arg(short = 'b', long)]
+        base: Option<PathBuf>,
+
+        /// Port to listen on.  If not specified, an available port is
+        /// chosen automatically.
+        #[arg(short = 'p', long)]
+        port: Option<u16>,
     },
 
     /// Export the default theme to a directory for customisation.

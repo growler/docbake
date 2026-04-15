@@ -23,6 +23,7 @@ Commands:
   build       Build a document in the specified format
   dump        Dump the document include-graph for a markdown file
   parse       Dump the parsed AST for a markdown file
+  serve       Serve a document with live-reload on file changes
   init-theme  Export the default theme to a directory for customisation
   help        Print this message or the help of the given subcommand(s)
 
@@ -50,6 +51,30 @@ Options:
   -o, --output <OUTPUT>  Output file or directory
   -b, --base <BASE>      Base directory for absolute path resolution.
                          Defaults to the parent directory of the input file
+  -h, --help             Print help
+~~~
+
+~~~
+$ docbake serve --help
+Serve a document with live-reload on file changes
+
+Usage: docbake serve [OPTIONS] --format <FORMAT> --input <INPUT>
+
+Options:
+      --debug-dump
+  -f, --format <FORMAT>  Output format (only html and html-multi are
+                         supported) [possible values: html, html-multi,
+                         pdf, markdown]
+  -i, --input <INPUT>    Root markdown file
+  -t, --theme <THEME>    Theme directory. When omitted the built-in
+                         default theme is used
+  -b, --base <BASE>      Base directory for absolute path resolution.
+                         Defaults to the parent directory of the input file
+      --cache <CACHE>    Override the default cache directory for rendered
+                         artifacts
+      --no-cache         Disable artifact caching entirely
+  -p, --port <PORT>      Port to listen on. If not specified, an available
+                         port is chosen automatically
   -h, --help             Print help
 ~~~
 
@@ -86,6 +111,36 @@ $ docbake build -f markdown -i doc/ru/index.md -o target/doc-out/builder.md -b d
 
 Флаг `-b` задаёт базовый каталог для разрешения абсолютных путей (по умолчанию
 — каталог входного файла). Флаг `-t` позволяет указать каталог собственной темы.
+
+## Предварительный просмотр {.unnumbered}
+
+Команда `serve` запускает локальный HTTP-сервер и открывает документ в браузере.
+При изменении любого файла в базовом каталоге документ автоматически
+пересобирается, а страница в браузере перезагружается.
+
+Поддерживаются только HTML-форматы: `html` и `html-multi`.
+
+Для single-page HTML:
+
+~~~
+$ docbake serve -f html -i doc/ru/index.md -b doc
+~~~
+
+Для multi-page HTML:
+
+~~~
+$ docbake serve -f html-multi -i doc/ru/index.md -b doc
+~~~
+
+Сервер автоматически выбирает свободный порт, печатает URL и открывает его
+в браузере. Конкретный порт можно задать флагом `-p`:
+
+~~~
+$ docbake serve -f html -i doc/ru/index.md -b doc -p 3000
+~~~
+
+Сервер работает на `127.0.0.1` (loopback) и доступен только локально. Для
+завершения работы нажмите `Ctrl+C`.
 
 ## Отладка
 
