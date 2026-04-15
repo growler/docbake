@@ -289,91 +289,77 @@ fn build_expanded_toc_node(
         html_escape(&page.title),
     ));
 
-    // If this is the current page, expand internal headings.
+    // Render internal headings for this page.
     // Skip the first heading — it duplicates the page-level entry above.
-    if is_current {
-        let all_headings = collect_page_headings(graph, doc_id);
-        let headings: Vec<_> = all_headings.into_iter().skip(1).collect();
-        if !headings.is_empty() {
-            html.push_str("<ul>\n");
-            let mut current_level = 0usize;
-            let mut li_open = false;
-            for (level, id, text) in &headings {
-                let level = *level;
-                if level > current_level {
-                    while current_level < level {
-                        if current_level > 0 {
-                            html.push_str("<ul>\n");
-                        }
-                        current_level += 1;
+    let all_headings = collect_page_headings(graph, doc_id);
+    let headings: Vec<_> = all_headings.into_iter().skip(1).collect();
+    let has_headings = !headings.is_empty();
+    let has_children = !page.children_indices.is_empty();
+
+    // Open a single <ul> for both internal headings and child pages.
+    if has_headings || has_children {
+        html.push_str("<ul>\n");
+    }
+
+    if has_headings {
+        let mut current_level = 0usize;
+        let mut li_open = false;
+        for (level, id, text) in &headings {
+            let level = *level;
+            if level > current_level {
+                while current_level < level {
+                    if current_level > 0 {
+                        html.push_str("<ul>\n");
                     }
-                } else if level < current_level {
-                    if li_open {
-                        html.push_str("</li>\n");
-                    }
-                    while current_level > level {
-                        html.push_str("</ul>\n</li>\n");
-                        current_level -= 1;
-                    }
-                } else if li_open {
+                    current_level += 1;
+                }
+            } else if level < current_level {
+                if li_open {
                     html.push_str("</li>\n");
                 }
-                // Heading links point to the current page with a fragment.
-                html.push_str(&format!(
-                    "<li><a href=\"{}#{}\">{}</a>\n",
-                    html_escape(&href),
-                    html_escape(id),
-                    text,
-                ));
-                li_open = true;
-            }
-            if li_open {
+                while current_level > level {
+                    html.push_str("</ul>\n</li>\n");
+                    current_level -= 1;
+                }
+            } else if li_open {
                 html.push_str("</li>\n");
             }
-            while current_level > 1 {
-                html.push_str("</ul>\n</li>\n");
-                current_level -= 1;
-            }
-            html.push_str("</ul>\n");
+            // Heading links point to the page with a fragment.
+            html.push_str(&format!(
+                "<li><a href=\"{}#{}\">{}</a>\n",
+                html_escape(&href),
+                html_escape(id),
+                text,
+            ));
+            li_open = true;
+        }
+        if li_open {
+            html.push_str("</li>\n");
+        }
+        while current_level > 1 {
+            html.push_str("</ul>\n</li>\n");
+            current_level -= 1;
         }
     }
 
-    // Recurse into child pages.
-    if !page.children_indices.is_empty() {
-        // Only show children sub-tree if this page is current or is an
-        // ancestor of the current page.
-        let show_children = is_current || is_ancestor(plan, page_idx, current_page);
-        if show_children {
-            html.push_str("<ul>\n");
-            for &child_idx in &page.children_indices {
-                let child_doc_id = plan.pages[child_idx].doc_id;
-                build_expanded_toc_node(
-                    html,
-                    plan,
-                    child_doc_id,
-                    current_page,
-                    graph,
-                    current_output_path,
-                );
-            }
-            html.push_str("</ul>\n");
-        }
+    // Recurse into child pages (always rendered; CSS controls visibility).
+    for &child_idx in &page.children_indices {
+        let child_doc_id = plan.pages[child_idx].doc_id;
+        build_expanded_toc_node(
+            html,
+            plan,
+            child_doc_id,
+            current_page,
+            graph,
+            current_output_path,
+        );
+    }
+
+    if has_headings || has_children {
+        html.push_str("</ul>\n");
     }
 
     html.push_str("</li>\n");
-}
-
-/// Check whether `ancestor_idx` is an ancestor of `descendant_idx` in the
-/// page tree.
-fn is_ancestor(plan: &MultiPagePlan, ancestor_idx: usize, descendant_idx: usize) -> bool {
-    let mut current = descendant_idx;
-    while let Some(parent) = plan.pages[current].parent_index {
-        if parent == ancestor_idx {
-            return true;
-        }
-        current = parent;
-    }
-    false
 }
 
 /// Collect headings for a single page (not recursing into includes).
