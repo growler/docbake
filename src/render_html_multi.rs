@@ -62,6 +62,15 @@ pub(crate) struct MultiPagePlan {
     doc_id_to_page: HashMap<usize, usize>,
 }
 
+impl MultiPagePlan {
+    /// Look up the [`PageInfo`] for a given document occurrence ID.
+    pub(crate) fn page_for_doc(&self, doc_id: usize) -> Option<&PageInfo> {
+        self.doc_id_to_page
+            .get(&doc_id)
+            .map(|&idx| &self.pages[idx])
+    }
+}
+
 /// Build the multi-page plan from a prepared document.
 ///
 /// The page tree mirrors the single-page heading hierarchy: the cumulative

@@ -11,6 +11,7 @@ mod render_html_common;
 mod render_html_multi;
 mod render_markdown;
 mod render_typst;
+mod search_index;
 mod serve;
 pub(crate) mod theme;
 
@@ -209,7 +210,7 @@ fn build_command(
     // ── Build template context from front matter ────────────────────────
     let metadata = build.document_metadata();
     let style = theme.style_css()?;
-    let template_context = build_template_context(&metadata, style.as_deref())?;
+    let mut template_context = build_template_context(&metadata, style.as_deref())?;
 
     // ── Diagram themes ──────────────────────────────────────────────────
     let diagram_themes = crate::diagram::DiagramThemes {
@@ -222,6 +223,8 @@ fn build_command(
         OutputFormat::Html => {
             let template = theme.template_for(format)?;
             let toc = build_toc(build.graph());
+            let search_json = search_index::build_search_index(&build);
+            template_context.insert("search_index", &search_json);
             let html = build_html_document(
                 &template,
                 &template_context,
@@ -236,6 +239,15 @@ fn build_command(
         }
         OutputFormat::HtmlMulti => {
             let template = theme.template_for(format)?;
+            let root_source_dir = build
+                .graph()
+                .root_document()
+                .path
+                .parent()
+                .ok_or_else(|| anyhow!("root document has no parent directory"))?;
+            let plan = crate::render_html_multi::build_multi_page_plan(&build, root_source_dir);
+            let search_json = search_index::build_search_index_multi(&build, &plan);
+            template_context.insert("search_index", &search_json);
             let pages = build_multi_page_html(
                 &template,
                 &template_context,

@@ -234,6 +234,8 @@ fn rebuild(
         OutputFormat::Html => {
             let template = theme.template_for(format)?;
             let toc = build_toc(build.graph());
+            let search_json = crate::search_index::build_search_index(&build);
+            template_context.insert("search_index", &search_json);
             let html = build_html_document(
                 &template,
                 &template_context,
@@ -249,6 +251,15 @@ fn rebuild(
         }
         OutputFormat::HtmlMulti => {
             let template = theme.template_for(format)?;
+            let root_source_dir = build
+                .graph()
+                .root_document()
+                .path
+                .parent()
+                .ok_or_else(|| anyhow::anyhow!("root document has no parent directory"))?;
+            let plan = crate::render_html_multi::build_multi_page_plan(&build, root_source_dir);
+            let search_json = crate::search_index::build_search_index_multi(&build, &plan);
+            template_context.insert("search_index", &search_json);
             let pages = build_multi_page_html(
                 &template,
                 &template_context,
