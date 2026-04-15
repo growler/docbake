@@ -99,6 +99,26 @@ pub enum Command {
         port: Option<u16>,
     },
 
+    /// Watch source files and rebuild on changes.
+    Watch {
+        /// Output format.
+        #[arg(short = 'f', long)]
+        format: OutputFormat,
+
+        /// Root markdown file.
+        #[arg(short = 'i', long)]
+        input: PathBuf,
+
+        /// Output file or directory.
+        #[arg(short = 'o', long)]
+        output: PathBuf,
+
+        /// Base directory for absolute path resolution.
+        /// Defaults to the parent directory of the input file.
+        #[arg(short = 'b', long)]
+        base: Option<PathBuf>,
+    },
+
     /// Export the default theme to a directory for customisation.
     InitTheme {
         /// Target directory to create (must not already exist).

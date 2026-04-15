@@ -14,6 +14,7 @@ mod render_typst;
 mod search_index;
 mod serve;
 pub(crate) mod theme;
+mod watch;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -84,6 +85,20 @@ pub fn run(cli: Cli) -> Result<()> {
             input,
             base.as_deref(),
             port.unwrap_or(0),
+        ),
+        cli::Command::Watch {
+            format,
+            ref input,
+            ref output,
+            ref base,
+        } => watch::watch_command(
+            &logger,
+            &cache,
+            &theme,
+            format,
+            input,
+            output,
+            base.as_deref(),
         ),
         cli::Command::InitTheme { ref target } => {
             Theme::export_to(target)?;
@@ -170,7 +185,7 @@ fn resolve_output(output: &Path, input: &Path, format: OutputFormat) -> Result<(
     }
 }
 
-fn build_command(
+pub(crate) fn build_command(
     logger: &DebugDumper,
     cache: &Cache,
     theme: &Theme,
