@@ -1004,10 +1004,31 @@ impl<W: TextWrite> RenderNode<W> for MultiFormatFencedDivHtmlRenderer<W> {
             return Ok(WalkStatus::SkipChildren);
         }
 
+        let is_admonition = crate::admonition_type(&classes).is_some();
+
         if entering {
-            self.writer.write_safe_str(w, "<div")?;
-            html::render_attributes(w, source, arena[node_ref].attributes(), None)?;
-            self.writer.write_safe_str(w, ">")?;
+            if is_admonition {
+                w.write_str("<div class=\"admonition ")?;
+                let esc = escape_html(classes.as_bytes());
+                w.write_str(std::str::from_utf8(&esc).unwrap_or_default())?;
+                w.write_str("\"")?;
+                for (key, value) in arena[node_ref].attributes().iter() {
+                    if key == "class" {
+                        continue;
+                    }
+                    w.write_str(" ")?;
+                    w.write_str(key)?;
+                    w.write_str("=\"")?;
+                    let esc = escape_html(value.bytes(source));
+                    w.write_str(std::str::from_utf8(&esc).unwrap_or_default())?;
+                    w.write_str("\"")?;
+                }
+                w.write_str(">")?;
+            } else {
+                self.writer.write_safe_str(w, "<div")?;
+                html::render_attributes(w, source, arena[node_ref].attributes(), None)?;
+                self.writer.write_safe_str(w, ">")?;
+            }
         } else {
             self.writer.write_safe_str(w, "</div>")?;
         }

@@ -20,15 +20,17 @@ Markdown - это простой язык текстовой разметки, �
 - [метаданные документа](document.md#параметры-документа) в формате YAML (front matter)
 - [атрибуты элементов](markdown/links.md#метки) (`{#id .class attr=value}`)
 - [инлайн-спаны с атрибутами](markdown/links.md#метки) (`[текст]{#id .class}`)
-- [огороженные блоки](markdown/diagrams.md#блоки-для-использования-в-конкретном-формате) (`:::block`)
+- [огороженные блоки](builder/formats.md#блоки-для-использования-в-конкретном-формате) (`:::block`)
+- [специальные блоки](markdown/admonitions.md) (`:::note`, `:::warning`, `:::tip`, `:::important`, `:::caution`, `:::related`)
 - [включение файлов](document.md#include) (`:::include`)
-- [подписи таблиц и диаграмм](markdown/tables-lists.md#подпись-таблицы) (`Table:`, `Figure:`, `:`)
+- [подписи таблиц, диаграмм и листингов](markdown/tables-lists.md#подпись-таблицы) (`Table:`, `Figure:`, `Listing:`)
 - [диаграммы PlantUML](markdown/diagrams.md#диаграммы-plantuml), [Mermaid](markdown/diagrams.md#диаграммы-mermaid), [D2](markdown/diagrams.md#диаграммы-d2) и [Draw.io](markdown/diagrams.md#диаграммы-drawio)
 
 :::include
 ## [Текстовая разметка](markdown/text.md)
 ## [Ссылки и сноски](markdown/links.md)
 ## [Таблицы и списки](markdown/tables-lists.md)
+## [Специальные блоки](markdown/admonitions.md)
 ## [Иллюстрации](markdown/illustrations.md)
 ## [Диаграммы](markdown/diagrams.md)
 :::

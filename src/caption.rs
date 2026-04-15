@@ -1,19 +1,25 @@
-//! Pandoc-style table and diagram captions extension for rushdown.
+//! Pandoc-style table, diagram, and listing captions extension for rushdown.
 //!
-//! Detects paragraphs starting with `Table:`, `Figure:`, or `:` and associates
-//! them with an adjacent captionable block (table, code-block diagram, or
-//! fenced div). The paragraph is removed and the block is wrapped in a
-//! [`Caption`] container node whose second child is a [`CaptionText`] node
-//! holding the caption's inline content.
+//! Detects paragraphs starting with `Table:`, `Figure:`, or `Listing:` and
+//! associates them with an adjacent captionable block (table, code block,
+//! code-block diagram, or fenced div). The paragraph is removed and the block
+//! is wrapped in a [`Caption`] container node whose second child is a
+//! [`CaptionText`] node holding the caption's inline content.
 //!
 //! # Syntax
 //!
-//! ```markdown
+//! ```text
 //! Table: [Applicable standards]{#rfc-table}
 //!
 //! | RFC      | Description             |
 //! |----------|-------------------------|
 //! | RFC 2822 | Internet Message Format |
+//!
+//! Listing: A listing {#sample}
+//!
+//!     ```rust
+//!     fn main() {}
+//!     ```
 //! ```
 //!
 //! Without `{#id}` the identifier is auto-generated from the caption text
@@ -51,6 +57,7 @@ use rushdown_fenced_div::FencedDiv;
 pub enum CaptionKind {
     Table,
     Figure,
+    Listing,
 }
 
 /// Whether the caption appeared before or after the captioned block in source.
@@ -147,30 +154,28 @@ impl From<CaptionText> for KindData {
 // AST transformer
 // ============================================================================
 
-/// Detects the caption prefix in a paragraph's first text child.
-///
-/// Returns `Some((kind, byte_offset_after_prefix))` if a prefix is found.
-/// The offset points to the first non-whitespace character after the prefix
-/// marker (or to the end of the text if the prefix consumes it entirely).
+/// Recognised caption prefixes and their corresponding kinds.
 const CAPTION_PREFIXES: &[(&str, CaptionKind)] = &[
     ("Table:", CaptionKind::Table),
     ("table:", CaptionKind::Table),
     ("Figure:", CaptionKind::Figure),
     ("figure:", CaptionKind::Figure),
+    ("Listing:", CaptionKind::Listing),
+    ("listing:", CaptionKind::Listing),
 ];
 
+/// Detects the caption prefix in a paragraph's first text child.
+///
+/// Returns `Some((kind, byte_offset_after_prefix))` if a recognised prefix
+/// (`Table:`, `Figure:`, `Listing:`) is found. The offset points to the first
+/// non-whitespace character after the prefix marker (or to the end of the text
+/// if the prefix consumes it entirely).
 fn detect_caption_prefix(text_str: &str) -> Option<(CaptionKind, usize)> {
     for &(prefix, kind) in CAPTION_PREFIXES {
         if let Some(rest) = text_str.strip_prefix(prefix) {
             let skip = prefix.len() + rest.len() - rest.trim_start().len();
             return Some((kind, skip));
         }
-    }
-    // Lone `:` — shorthand for Table caption.
-    if text_str.starts_with(':') && !text_str.starts_with("::") {
-        let rest = &text_str[1..];
-        let skip = 1 + rest.len() - rest.trim_start().len();
-        return Some((CaptionKind::Table, skip));
     }
     None
 }
@@ -179,16 +184,15 @@ fn detect_caption_prefix(text_str: &str) -> Option<(CaptionKind, usize)> {
 ///
 /// Captionable blocks:
 /// - `KindData::Table`
-/// - `KindData::CodeBlock` with language `mermaid` or `plantuml`
+/// - `KindData::CodeBlock` (any language — diagram code blocks are already
+///   transformed to `Diagram` nodes by the time the caption transformer runs)
 /// - `KindData::Extension(Diagram)` (produced by diagram parser)
 /// - `KindData::Extension(FencedDiv)` — excluding those with class `include`
 /// - `KindData::Paragraph` containing exactly one `Image` child
 fn is_captionable(arena: &Arena, node_ref: NodeRef, source: &str) -> bool {
     match arena[node_ref].kind_data() {
         KindData::Table(_) => true,
-        KindData::CodeBlock(cb) => {
-            matches!(cb.language_str(source), Some("mermaid" | "plantuml"))
-        }
+        KindData::CodeBlock(_) => true,
         KindData::Extension(_) if matches_extension_kind!(arena, node_ref, Diagram) => true,
         KindData::Extension(_) if matches_extension_kind!(arena, node_ref, FencedDiv) => {
             // Exclude include divs.
@@ -287,9 +291,6 @@ impl AstTransformer for CaptionAstTransformer {
                 );
                 continue;
             };
-
-            // `Table:` prefix targeting a non-table is valid — the explicit
-            // prefix overrides the inferred block type.
 
             used_targets.push(target);
             candidates.push(CaptionCandidate {
@@ -544,9 +545,41 @@ impl<W: TextWrite> RenderNode<W> for CaptionHtmlRenderer<W> {
         _ctx: &mut renderer::Context,
     ) -> rushdown::Result<WalkStatus> {
         if entering {
-            self.writer.write_safe_str(w, "<figure")?;
-            html::render_attributes(w, source, arena[node_ref].attributes(), None)?;
-            self.writer.write_safe_str(w, ">\n")?;
+            let caption = rushdown::as_extension_data!(arena, node_ref, Caption);
+            let kind_class = match caption.kind() {
+                CaptionKind::Listing => Some("listing"),
+                _ => None,
+            };
+
+            // Build full opening tag, merging kind-based class with any
+            // user-supplied class from trailing `{.class}` syntax.
+            let attrs = arena[node_ref].attributes();
+            let user_class = attrs.get("class").map(|v| v.str(source).to_string());
+            let combined_class = match (kind_class, &user_class) {
+                (Some(kc), Some(uc)) => format!("{kc} {uc}"),
+                (Some(kc), None) => kc.to_string(),
+                (None, Some(uc)) => uc.clone(),
+                (None, None) => String::new(),
+            };
+
+            let mut tag = String::from("<figure");
+            if !combined_class.is_empty() {
+                tag.push_str(" class=\"");
+                tag.push_str(&combined_class);
+                tag.push('"');
+            }
+            for (key, value) in attrs.iter() {
+                if key == "class" {
+                    continue;
+                }
+                tag.push(' ');
+                tag.push_str(key);
+                tag.push_str("=\"");
+                tag.push_str(&value.str(source));
+                tag.push('"');
+            }
+            tag.push_str(">\n");
+            self.writer.write_html(w, &tag)?;
         } else {
             self.writer.write_safe_str(w, "</figure>\n")?;
         }
@@ -716,8 +749,8 @@ mod tests {
     }
 
     #[test]
-    fn colon_shorthand_before_table() {
-        let source = ": My table\n\n| A | B |\n|---|---|\n| 1 | 2 |\n";
+    fn table_prefix_before_table() {
+        let source = "Table: My table\n\n| A | B |\n|---|---|\n| 1 | 2 |\n";
         let (arena, doc_ref) = parse(source);
 
         let children: Vec<_> = arena[doc_ref].children(&arena).collect();
@@ -780,20 +813,45 @@ mod tests {
     }
 
     #[test]
-    fn non_diagram_code_block_not_captionable() {
-        let source = "Figure: Not a diagram\n\n```rust\nfn main() {}\n```\n";
+    fn code_block_captionable_with_figure_prefix() {
+        // All code blocks are now captionable; `Figure:` prefix overrides kind.
+        let source = "Figure: A code example\n\n```rust\nfn main() {}\n```\n";
         let (arena, doc_ref) = parse(source);
 
-        // `rust` code block is not captionable, so the paragraph stays.
         let children: Vec<_> = arena[doc_ref].children(&arena).collect();
-        assert!(
-            children.len() >= 2,
-            "paragraph and code block should remain separate"
-        );
-        assert!(matches!(
-            arena[children[0]].kind_data(),
-            KindData::Paragraph(_)
-        ));
+        assert_eq!(children.len(), 1, "expected one Caption node");
+        assert!(matches_extension_kind!(&arena, children[0], Caption));
+
+        let caption = rushdown::as_extension_data!(&arena, children[0], Caption);
+        assert_eq!(caption.kind(), CaptionKind::Figure);
+    }
+
+    #[test]
+    fn listing_caption_before_code_block() {
+        let source = "Listing: Sample code\n\n```rust\nfn main() {}\n```\n";
+        let (arena, doc_ref) = parse(source);
+
+        let children: Vec<_> = arena[doc_ref].children(&arena).collect();
+        assert_eq!(children.len(), 1, "expected one Caption node");
+        assert!(matches_extension_kind!(&arena, children[0], Caption));
+
+        let caption = rushdown::as_extension_data!(&arena, children[0], Caption);
+        assert_eq!(caption.kind(), CaptionKind::Listing);
+    }
+
+    #[test]
+    fn listing_caption_with_id() {
+        let source = "Listing: Sample {#my-listing}\n\n```rust\nfn main() {}\n```\n";
+        let (arena, doc_ref) = parse(source);
+
+        let caption_ref = arena[doc_ref].children(&arena).next().unwrap();
+        assert!(matches_extension_kind!(&arena, caption_ref, Caption));
+
+        let id = arena[caption_ref]
+            .attributes()
+            .get("id")
+            .map(|v| v.str(source).to_string());
+        assert_eq!(id, Some("my-listing".to_string()));
     }
 
     #[test]
@@ -853,14 +911,37 @@ mod tests {
     }
 
     #[test]
-    fn html_colon_shorthand() {
-        let source = ": Short caption\n\n| A |\n|---|\n| 1 |\n";
+    fn html_table_prefix() {
+        let source = "Table: Short caption\n\n| A |\n|---|\n| 1 |\n";
         let html = render_html(source);
 
         assert!(html.contains("<figure>"), "should contain <figure>: {html}");
         assert!(
             html.contains("Short caption"),
             "should contain caption text: {html}"
+        );
+    }
+
+    #[test]
+    fn html_listing_caption() {
+        let source = "Listing: A listing\n\n```rust\nfn main() {}\n```\n";
+        let html = render_html(source);
+
+        assert!(
+            html.contains("<figure class=\"listing\">"),
+            "should contain <figure class=\"listing\">: {html}"
+        );
+        assert!(
+            html.contains("<figcaption>A listing</figcaption>"),
+            "should contain figcaption: {html}"
+        );
+
+        // figcaption should appear before the code block.
+        let figcaption_pos = html.find("<figcaption>").unwrap();
+        let code_pos = html.find("<code").unwrap();
+        assert!(
+            figcaption_pos < code_pos,
+            "<figcaption> should appear before <code> in HTML: {html}"
         );
     }
 
@@ -949,8 +1030,8 @@ mod tests {
 
     #[test]
     fn attributes_only_caption() {
-        // `: {#figure-ident}` — empty caption text, only attributes.
-        let source = ": {#figure-ident}\n\n| A |\n|---|\n| 1 |\n";
+        // `Table: {#figure-ident}` — empty caption text, only attributes.
+        let source = "Table: {#figure-ident}\n\n| A |\n|---|\n| 1 |\n";
         let (arena, doc_ref) = parse(source);
 
         let children: Vec<_> = arena[doc_ref].children(&arena).collect();

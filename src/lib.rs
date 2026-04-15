@@ -477,6 +477,18 @@ fn check_command(
 /// Both `html` and `html-multi` output share the `"html"` gate.
 pub(crate) const KNOWN_OUTPUT_FORMATS: &[&str] = &["html", "pdf", "markdown"];
 
+/// Fenced-div class names recognised as admonitions (callout blocks).
+pub(crate) const ADMONITION_TYPES: &[&str] =
+    &["note", "warning", "important", "caution", "tip", "related"];
+
+/// Check whether a space-separated class string contains an admonition type.
+/// Returns the first matching admonition type, if any.
+pub(crate) fn admonition_type(classes: &str) -> Option<&'static str> {
+    classes
+        .split_whitespace()
+        .find_map(|c| ADMONITION_TYPES.iter().find(|&&t| t == c).copied())
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct DebugDumper {
     enabled: bool,

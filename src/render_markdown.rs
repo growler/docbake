@@ -390,6 +390,7 @@ impl<'a> MarkdownRenderer<'a> {
         let prefix = match caption.kind() {
             crate::caption::CaptionKind::Table => "Table: ",
             crate::caption::CaptionKind::Figure => "Figure: ",
+            crate::caption::CaptionKind::Listing => "Listing: ",
         };
 
         // Find the CaptionText child and the captioned block child.

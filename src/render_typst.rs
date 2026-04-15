@@ -319,18 +319,33 @@ impl TypstRenderer {
                 if !present_formats.is_empty() && !present_formats.contains(&"pdf") {
                     return Ok(());
                 }
-                for child in arena[node_ref].children(arena) {
-                    self.render_block(
+                if let Some(adm_type) = crate::admonition_type(&classes) {
+                    self.render_admonition(
                         out,
                         prepared,
                         scope,
                         arena,
-                        child,
+                        node_ref,
                         source,
                         heading_shift,
                         known_labels,
+                        adm_type,
                         logger,
                     )?;
+                } else {
+                    for child in arena[node_ref].children(arena) {
+                        self.render_block(
+                            out,
+                            prepared,
+                            scope,
+                            arena,
+                            child,
+                            source,
+                            heading_shift,
+                            known_labels,
+                            logger,
+                        )?;
+                    }
                 }
             }
             KindData::Extension(_)
@@ -547,6 +562,91 @@ impl TypstRenderer {
             KindData::Extension(_) => {}
             _ => {}
         }
+        Ok(())
+    }
+
+    /// Default (fallback) admonition titles when no heading is present.
+    fn admonition_default_title(adm_type: &str) -> &'static str {
+        match adm_type {
+            "note" => "Note",
+            "warning" => "Warning",
+            "important" => "Important",
+            "caution" => "Caution",
+            "tip" => "Tip",
+            "related" => "Related",
+            _ => "Note",
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_admonition(
+        &self,
+        out: &mut String,
+        prepared: &PreparedDocument,
+        scope: &RenderScope,
+        arena: &Arena,
+        node_ref: NodeRef,
+        source: &str,
+        heading_shift: usize,
+        known_labels: &HashSet<String>,
+        adm_type: &str,
+        logger: &DebugDumper,
+    ) -> Result<()> {
+        // Collect children; check if the first is a heading (used as title).
+        let children: Vec<_> = arena[node_ref].children(arena).collect();
+        let (title, skip_first) = if let Some(&first) = children.first() {
+            if matches!(arena[first].kind_data(), KindData::Heading(_)) {
+                // Render heading inline content as the title string.
+                let mut title_buf = String::new();
+                self.render_inline_children(
+                    &mut title_buf,
+                    prepared,
+                    scope,
+                    arena,
+                    first,
+                    source,
+                    known_labels,
+                    logger,
+                )?;
+                (title_buf, true)
+            } else {
+                (Self::admonition_default_title(adm_type).to_string(), false)
+            }
+        } else {
+            (Self::admonition_default_title(adm_type).to_string(), false)
+        };
+
+        write!(
+            out,
+            "#admonition(\"{}\", \"{}\")[",
+            escape_typst_string(adm_type),
+            escape_typst_string(&title),
+        )?;
+
+        let body_children = if skip_first {
+            &children[1..]
+        } else {
+            &children[..]
+        };
+        for &child in body_children {
+            self.render_block(
+                out,
+                prepared,
+                scope,
+                arena,
+                child,
+                source,
+                heading_shift,
+                known_labels,
+                logger,
+            )?;
+        }
+        out.push_str("]");
+        // Emit Typst label if the fenced div has an id attribute.
+        if let Some(id) = arena[node_ref].attributes().get("id") {
+            write!(out, " <{}>", id.str(source))?;
+        }
+        out.push_str("\n\n");
         Ok(())
     }
 
@@ -791,7 +891,13 @@ impl TypstRenderer {
         }
 
         // Render: #figure(caption: [caption text])[block content] <label>
-        out.push_str("#figure(caption: [");
+        // For listings, pass `kind: raw` so Typst numbers them separately.
+        let caption_data = rushdown::as_extension_data!(arena, node_ref, crate::caption::Caption);
+        if caption_data.kind() == crate::caption::CaptionKind::Listing {
+            out.push_str("#figure(kind: raw, caption: [");
+        } else {
+            out.push_str("#figure(caption: [");
+        }
         if let Some(ct) = caption_text_child {
             self.render_inline_children(
                 out,
