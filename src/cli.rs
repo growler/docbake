@@ -36,6 +36,14 @@ pub enum OutputFormat {
     Markdown,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum BrokenLinkMode {
+    /// Report broken links as warnings and continue.
+    Warn,
+    /// Treat broken links as errors and abort.
+    Error,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Build a document in the specified format.
@@ -56,6 +64,11 @@ pub enum Command {
         /// Defaults to the parent directory of the input file.
         #[arg(short = 'b', long)]
         base: Option<PathBuf>,
+
+        /// How to handle broken links: "warn" prints diagnostics and
+        /// continues, "error" aborts the build.  Defaults to "error".
+        #[arg(long, default_value = "error")]
+        broken_links: BrokenLinkMode,
     },
 
     /// Dump the document include-graph for a markdown file.
@@ -97,6 +110,11 @@ pub enum Command {
         /// chosen automatically.
         #[arg(short = 'p', long)]
         port: Option<u16>,
+
+        /// How to handle broken links: "warn" prints diagnostics and
+        /// continues, "error" aborts the build.  Defaults to "warn".
+        #[arg(long, default_value = "warn")]
+        broken_links: BrokenLinkMode,
     },
 
     /// Watch source files and rebuild on changes.
@@ -117,6 +135,11 @@ pub enum Command {
         /// Defaults to the parent directory of the input file.
         #[arg(short = 'b', long)]
         base: Option<PathBuf>,
+
+        /// How to handle broken links: "warn" prints diagnostics and
+        /// continues, "error" aborts the build.  Defaults to "warn".
+        #[arg(long, default_value = "warn")]
+        broken_links: BrokenLinkMode,
     },
 
     /// Export the default theme to a directory for customisation.

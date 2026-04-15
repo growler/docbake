@@ -1,15 +1,102 @@
 use std::collections::HashSet;
+use std::fmt;
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use rushdown::as_kind_data;
 use rushdown::ast::{self, Arena, CodeBlock, CodeBlockKind, KindData, NodeRef, WalkStatus};
 use rushdown::matches_kind;
+use rushdown::text;
 
 use super::types::NodeLocation;
 use super::DocumentGraph;
 
-pub(super) fn resolve_document_graph(base_dir: &Path, graph: &mut DocumentGraph) -> Result<()> {
+// ---------------------------------------------------------------------------
+// Diagnostics
+// ---------------------------------------------------------------------------
+
+/// A single broken-link diagnostic produced during graph resolution.
+#[derive(Debug)]
+pub(crate) struct LinkDiagnostic {
+    /// Source markdown file that contains the broken link.
+    pub file: PathBuf,
+    /// 1-based line number (0 when the position cannot be determined).
+    pub line: usize,
+    /// Display text of the link (collected from child text nodes).
+    pub link_text: String,
+    /// The raw destination string as written in the source.
+    pub target: String,
+    /// Human-readable explanation of why the link is broken.
+    pub message: String,
+}
+
+impl LinkDiagnostic {
+    /// Format the diagnostic with paths shown relative to `base_dir`.
+    pub(crate) fn display_relative(&self, base_dir: &Path) -> String {
+        let rel = self.file.strip_prefix(base_dir).unwrap_or(&self.file);
+        let location = if self.line > 0 {
+            format!("{}:{}", rel.display(), self.line)
+        } else {
+            format!("{}", rel.display())
+        };
+        // Also strip base_dir prefix from paths embedded in the message.
+        let base_prefix = format!("{}/", base_dir.display());
+        let message = self.message.replace(&base_prefix, "");
+        format!(
+            "{location}: broken link [{}]({}): {}",
+            self.link_text, self.target, message,
+        )
+    }
+}
+
+impl fmt::Display for LinkDiagnostic {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let location = if self.line > 0 {
+            format!("{}:{}", self.file.display(), self.line)
+        } else {
+            format!("{}", self.file.display())
+        };
+        write!(
+            f,
+            "{location}: broken link [{}]({}): {}",
+            self.link_text, self.target, self.message,
+        )
+    }
+}
+
+/// Compute a 1-based line number from a byte offset into `source`.
+/// Returns 0 if the offset is out of range.
+fn byte_offset_to_line(source: &str, offset: usize) -> usize {
+    if offset > source.len() {
+        return 0;
+    }
+    source[..offset].bytes().filter(|&b| b == b'\n').count() + 1
+}
+
+/// Try to extract a byte offset from a `text::Value` for line-number
+/// computation.  Returns `Some(start)` for index-backed values, `None`
+/// for heap-allocated strings (synthesised by transforms).
+fn destination_byte_offset(dest: &text::Value) -> Option<usize> {
+    match dest {
+        text::Value::Index(idx) => Some(idx.start()),
+        _ => None,
+    }
+}
+
+/// Collect plain text from the children of a link/image node (for use in
+/// diagnostic messages).
+fn link_text(arena: &Arena, node_ref: NodeRef, source: &str) -> String {
+    heading_text(arena, node_ref, source)
+}
+
+// ---------------------------------------------------------------------------
+// Public entry point
+// ---------------------------------------------------------------------------
+
+pub(super) fn resolve_document_graph(
+    base_dir: &Path,
+    graph: &mut DocumentGraph,
+) -> Result<Vec<LinkDiagnostic>> {
     assign_heading_ids(graph)?;
     rewrite_graph_targets(base_dir, graph)
 }
@@ -195,42 +282,104 @@ fn code_block_description(code_block: &CodeBlock, source: &str) -> Option<String
     }
 }
 
-fn rewrite_graph_targets(base_dir: &Path, graph: &mut DocumentGraph) -> Result<()> {
+// ---------------------------------------------------------------------------
+// Link/image target rewriting
+// ---------------------------------------------------------------------------
+
+/// Information collected in the first (read-only) pass over the AST for each
+/// link or image node.
+struct TargetInfo {
+    doc_id: usize,
+    node_ref: NodeRef,
+    is_image: bool,
+    destination: String,
+    /// Byte offset of the destination in the source string (for line numbers).
+    dest_byte_offset: Option<usize>,
+}
+
+fn rewrite_graph_targets(
+    base_dir: &Path,
+    graph: &mut DocumentGraph,
+) -> Result<Vec<LinkDiagnostic>> {
+    let mut diagnostics: Vec<LinkDiagnostic> = Vec::new();
+
     // First pass: collect all link/image targets without mutating the graph.
-    // This avoids cloning each document's source string per-node.
-    let targets: Vec<_> = graph
+    let targets: Vec<TargetInfo> = graph
         .rendered_nodes_preorder()
         .filter_map(|(doc_id, node_ref, _)| {
             let doc = graph.document(doc_id);
             match doc.arena[node_ref].kind_data() {
-                KindData::Link(link) => Some((
+                KindData::Link(link) => Some(TargetInfo {
                     doc_id,
                     node_ref,
-                    false,
-                    link.destination_str(&doc.source).to_string(),
-                )),
-                KindData::Image(image) => Some((
+                    is_image: false,
+                    destination: link.destination_str(&doc.source).to_string(),
+                    dest_byte_offset: destination_byte_offset(link.destination()),
+                }),
+                KindData::Image(image) => Some(TargetInfo {
                     doc_id,
                     node_ref,
-                    true,
-                    image.destination_str(&doc.source).to_string(),
-                )),
+                    is_image: true,
+                    destination: image.destination_str(&doc.source).to_string(),
+                    dest_byte_offset: destination_byte_offset(image.destination()),
+                }),
                 _ => None,
             }
         })
         .collect();
 
-    // Second pass: resolve and insert targets.
-    for (doc_id, node_ref, is_image, destination) in targets {
-        let rewritten = rewrite_target(base_dir, graph, doc_id, &destination, is_image)?;
-        let location = NodeLocation::new(doc_id, node_ref);
-        if is_image {
-            graph.image_targets.insert(location, rewritten);
-        } else {
-            graph.link_targets.insert(location, rewritten);
+    // Second pass: resolve and insert targets, collecting diagnostics for
+    // broken links instead of aborting on the first error.
+    for info in &targets {
+        let doc = graph.document(info.doc_id);
+        let source_path = doc.path.clone();
+        let source_text = doc.source.clone();
+        let text = link_text(&doc.arena, info.node_ref, &doc.source);
+
+        match rewrite_target(
+            base_dir,
+            graph,
+            info.doc_id,
+            &info.destination,
+            info.is_image,
+        ) {
+            Ok(rewritten) => {
+                let location = NodeLocation::new(info.doc_id, info.node_ref);
+                if info.is_image {
+                    graph.image_targets.insert(location, rewritten);
+                } else {
+                    graph.link_targets.insert(location, rewritten);
+                }
+            }
+            Err(message) => {
+                let line = info
+                    .dest_byte_offset
+                    .map(|off| byte_offset_to_line(&source_text, off))
+                    .unwrap_or(0);
+                diagnostics.push(LinkDiagnostic {
+                    file: source_path,
+                    line,
+                    link_text: text,
+                    target: info.destination.clone(),
+                    message,
+                });
+                // Insert the original target as a fallback so rendering can
+                // still proceed (useful in warn mode).
+                let location = NodeLocation::new(info.doc_id, info.node_ref);
+                if info.is_image {
+                    graph
+                        .image_targets
+                        .insert(location, info.destination.clone());
+                } else {
+                    graph
+                        .link_targets
+                        .insert(location, info.destination.clone());
+                }
+            }
         }
     }
-    Ok(())
+
+    Ok(diagnostics)
 }
 
 pub(crate) fn heading_text(arena: &Arena, node_ref: NodeRef, source: &str) -> String {
@@ -295,47 +444,69 @@ fn generate_heading_id(value: &str, seen: &HashSet<String>) -> String {
     }
 }
 
+/// Rewrite a single link/image destination.
+///
+/// Returns `Ok(rewritten)` on success, or `Err(message)` with a
+/// human-readable explanation when the target cannot be resolved (broken
+/// link).  The caller is responsible for wrapping this into a
+/// [`LinkDiagnostic`].
 fn rewrite_target(
     base_dir: &Path,
     graph: &mut DocumentGraph,
     source_doc_id: usize,
     raw_target: &str,
     is_image: bool,
-) -> Result<String> {
+) -> std::result::Result<String, String> {
     let target = raw_target.trim();
     let wrapped = target.starts_with('<') && target.ends_with('>');
     let target = target.trim_matches(['<', '>']);
-    if target.is_empty()
-        || target.starts_with('#')
-        || target.contains("://")
-        || target.starts_with("mailto:")
-    {
+
+    // Empty, external URLs, and mailto links pass through unchanged.
+    if target.is_empty() || target.contains("://") || target.starts_with("mailto:") {
         return Ok(raw_target.to_string());
+    }
+
+    // ── Fragment-only links (#anchor) — file-scoped ────────────────────
+    if let Some(fragment) = target.strip_prefix('#') {
+        if fragment.is_empty() {
+            return Ok(raw_target.to_string());
+        }
+        return match graph.heading_target(source_doc_id, fragment) {
+            Some(final_id) => {
+                let rewritten = format!("#{final_id}");
+                Ok(if wrapped {
+                    format!("<{rewritten}>")
+                } else {
+                    rewritten
+                })
+            }
+            None => Err(format!(
+                "anchor '#{fragment}' not found in {}",
+                graph.document(source_doc_id).path.display()
+            )),
+        };
     }
 
     let (path_part, fragment) = split_fragment(target);
     let source = &graph.document(source_doc_id).path;
-    let resolved = resolve_base_path(base_dir, source.parent().unwrap_or(base_dir), path_part)?;
+    let resolved = resolve_base_path(base_dir, source.parent().unwrap_or(base_dir), path_part)
+        .map_err(|e| format!("{e:#}"))?;
+
     if resolved.extension().and_then(|ext| ext.to_str()) == Some("md") && !is_image {
-        let target_doc_id = graph.resolve_markdown_target(source_doc_id, &resolved)?;
+        let target_doc_id = graph
+            .resolve_markdown_target(source_doc_id, &resolved)
+            .map_err(|e| format!("{e:#}"))?;
         let rewritten = if let Some(fragment) = fragment {
             let target_id = graph
                 .heading_target(target_doc_id, fragment)
                 .ok_or_else(|| {
-                    anyhow!(
-                    "markdown link target {}#{} does not match any heading in the final document",
-                    resolved.display(),
-                    fragment
-                )
+                    format!("anchor '#{fragment}' not found in {}", resolved.display())
                 })?;
             format!("#{target_id}")
         } else {
-            let target_id = graph.first_heading_id(target_doc_id).ok_or_else(|| {
-                anyhow!(
-                    "markdown link target {} is not included in the final document",
-                    resolved.display()
-                )
-            })?;
+            let target_id = graph
+                .first_heading_id(target_doc_id)
+                .ok_or_else(|| format!("target {} has no headings", resolved.display()))?;
             format!("#{target_id}")
         };
         return Ok(if wrapped {
@@ -346,7 +517,7 @@ fn rewrite_target(
     }
 
     graph.asset_targets.insert(resolved.clone());
-    let static_path = static_asset_path(base_dir, &resolved)?;
+    let static_path = static_asset_path(base_dir, &resolved).map_err(|e| format!("{e:#}"))?;
     let rewritten = static_path.to_string_lossy().replace('\\', "/");
     Ok(if wrapped {
         format!("<{rewritten}>")

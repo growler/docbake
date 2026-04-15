@@ -7,7 +7,7 @@ use notify::RecursiveMode;
 use notify_debouncer_mini::new_debouncer;
 
 use crate::cache::Cache;
-use crate::cli::OutputFormat;
+use crate::cli::{BrokenLinkMode, OutputFormat};
 use crate::theme::Theme;
 use crate::DebugDumper;
 
@@ -19,12 +19,22 @@ pub(crate) fn watch_command(
     input: &Path,
     output: &Path,
     base: Option<&Path>,
+    broken_links: BrokenLinkMode,
 ) -> Result<()> {
     // Resolve base_dir once up front so we know what to watch.
     let (_source, base_dir) = crate::resolve_input_and_base(input, base)?;
 
     // Initial build.
-    crate::build_command(logger, cache, theme, format, input, output, base)?;
+    crate::build_command(
+        logger,
+        cache,
+        theme,
+        format,
+        input,
+        output,
+        base,
+        broken_links,
+    )?;
 
     // Clone everything the watcher callback needs.
     let logger_w = logger.clone();
@@ -48,6 +58,7 @@ pub(crate) fn watch_command(
                     &input_w,
                     &output_w,
                     base_w.as_deref(),
+                    broken_links,
                 ) {
                     Ok(()) => {
                         eprintln!("Rebuild complete.");

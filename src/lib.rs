@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 
 use crate::build::{build_template_context, compile_typst, copy_assets, render_pdf_template};
 use crate::cache::Cache;
-use crate::cli::{Cli, OutputFormat};
+use crate::cli::{BrokenLinkMode, Cli, OutputFormat};
 use crate::graph::prepare_document;
 use crate::render_html::{build_html_document, build_toc};
 use crate::render_html_multi::build_multi_page_html;
@@ -51,6 +51,7 @@ pub fn run(cli: Cli) -> Result<()> {
             ref input,
             ref output,
             ref base,
+            broken_links,
         } => build_command(
             &logger,
             &cache,
@@ -59,16 +60,17 @@ pub fn run(cli: Cli) -> Result<()> {
             input,
             output,
             base.as_deref(),
+            broken_links,
         ),
         cli::Command::Dump { ref path, ref base } => {
             let (source, base_dir) = resolve_input_and_base(path, base.as_deref())?;
-            let build = prepare_document(&logger, &base_dir, &source, None)?;
+            let build = prepare_document(&logger, &base_dir, &source, None, BrokenLinkMode::Error)?;
             print!("{}", build.dump_graph());
             Ok(())
         }
         cli::Command::Parse { ref path, ref base } => {
             let (source, base_dir) = resolve_input_and_base(path, base.as_deref())?;
-            let build = prepare_document(&logger, &base_dir, &source, None)?;
+            let build = prepare_document(&logger, &base_dir, &source, None, BrokenLinkMode::Error)?;
             print!("{}", build.parse_dump()?);
             Ok(())
         }
@@ -77,6 +79,7 @@ pub fn run(cli: Cli) -> Result<()> {
             ref input,
             ref base,
             port,
+            broken_links,
         } => serve::serve_command(
             &logger,
             &cache,
@@ -85,12 +88,14 @@ pub fn run(cli: Cli) -> Result<()> {
             input,
             base.as_deref(),
             port.unwrap_or(0),
+            broken_links,
         ),
         cli::Command::Watch {
             format,
             ref input,
             ref output,
             ref base,
+            broken_links,
         } => watch::watch_command(
             &logger,
             &cache,
@@ -99,6 +104,7 @@ pub fn run(cli: Cli) -> Result<()> {
             input,
             output,
             base.as_deref(),
+            broken_links,
         ),
         cli::Command::InitTheme { ref target } => {
             Theme::export_to(target)?;
@@ -193,6 +199,7 @@ pub(crate) fn build_command(
     input: &Path,
     output: &Path,
     base: Option<&Path>,
+    broken_links: BrokenLinkMode,
 ) -> Result<()> {
     let (source, base_dir) = resolve_input_and_base(input, base)?;
     let (output_file, output_dir) = resolve_output(output, &source, format)?;
@@ -209,7 +216,7 @@ pub(crate) fn build_command(
         format
     ));
 
-    let build = prepare_document(logger, &base_dir, &source, Some(&doc_name))?;
+    let build = prepare_document(logger, &base_dir, &source, Some(&doc_name), broken_links)?;
     fs::create_dir_all(&output_dir)
         .with_context(|| format!("failed to create output dir {}", output_dir.display()))?;
 

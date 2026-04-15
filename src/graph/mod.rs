@@ -10,6 +10,7 @@ use rushdown::ast::{KindData, NodeRef};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
 pub(crate) use self::types::{DocumentOccurrence, IncludeEntry, NodeLocation};
+use crate::cli::BrokenLinkMode;
 use crate::DebugDumper;
 
 #[derive(Debug)]
@@ -313,12 +314,33 @@ pub(crate) fn prepare_document(
     base_dir: &Path,
     source_path: &Path,
     document_name: Option<&str>,
+    broken_links: BrokenLinkMode,
 ) -> Result<PreparedDocument> {
     let canonical_root = base_dir
         .canonicalize()
         .with_context(|| format!("failed to resolve {}", base_dir.display()))?;
     let mut graph = build::parse_document_graph(&canonical_root, logger, source_path)?;
-    resolve::resolve_document_graph(&canonical_root, &mut graph)?;
+    let diagnostics = resolve::resolve_document_graph(&canonical_root, &mut graph)?;
+
+    if !diagnostics.is_empty() {
+        for d in &diagnostics {
+            eprintln!("{}", d.display_relative(&canonical_root));
+        }
+        if broken_links == BrokenLinkMode::Error {
+            let mut msg = String::new();
+            for d in &diagnostics {
+                msg.push_str(&d.display_relative(&canonical_root));
+                msg.push('\n');
+            }
+            msg.push_str(&format!(
+                "aborting due to {} broken link{}",
+                diagnostics.len(),
+                if diagnostics.len() == 1 { "" } else { "s" }
+            ));
+            bail!("{msg}");
+        }
+    }
+
     if let Some(name) = document_name {
         logger.log(format!("prepared document `{name}`"));
     }
@@ -364,6 +386,7 @@ mod tests {
             root,
             &root.join("doc/index.md"),
             None,
+            BrokenLinkMode::Error,
         )
         .unwrap();
         let graph = prepared.graph();
@@ -399,6 +422,7 @@ mod tests {
             root,
             &root.join("doc/index.md"),
             None,
+            BrokenLinkMode::Error,
         )
         .unwrap();
         assert_eq!(prepared.graph().documents.len(), 4);
@@ -419,6 +443,7 @@ mod tests {
             root,
             &root.join("doc/index.md"),
             None,
+            BrokenLinkMode::Error,
         )
         .unwrap_err();
         assert!(error.to_string().contains("top-level document blocks"));
@@ -442,6 +467,7 @@ mod tests {
             root,
             &root.join("doc/index.md"),
             None,
+            BrokenLinkMode::Error,
         )
         .unwrap();
         let graph = prepared.graph();
@@ -490,6 +516,7 @@ mod tests {
             root,
             &root.join("doc/index.md"),
             None,
+            BrokenLinkMode::Error,
         )
         .unwrap();
         assert!(prepared
@@ -514,6 +541,7 @@ mod tests {
             root,
             &root.join("doc/index.md"),
             None,
+            BrokenLinkMode::Error,
         )
         .unwrap_err();
         assert!(error.to_string().contains("ambiguous"));
@@ -537,6 +565,7 @@ mod tests {
             root,
             &root.join("doc/index.md"),
             None,
+            BrokenLinkMode::Error,
         )
         .unwrap();
         let part_path = root.join("doc/part.md").canonicalize().unwrap();
@@ -569,6 +598,7 @@ mod tests {
             root,
             &root.join("doc/index.md"),
             None,
+            BrokenLinkMode::Error,
         )
         .unwrap();
         let rendered = crate::render_typst::TypstRenderer::new(
@@ -596,6 +626,7 @@ mod tests {
             root,
             &root.join("doc/index.md"),
             None,
+            BrokenLinkMode::Error,
         )
         .unwrap();
         let root_doc = prepared.graph().root_document();
@@ -640,6 +671,7 @@ mod tests {
             root,
             &root.join("doc/index.md"),
             None,
+            BrokenLinkMode::Error,
         )
         .unwrap();
         let rendered = crate::render_typst::TypstRenderer::new(
@@ -700,6 +732,7 @@ mod tests {
             root,
             &root.join("doc/index.md"),
             None,
+            BrokenLinkMode::Error,
         )
         .unwrap();
         let graph = prepared.graph();
@@ -725,6 +758,7 @@ mod tests {
             root,
             &root.join("doc/index.md"),
             None,
+            BrokenLinkMode::Error,
         )
         .unwrap();
         let graph = prepared.graph();
@@ -749,6 +783,7 @@ mod tests {
             root,
             &root.join("doc/index.md"),
             None,
+            BrokenLinkMode::Error,
         )
         .unwrap();
         let graph = prepared.graph();
@@ -781,6 +816,7 @@ mod tests {
             root,
             &root.join("doc/index.md"),
             None,
+            BrokenLinkMode::Error,
         )
         .unwrap();
         let graph = prepared.graph();
@@ -810,6 +846,7 @@ mod tests {
             root,
             &root.join("doc/index.md"),
             None,
+            BrokenLinkMode::Error,
         )
         .unwrap();
         let graph = prepared.graph();
@@ -954,6 +991,7 @@ See [setup steps](setup.md#steps).
             root,
             &root.join("doc/index.md"),
             None,
+            BrokenLinkMode::Error,
         )
         .unwrap();
         let graph = prepared.graph();
@@ -1120,6 +1158,7 @@ See [setup steps](setup.md#steps).
             root,
             &root.join("doc/index.md"),
             None,
+            BrokenLinkMode::Error,
         )
         .unwrap();
         let root_doc = prepared.graph().root_document();
@@ -1162,6 +1201,7 @@ See [setup steps](setup.md#steps).
             root,
             &root.join("doc/index.md"),
             None,
+            BrokenLinkMode::Error,
         )
         .unwrap();
         let root_doc = prepared.graph().root_document();
@@ -1198,6 +1238,7 @@ See [setup steps](setup.md#steps).
             root,
             &root.join("doc/index.md"),
             None,
+            BrokenLinkMode::Error,
         )
         .unwrap();
         let root_doc = prepared.graph().root_document();
@@ -1242,6 +1283,7 @@ See [setup steps](setup.md#steps).
             root,
             &root.join("doc/index.md"),
             None,
+            BrokenLinkMode::Error,
         )
         .unwrap();
         let root_doc = prepared.graph().root_document();
@@ -1274,6 +1316,7 @@ See [setup steps](setup.md#steps).
             root,
             &root.join("doc/index.md"),
             None,
+            BrokenLinkMode::Error,
         )
         .unwrap();
         let root_doc = prepared.graph().root_document();
@@ -1310,6 +1353,7 @@ See [setup steps](setup.md#steps).
             root,
             &root.join("doc/index.md"),
             None,
+            BrokenLinkMode::Error,
         )
         .unwrap();
         let root_doc = prepared.graph().root_document();
@@ -1346,6 +1390,7 @@ See [setup steps](setup.md#steps).
             root,
             &root.join("doc/index.md"),
             None,
+            BrokenLinkMode::Error,
         )
         .unwrap();
 
@@ -1375,6 +1420,7 @@ See [setup steps](setup.md#steps).
             root,
             &root.join("doc/index.md"),
             None,
+            BrokenLinkMode::Error,
         )
         .unwrap();
         let root_doc = prepared.graph().root_document();
@@ -1410,6 +1456,7 @@ See [setup steps](setup.md#steps).
             root,
             &root.join("doc/index.md"),
             None,
+            BrokenLinkMode::Error,
         )
         .unwrap();
         let rendered = crate::render_typst::TypstRenderer::new(
@@ -1460,6 +1507,7 @@ See [setup steps](setup.md#steps).
             root,
             &root.join("doc/index.md"),
             None,
+            BrokenLinkMode::Error,
         )
         .unwrap();
         let root_doc = prepared.graph().root_document();
@@ -1514,6 +1562,7 @@ See [setup steps](setup.md#steps).
             root,
             &root.join("doc/index.md"),
             None,
+            BrokenLinkMode::Error,
         )
         .unwrap();
         let root_doc = prepared.graph().root_document();
@@ -1565,6 +1614,7 @@ See [setup steps](setup.md#steps).
             root,
             &root.join("doc/index.md"),
             None,
+            BrokenLinkMode::Error,
         )
         .unwrap();
 
@@ -1599,6 +1649,7 @@ See [setup steps](setup.md#steps).
             root,
             &root.join("doc/index.md"),
             None,
+            BrokenLinkMode::Error,
         )
         .unwrap();
         let root_doc = prepared.graph().root_document();
@@ -1634,6 +1685,7 @@ See [setup steps](setup.md#steps).
             root,
             &root.join("doc/index.md"),
             None,
+            BrokenLinkMode::Error,
         )
         .unwrap();
         let root_doc = prepared.graph().root_document();
@@ -1675,6 +1727,7 @@ See [setup steps](setup.md#steps).
             root,
             &root.join("doc/index.md"),
             None,
+            BrokenLinkMode::Error,
         )
         .unwrap();
 
@@ -1704,6 +1757,7 @@ See [setup steps](setup.md#steps).
             root,
             &root.join("doc/index.md"),
             None,
+            BrokenLinkMode::Error,
         )
         .unwrap();
         let root_doc = prepared.graph().root_document();
@@ -1739,6 +1793,7 @@ See [setup steps](setup.md#steps).
             root,
             &root.join("doc/index.md"),
             None,
+            BrokenLinkMode::Error,
         )
         .unwrap();
         let graph = prepared.graph();
@@ -1766,6 +1821,7 @@ See [setup steps](setup.md#steps).
             root,
             &root.join("doc/index.md"),
             None,
+            BrokenLinkMode::Error,
         )
         .unwrap();
         let graph = prepared.graph();
@@ -1790,6 +1846,7 @@ See [setup steps](setup.md#steps).
             root,
             &root.join("doc/index.md"),
             None,
+            BrokenLinkMode::Error,
         )
         .unwrap();
         let graph = prepared.graph();
@@ -1814,6 +1871,7 @@ See [setup steps](setup.md#steps).
             root,
             &root.join("doc/index.md"),
             None,
+            BrokenLinkMode::Error,
         )
         .unwrap();
         let graph = prepared.graph();
@@ -1840,6 +1898,7 @@ See [setup steps](setup.md#steps).
             root,
             &root.join("doc/index.md"),
             None,
+            BrokenLinkMode::Error,
         )
         .unwrap();
         let graph = prepared.graph();
@@ -1870,6 +1929,7 @@ See [setup steps](setup.md#steps).
             root,
             &root.join("doc/index.md"),
             None,
+            BrokenLinkMode::Error,
         )
         .unwrap();
         let graph = prepared.graph();
@@ -1884,6 +1944,179 @@ See [setup steps](setup.md#steps).
             ids.contains(&&"example-1".to_string()),
             "expected 'example-1' in heading_targets, got: {:?}",
             ids
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // Broken-link diagnostics
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn broken_fragment_link_detected_in_error_mode() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        write(
+            &root.join("doc/index.md"),
+            "# Root\n\n[broken](#nonexistent)\n",
+        );
+
+        let error = prepare_document(
+            &DebugDumper::new(false),
+            root,
+            &root.join("doc/index.md"),
+            None,
+            BrokenLinkMode::Error,
+        )
+        .unwrap_err();
+        let msg = error.to_string();
+        assert!(
+            msg.contains("nonexistent"),
+            "expected 'nonexistent' in error: {msg}"
+        );
+        assert!(
+            msg.contains("broken link"),
+            "expected 'broken link' in error: {msg}"
+        );
+    }
+
+    #[test]
+    fn broken_fragment_link_allowed_in_warn_mode() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        write(
+            &root.join("doc/index.md"),
+            "# Root\n\n[broken](#nonexistent)\n",
+        );
+
+        // Warn mode: build succeeds despite the broken link.
+        let prepared = prepare_document(
+            &DebugDumper::new(false),
+            root,
+            &root.join("doc/index.md"),
+            None,
+            BrokenLinkMode::Warn,
+        )
+        .unwrap();
+        // The fallback target is inserted so rendering can proceed.
+        assert!(
+            prepared
+                .graph()
+                .link_targets
+                .values()
+                .any(|v| v == "#nonexistent"),
+            "expected fallback target '#nonexistent' in link_targets"
+        );
+    }
+
+    #[test]
+    fn valid_fragment_link_rewritten_to_final_id() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        // The document has two headings "Section" — the second becomes
+        // "section-1" after deduplication.  A #section link should resolve
+        // to the first heading's final id.
+        write(
+            &root.join("doc/index.md"),
+            "# Root\n\n## Section\n\n## Section\n\n[go](#section)\n",
+        );
+
+        let prepared = prepare_document(
+            &DebugDumper::new(false),
+            root,
+            &root.join("doc/index.md"),
+            None,
+            BrokenLinkMode::Error,
+        )
+        .unwrap();
+        assert!(
+            prepared
+                .graph()
+                .link_targets
+                .values()
+                .any(|v| v == "#section"),
+            "expected rewritten target '#section' in link_targets"
+        );
+    }
+
+    #[test]
+    fn fragment_link_is_file_scoped_not_graph_scoped() {
+        // A #fragment link in root should NOT resolve against headings
+        // in included files — fragments are file-scoped.
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        write(
+            &root.join("doc/index.md"),
+            "# Root\n\n:::include\n# [Part](part.md)\n:::\n\n[go](#part-heading)\n",
+        );
+        write(&root.join("doc/part.md"), "# Part Heading\n\nContent.\n");
+
+        let error = prepare_document(
+            &DebugDumper::new(false),
+            root,
+            &root.join("doc/index.md"),
+            None,
+            BrokenLinkMode::Error,
+        )
+        .unwrap_err();
+        let msg = error.to_string();
+        assert!(
+            msg.contains("part-heading"),
+            "expected 'part-heading' in error: {msg}"
+        );
+    }
+
+    #[test]
+    fn multiple_broken_links_all_reported() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        write(
+            &root.join("doc/index.md"),
+            "# Root\n\n[a](#aaa)\n\n[b](#bbb)\n\n[c](#ccc)\n",
+        );
+
+        let error = prepare_document(
+            &DebugDumper::new(false),
+            root,
+            &root.join("doc/index.md"),
+            None,
+            BrokenLinkMode::Error,
+        )
+        .unwrap_err();
+        let msg = error.to_string();
+        assert!(msg.contains("aaa"), "expected 'aaa' in error: {msg}");
+        assert!(msg.contains("bbb"), "expected 'bbb' in error: {msg}");
+        assert!(msg.contains("ccc"), "expected 'ccc' in error: {msg}");
+        assert!(
+            msg.contains("3 broken links"),
+            "expected '3 broken links' in error: {msg}"
+        );
+    }
+
+    #[test]
+    fn broken_md_link_collected_as_diagnostic() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        write(
+            &root.join("doc/index.md"),
+            "# Root\n\n[missing](missing.md)\n",
+        );
+
+        let error = prepare_document(
+            &DebugDumper::new(false),
+            root,
+            &root.join("doc/index.md"),
+            None,
+            BrokenLinkMode::Error,
+        )
+        .unwrap_err();
+        let msg = error.to_string();
+        assert!(
+            msg.contains("missing"),
+            "expected 'missing' in error: {msg}"
+        );
+        assert!(
+            msg.contains("broken link"),
+            "expected 'broken link' in error: {msg}"
         );
     }
 }

@@ -11,7 +11,7 @@ use tiny_http::{Header, Response, Server, StatusCode};
 
 use crate::build::{build_template_context, copy_assets};
 use crate::cache::Cache;
-use crate::cli::OutputFormat;
+use crate::cli::{BrokenLinkMode, OutputFormat};
 use crate::diagram::DiagramThemes;
 use crate::graph::prepare_document;
 use crate::render_html::{build_html_document, build_toc};
@@ -40,6 +40,7 @@ pub(crate) fn serve_command(
     input: &Path,
     base: Option<&Path>,
     port: u16,
+    broken_links: BrokenLinkMode,
 ) -> Result<()> {
     match format {
         OutputFormat::Html | OutputFormat::HtmlMulti => {}
@@ -63,6 +64,7 @@ pub(crate) fn serve_command(
         &source,
         &base_dir,
         &output_dir,
+        broken_links,
     )?;
 
     // Version counter polled by the live-reload script.
@@ -108,6 +110,7 @@ pub(crate) fn serve_command(
                     &source_w,
                     &base_dir_w,
                     &output_dir_w,
+                    broken_links,
                 ) {
                     Ok(()) => {
                         version_w.fetch_add(1, Ordering::Relaxed);
@@ -197,6 +200,7 @@ fn rebuild(
     source: &Path,
     base_dir: &Path,
     output_dir: &Path,
+    broken_links: BrokenLinkMode,
 ) -> Result<()> {
     let doc_name = source
         .file_stem()
@@ -211,7 +215,7 @@ fn rebuild(
         format
     ));
 
-    let build = prepare_document(logger, base_dir, source, Some(&doc_name))?;
+    let build = prepare_document(logger, base_dir, source, Some(&doc_name), broken_links)?;
     fs::create_dir_all(output_dir)
         .with_context(|| format!("failed to create output dir {}", output_dir.display()))?;
 

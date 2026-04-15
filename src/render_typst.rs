@@ -157,7 +157,7 @@ impl TypstRenderer {
                 }
                 out.push_str("\n\n");
             }
-            KindData::ThematicBreak(_) => out.push_str("#line(length: 100%)\n\n"),
+            KindData::ThematicBreak(_) => out.push_str("#thematic-break()\n\n"),
             KindData::CodeBlock(code) => {
                 // Lines from rushdown include trailing newlines already.
                 let mut value = String::new();
@@ -232,15 +232,11 @@ impl TypstRenderer {
                     if is_task_list {
                         if let KindData::ListItem(li) = arena[item].kind_data() {
                             match li.task() {
-                                Some(Task::Checked) => {
-                                    out.push_str("#box(width: 1em, height: 1em, baseline: 15%, stroke: 0.5pt + luma(120), radius: 1.5pt, align(center + horizon, text(size: 10pt, weight: \"bold\", sym.checkmark))) ")
-                                }
-                                Some(Task::Unchecked) => {
-                                    out.push_str("#box(width: 1em, height: 1em, baseline: 15%, stroke: 0.5pt + luma(120), radius: 1.5pt) ")
-                                }
+                                Some(Task::Checked) => out.push_str("#task-checkbox(true) "),
+                                Some(Task::Unchecked) => out.push_str("#task-checkbox(false) "),
                                 // Non-task item in a mixed list — restore the
                                 // bullet that marker: none suppressed.
-                                Some(_) | None => out.push_str("#sym.bullet "),
+                                Some(_) | None => out.push_str("#task-bullet() "),
                             }
                         }
                     }
@@ -1008,9 +1004,9 @@ impl TypstRenderer {
                 }
 
                 if is_inline {
-                    // Wrap in a box sized to 1em so the image sits inline
-                    // at the current text line height.
-                    write!(out, "#box(height: 1em, image({image_args}))")?;
+                    // Delegate sizing to the template's inline-image()
+                    // function so the theme controls inline image appearance.
+                    write!(out, "#inline-image({image_args})")?;
                 } else {
                     write!(out, "#image({image_args})")?;
                 }
