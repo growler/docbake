@@ -28,7 +28,7 @@ pub(crate) fn parse_document_graph(
         rendered_nodes: Vec::new(),
         occurrences_by_path: HashMap::new(),
         first_heading_by_doc: HashMap::new(),
-        heading_targets: HashMap::new(),
+        anchor_targets: HashMap::new(),
         link_targets: HashMap::new(),
         image_targets: HashMap::new(),
         asset_targets: HashSet::new(),

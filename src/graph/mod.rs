@@ -20,7 +20,7 @@ pub(crate) struct DocumentGraph {
     pub(super) rendered_nodes: Vec<(usize, NodeRef, usize)>,
     pub(super) occurrences_by_path: HashMap<PathBuf, Vec<usize>>,
     pub(super) first_heading_by_doc: HashMap<usize, String>,
-    pub(super) heading_targets: HashMap<(usize, String), String>,
+    pub(super) anchor_targets: HashMap<(usize, String), String>,
     pub(super) link_targets: HashMap<NodeLocation, String>,
     pub(super) image_targets: HashMap<NodeLocation, String>,
     pub(super) asset_targets: HashSet<PathBuf>,
@@ -63,8 +63,16 @@ impl DocumentGraph {
         self.first_heading_by_doc.get(&doc_id).map(String::as_str)
     }
 
-    pub(crate) fn heading_target(&self, doc_id: usize, fragment: &str) -> Option<&str> {
-        self.heading_targets
+    pub(crate) fn anchor_count(&self) -> usize {
+        self.anchor_targets.len()
+    }
+
+    pub(crate) fn link_count(&self) -> usize {
+        self.link_targets.len()
+    }
+
+    pub(crate) fn anchor_target(&self, doc_id: usize, fragment: &str) -> Option<&str> {
+        self.anchor_targets
             .get(&(doc_id, fragment.to_string()))
             .map(String::as_str)
     }
@@ -737,11 +745,11 @@ mod tests {
         .unwrap();
         let graph = prepared.graph();
 
-        // The caption should have an auto-generated ID in heading_targets.
+        // The caption should have an auto-generated ID in anchor_targets.
         assert!(
-            graph.heading_targets.values().any(|v| v == "my-table"),
-            "expected 'my-table' in heading_targets, got: {:?}",
-            graph.heading_targets
+            graph.anchor_targets.values().any(|v| v == "my-table"),
+            "expected 'my-table' in anchor_targets, got: {:?}",
+            graph.anchor_targets
         );
     }
 
@@ -764,9 +772,9 @@ mod tests {
         let graph = prepared.graph();
 
         assert!(
-            graph.heading_targets.values().any(|v| v == "rfc-table"),
-            "expected 'rfc-table' in heading_targets, got: {:?}",
-            graph.heading_targets
+            graph.anchor_targets.values().any(|v| v == "rfc-table"),
+            "expected 'rfc-table' in anchor_targets, got: {:?}",
+            graph.anchor_targets
         );
     }
 
@@ -790,7 +798,7 @@ mod tests {
 
         // Both the heading "Overview" and the caption "Overview" exist.
         // The heading gets "overview", the caption should get "overview-1".
-        let ids: Vec<&String> = graph.heading_targets.values().collect();
+        let ids: Vec<&String> = graph.anchor_targets.values().collect();
         assert!(
             ids.contains(&&"overview".to_string()),
             "heading id missing, got: {:?}",
@@ -852,9 +860,9 @@ mod tests {
         let graph = prepared.graph();
 
         assert!(
-            graph.heading_targets.values().any(|v| v == "part-table"),
-            "expected 'part-table' in heading_targets, got: {:?}",
-            graph.heading_targets
+            graph.anchor_targets.values().any(|v| v == "part-table"),
+            "expected 'part-table' in anchor_targets, got: {:?}",
+            graph.anchor_targets
         );
     }
 
@@ -1040,12 +1048,12 @@ See [setup steps](setup.md#steps).
         // source_anchor "notes" → final_id "notes", the second should get
         // source_anchor "notes-1" → final_id "notes-1".
         assert_eq!(
-            graph.heading_target(detail_id, "notes"),
+            graph.anchor_target(detail_id, "notes"),
             Some("notes"),
             "first 'Notes' heading should have source_anchor 'notes' mapping to final_id 'notes'"
         );
         assert_eq!(
-            graph.heading_target(detail_id, "notes-1"),
+            graph.anchor_target(detail_id, "notes-1"),
             Some("notes-1"),
             "second 'Notes' heading should have source_anchor 'notes-1' mapping to final_id 'notes-1'"
         );
@@ -1799,12 +1807,9 @@ See [setup steps](setup.md#steps).
         let graph = prepared.graph();
 
         assert!(
-            graph
-                .heading_targets
-                .values()
-                .any(|v| v == "basic-function"),
-            "expected 'basic-function' in heading_targets, got: {:?}",
-            graph.heading_targets
+            graph.anchor_targets.values().any(|v| v == "basic-function"),
+            "expected 'basic-function' in anchor_targets, got: {:?}",
+            graph.anchor_targets
         );
     }
 
@@ -1827,9 +1832,9 @@ See [setup steps](setup.md#steps).
         let graph = prepared.graph();
 
         assert!(
-            graph.heading_targets.values().any(|v| v == "http-client"),
-            "expected 'http-client' in heading_targets, got: {:?}",
-            graph.heading_targets
+            graph.anchor_targets.values().any(|v| v == "http-client"),
+            "expected 'http-client' in anchor_targets, got: {:?}",
+            graph.anchor_targets
         );
     }
 
@@ -1852,9 +1857,9 @@ See [setup steps](setup.md#steps).
         let graph = prepared.graph();
 
         assert!(
-            graph.heading_targets.values().any(|v| v == "my-code"),
-            "expected 'my-code' in heading_targets, got: {:?}",
-            graph.heading_targets
+            graph.anchor_targets.values().any(|v| v == "my-code"),
+            "expected 'my-code' in anchor_targets, got: {:?}",
+            graph.anchor_targets
         );
     }
 
@@ -1878,10 +1883,10 @@ See [setup steps](setup.md#steps).
 
         // Only the heading should have an ID, not the code block.
         assert_eq!(
-            graph.heading_targets.len(),
+            graph.anchor_targets.len(),
             1,
             "expected only the heading target, got: {:?}",
-            graph.heading_targets
+            graph.anchor_targets
         );
     }
 
@@ -1903,15 +1908,15 @@ See [setup steps](setup.md#steps).
         .unwrap();
         let graph = prepared.graph();
 
-        let ids: Vec<&String> = graph.heading_targets.values().collect();
+        let ids: Vec<&String> = graph.anchor_targets.values().collect();
         assert!(
             ids.contains(&&"basic-function".to_string()),
-            "expected 'basic-function' in heading_targets, got: {:?}",
+            "expected 'basic-function' in anchor_targets, got: {:?}",
             ids
         );
         assert!(
             ids.contains(&&"basic-function-1".to_string()),
-            "expected 'basic-function-1' in heading_targets, got: {:?}",
+            "expected 'basic-function-1' in anchor_targets, got: {:?}",
             ids
         );
     }
@@ -1934,15 +1939,15 @@ See [setup steps](setup.md#steps).
         .unwrap();
         let graph = prepared.graph();
 
-        let ids: Vec<&String> = graph.heading_targets.values().collect();
+        let ids: Vec<&String> = graph.anchor_targets.values().collect();
         assert!(
             ids.contains(&&"example".to_string()),
-            "expected 'example' in heading_targets, got: {:?}",
+            "expected 'example' in anchor_targets, got: {:?}",
             ids
         );
         assert!(
             ids.contains(&&"example-1".to_string()),
-            "expected 'example-1' in heading_targets, got: {:?}",
+            "expected 'example-1' in anchor_targets, got: {:?}",
             ids
         );
     }
@@ -2117,6 +2122,225 @@ See [setup steps](setup.md#steps).
         assert!(
             msg.contains("broken link"),
             "expected 'broken link' in error: {msg}"
+        );
+    }
+
+    // ----- Explicit ID tracking for images, diagrams, spans, and divs -----
+
+    #[test]
+    fn image_explicit_id_tracked() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        write(
+            &root.join("doc/index.md"),
+            "# Doc\n\n![Photo](photo.png){#my-img}\n",
+        );
+        write(&root.join("doc/photo.png"), "fake-png");
+
+        let prepared = prepare_document(
+            &DebugDumper::new(false),
+            root,
+            &root.join("doc/index.md"),
+            None,
+            BrokenLinkMode::Error,
+        )
+        .unwrap();
+        let graph = prepared.graph();
+
+        assert!(
+            graph.anchor_targets.values().any(|v| v == "my-img"),
+            "expected 'my-img' in anchor_targets, got: {:?}",
+            graph.anchor_targets
+        );
+    }
+
+    #[test]
+    fn link_to_image_id_resolves() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        write(
+            &root.join("doc/index.md"),
+            "# Doc\n\n![Photo](photo.png){#my-img}\n\nSee [the image](#my-img).\n",
+        );
+        write(&root.join("doc/photo.png"), "fake-png");
+
+        // Should succeed — the fragment #my-img is a known anchor.
+        prepare_document(
+            &DebugDumper::new(false),
+            root,
+            &root.join("doc/index.md"),
+            None,
+            BrokenLinkMode::Error,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn diagram_explicit_id_tracked() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        write(
+            &root.join("doc/index.md"),
+            "# Doc\n\n![Seq](seq.puml){#my-diagram}\n",
+        );
+        write(
+            &root.join("doc/seq.puml"),
+            "@startuml\nAlice -> Bob\n@enduml\n",
+        );
+
+        let prepared = prepare_document(
+            &DebugDumper::new(false),
+            root,
+            &root.join("doc/index.md"),
+            None,
+            BrokenLinkMode::Error,
+        )
+        .unwrap();
+        let graph = prepared.graph();
+
+        assert!(
+            graph.anchor_targets.values().any(|v| v == "my-diagram"),
+            "expected 'my-diagram' in anchor_targets, got: {:?}",
+            graph.anchor_targets
+        );
+    }
+
+    #[test]
+    fn link_to_diagram_id_resolves() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        write(
+            &root.join("doc/index.md"),
+            "# Doc\n\n![Seq](seq.puml){#my-diagram}\n\nSee [diagram](#my-diagram).\n",
+        );
+        write(
+            &root.join("doc/seq.puml"),
+            "@startuml\nAlice -> Bob\n@enduml\n",
+        );
+
+        prepare_document(
+            &DebugDumper::new(false),
+            root,
+            &root.join("doc/index.md"),
+            None,
+            BrokenLinkMode::Error,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn bracketed_span_explicit_id_tracked() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        write(
+            &root.join("doc/index.md"),
+            "# Doc\n\n[important text]{#my-span}\n",
+        );
+
+        let prepared = prepare_document(
+            &DebugDumper::new(false),
+            root,
+            &root.join("doc/index.md"),
+            None,
+            BrokenLinkMode::Error,
+        )
+        .unwrap();
+        let graph = prepared.graph();
+
+        assert!(
+            graph.anchor_targets.values().any(|v| v == "my-span"),
+            "expected 'my-span' in anchor_targets, got: {:?}",
+            graph.anchor_targets
+        );
+    }
+
+    #[test]
+    fn link_to_bracketed_span_id_resolves() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        write(
+            &root.join("doc/index.md"),
+            "# Doc\n\n[important text]{#my-span}\n\nSee [ref](#my-span).\n",
+        );
+
+        prepare_document(
+            &DebugDumper::new(false),
+            root,
+            &root.join("doc/index.md"),
+            None,
+            BrokenLinkMode::Error,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn fenced_div_explicit_id_tracked() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        write(
+            &root.join("doc/index.md"),
+            "# Doc\n\n:::{#my-div .note}\nSome content.\n:::\n",
+        );
+
+        let prepared = prepare_document(
+            &DebugDumper::new(false),
+            root,
+            &root.join("doc/index.md"),
+            None,
+            BrokenLinkMode::Error,
+        )
+        .unwrap();
+        let graph = prepared.graph();
+
+        assert!(
+            graph.anchor_targets.values().any(|v| v == "my-div"),
+            "expected 'my-div' in anchor_targets, got: {:?}",
+            graph.anchor_targets
+        );
+    }
+
+    #[test]
+    fn link_to_fenced_div_id_resolves() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        write(
+            &root.join("doc/index.md"),
+            "# Doc\n\n:::{#my-div .note}\nSome content.\n:::\n\nSee [ref](#my-div).\n",
+        );
+
+        prepare_document(
+            &DebugDumper::new(false),
+            root,
+            &root.join("doc/index.md"),
+            None,
+            BrokenLinkMode::Error,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn duplicate_explicit_id_across_element_types_rejected() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        // Heading and image both claim id "foo".
+        write(
+            &root.join("doc/index.md"),
+            "# Doc {#foo}\n\n![Photo](photo.png){#foo}\n",
+        );
+        write(&root.join("doc/photo.png"), "fake-png");
+
+        let error = prepare_document(
+            &DebugDumper::new(false),
+            root,
+            &root.join("doc/index.md"),
+            None,
+            BrokenLinkMode::Error,
+        )
+        .unwrap_err();
+        let msg = error.to_string();
+        assert!(
+            msg.contains("duplicate") && msg.contains("foo"),
+            "expected duplicate id error mentioning 'foo', got: {msg}"
         );
     }
 }

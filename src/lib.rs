@@ -106,6 +106,10 @@ pub fn run(cli: Cli) -> Result<()> {
             base.as_deref(),
             broken_links,
         ),
+        cli::Command::Check {
+            ref input,
+            ref base,
+        } => check_command(&logger, &cache, &theme, input, base.as_deref()),
         cli::Command::InitTheme { ref target } => {
             Theme::export_to(target)?;
             eprintln!("Default theme exported to {}", target.display());
@@ -349,6 +353,123 @@ pub(crate) fn build_command(
         OutputFormat::Markdown => unreachable!(),
     }
 
+    Ok(())
+}
+
+fn check_command(
+    logger: &DebugDumper,
+    cache: &Cache,
+    theme: &Theme,
+    input: &Path,
+    base: Option<&Path>,
+) -> Result<()> {
+    let (source, base_dir) = resolve_input_and_base(input, base)?;
+    let build = prepare_document(logger, &base_dir, &source, None, BrokenLinkMode::Error)?;
+    let graph = build.graph();
+
+    let anchor_count = graph.anchor_count();
+    let link_count = graph.link_count();
+
+    // ── Diagram themes ──────────────────────────────────────────────────
+    let diagram_themes = crate::diagram::DiagramThemes {
+        plantuml: theme.plantuml_theme()?,
+        mermaid: theme.mermaid_theme()?,
+        d2: theme.d2_theme()?,
+    };
+
+    // ── Render every diagram, collecting errors ─────────────────────────
+    let mut diagram_count: usize = 0;
+    let mut diagram_errors: Vec<String> = Vec::new();
+
+    for (doc_id, node_ref, _) in graph.rendered_nodes_preorder() {
+        let doc = graph.document(doc_id);
+        if !rushdown::matches_extension_kind!(&doc.arena, node_ref, crate::diagram::Diagram) {
+            continue;
+        }
+        let diagram = rushdown::as_extension_data!(&doc.arena, node_ref, crate::diagram::Diagram);
+        let src = crate::diagram::collect_diagram_source(diagram, &doc.source);
+        diagram_count += 1;
+
+        let result: Result<()> = match diagram.diagram_type() {
+            crate::diagram::DiagramType::Typst => {
+                crate::diagram::cached_render_svg(cache, src.as_bytes(), "typst.svg", || {
+                    crate::diagram::render_typst_svg(None, &src).map_err(|e| anyhow!("{e}"))
+                })
+                .map(|_| ())
+            }
+            crate::diagram::DiagramType::DrawIo => {
+                if let Some(path) = diagram.drawio_path() {
+                    let cache_key = crate::diagram::drawio_cache_key(path, diagram.drawio_page());
+                    crate::diagram::cached_render_bytes(cache, &cache_key, "drawio.pdf", || {
+                        crate::diagram::render_drawio(
+                            None,
+                            path,
+                            diagram.drawio_page(),
+                            crate::diagram::DrawioFormat::Pdf,
+                        )
+                        .map_err(|e| anyhow!("{e}"))
+                    })
+                    .map(|_| ())
+                } else {
+                    Ok(())
+                }
+            }
+            crate::diagram::DiagramType::D2 => {
+                let themed = crate::diagram::apply_d2_theme(&src, diagram_themes.d2.as_deref());
+                crate::diagram::cached_render_svg(cache, themed.as_bytes(), "d2.svg", || {
+                    crate::diagram::render_d2_svg(None, &themed).map_err(|e| anyhow!("{e}"))
+                })
+                .map(|_| ())
+            }
+            crate::diagram::DiagramType::PlantUml => {
+                let themed =
+                    crate::diagram::apply_plantuml_theme(&src, diagram_themes.plantuml.as_deref());
+                crate::diagram::cached_render_bytes(
+                    cache,
+                    themed.as_bytes(),
+                    "plantuml.svg",
+                    || {
+                        crate::diagram::render_plantuml_svg(None, themed.as_bytes())
+                            .map_err(|e| anyhow!("{e}"))
+                    },
+                )
+                .map(|_| ())
+            }
+            crate::diagram::DiagramType::Mermaid => {
+                let themed =
+                    crate::diagram::apply_mermaid_theme(&src, diagram_themes.mermaid.as_deref());
+                crate::diagram::cached_render_bytes(cache, themed.as_bytes(), "mermaid.svg", || {
+                    crate::diagram::render_mermaid_svg_auto(None, &themed).map(|s| s.into_bytes())
+                })
+                .map(|_| ())
+            }
+        };
+
+        if let Err(e) = result {
+            diagram_errors.push(format!("{}: {e}", doc.path.display()));
+        }
+    }
+
+    if !diagram_errors.is_empty() {
+        for err in &diagram_errors {
+            eprintln!("{err}");
+        }
+        bail!(
+            "aborting due to {} diagram error{}",
+            diagram_errors.len(),
+            if diagram_errors.len() == 1 { "" } else { "s" }
+        );
+    }
+
+    eprintln!(
+        "check passed: {} anchor{}, {} link{}, {} diagram{}",
+        anchor_count,
+        if anchor_count == 1 { "" } else { "s" },
+        link_count,
+        if link_count == 1 { "" } else { "s" },
+        diagram_count,
+        if diagram_count == 1 { "" } else { "s" },
+    );
     Ok(())
 }
 

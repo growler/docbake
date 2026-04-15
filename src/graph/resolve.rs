@@ -97,11 +97,11 @@ pub(super) fn resolve_document_graph(
     base_dir: &Path,
     graph: &mut DocumentGraph,
 ) -> Result<Vec<LinkDiagnostic>> {
-    assign_heading_ids(graph)?;
+    collect_and_assign_ids(graph)?;
     rewrite_graph_targets(base_dir, graph)
 }
 
-fn assign_heading_ids(graph: &mut DocumentGraph) -> Result<()> {
+fn collect_and_assign_ids(graph: &mut DocumentGraph) -> Result<()> {
     let mut final_seen = HashSet::new();
     let mut local_seen: std::collections::HashMap<usize, HashSet<String>> =
         std::collections::HashMap::new();
@@ -138,7 +138,7 @@ fn assign_heading_ids(graph: &mut DocumentGraph) -> Result<()> {
             };
             final_seen.insert(final_id.clone());
             graph
-                .heading_targets
+                .anchor_targets
                 .insert((doc_id, source_anchor), final_id.clone());
             graph.documents[doc_id].arena[node_ref]
                 .attributes_mut()
@@ -170,7 +170,7 @@ fn assign_heading_ids(graph: &mut DocumentGraph) -> Result<()> {
             // Use final_id as source_anchor — this is the fragment the user
             // would write in a link (`[text](#final-id)`).
             graph
-                .heading_targets
+                .anchor_targets
                 .insert((doc_id, final_id.clone()), final_id.clone());
             graph.documents[doc_id].arena[node_ref]
                 .attributes_mut()
@@ -209,7 +209,7 @@ fn assign_heading_ids(graph: &mut DocumentGraph) -> Result<()> {
                     );
                 }
                 final_seen.insert(id.clone());
-                graph.heading_targets.insert((doc_id, id.clone()), id);
+                graph.anchor_targets.insert((doc_id, id.clone()), id);
             } else if let Some(description) = code_block_description(code_block, &doc.source) {
                 // Auto-generate ID from the descriptive text.
                 let seen = local_seen.entry(doc_id).or_default();
@@ -218,13 +218,63 @@ fn assign_heading_ids(graph: &mut DocumentGraph) -> Result<()> {
                 let final_id = generate_heading_id(&source_anchor, &final_seen);
                 final_seen.insert(final_id.clone());
                 graph
-                    .heading_targets
+                    .anchor_targets
                     .insert((doc_id, source_anchor), final_id.clone());
                 graph.documents[doc_id].arena[node_ref]
                     .attributes_mut()
                     .insert("id".to_string(), final_id.into());
             }
             continue;
+        }
+
+        // --------------------------------------------------------------------
+        // Track explicit IDs on remaining element types so that fragment
+        // links (`#anchor`) pointing at them are validated correctly.
+        // No auto-generation — only user-supplied `{#id}` attributes.
+        // --------------------------------------------------------------------
+
+        let explicit_id = doc.arena[node_ref]
+            .attributes()
+            .get("id")
+            .map(|v| v.str(&doc.source).to_string());
+
+        if let Some(id) = explicit_id {
+            let kind_label = if matches!(doc.arena[node_ref].kind_data(), KindData::Image(_)) {
+                Some("image")
+            } else if rushdown::matches_extension_kind!(
+                &doc.arena,
+                node_ref,
+                crate::diagram::Diagram
+            ) {
+                Some("diagram")
+            } else if rushdown::matches_extension_kind!(
+                &doc.arena,
+                node_ref,
+                crate::bracketed_span::BracketedSpan
+            ) {
+                Some("span")
+            } else if rushdown::matches_extension_kind!(
+                &doc.arena,
+                node_ref,
+                rushdown_fenced_div::FencedDiv
+            ) {
+                Some("div")
+            } else {
+                None
+            };
+
+            if let Some(label) = kind_label {
+                if final_seen.contains(&id) {
+                    bail!(
+                        "duplicate explicit {} id `{}` in {}",
+                        label,
+                        id,
+                        doc.path.display()
+                    );
+                }
+                final_seen.insert(id.clone());
+                graph.anchor_targets.insert((doc_id, id.clone()), id);
+            }
         }
     }
     Ok(())
@@ -471,7 +521,7 @@ fn rewrite_target(
         if fragment.is_empty() {
             return Ok(raw_target.to_string());
         }
-        return match graph.heading_target(source_doc_id, fragment) {
+        return match graph.anchor_target(source_doc_id, fragment) {
             Some(final_id) => {
                 let rewritten = format!("#{final_id}");
                 Ok(if wrapped {
@@ -498,7 +548,7 @@ fn rewrite_target(
             .map_err(|e| format!("{e:#}"))?;
         let rewritten = if let Some(fragment) = fragment {
             let target_id = graph
-                .heading_target(target_doc_id, fragment)
+                .anchor_target(target_doc_id, fragment)
                 .ok_or_else(|| {
                     format!("anchor '#{fragment}' not found in {}", resolved.display())
                 })?;

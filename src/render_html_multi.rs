@@ -727,11 +727,11 @@ impl<'a, W: TextWrite> MultiLinkHtmlRenderer<'a, W> {
                     let relative =
                         compute_relative_href(&current_page.output_path, &target_page.output_path);
                     let result = if let Some(frag) = fragment {
-                        // Resolve the fragment to the final heading ID.
+                        // Resolve the fragment to the final anchor ID.
                         let target_doc_id = target_page.doc_id;
                         let final_id = self
                             .graph
-                            .heading_target(target_doc_id, frag)
+                            .anchor_target(target_doc_id, frag)
                             .unwrap_or(frag);
                         format!("{relative}#{final_id}")
                     } else {
