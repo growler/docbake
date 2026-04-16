@@ -23,6 +23,7 @@
 //! This module is designed to be extracted into a standalone crate later.
 
 use std::any::TypeId;
+use std::fmt::Write as _;
 use std::sync::LazyLock;
 
 use rushdown::as_kind_data;
@@ -230,10 +231,32 @@ impl<W: TextWrite> CodeBlockAttributeHtmlRenderer<W> {
             .map(|c| format!("#{:02x}{:02x}{:02x}", c.r, c.g, c.b))
             .unwrap_or_else(|| "#ffffff".to_string());
 
+        // Check for the `start` attribute — when present, enable line numbering.
+        let start_line: Option<u64> = arena[node_ref]
+            .attributes()
+            .get("start")
+            .and_then(|s| s.str(source).parse::<u64>().ok());
+
         // Open <pre> with background style and node attributes.
         w.write_str("<pre style=\"background-color: ")?;
         w.write_str(&bg)?;
-        w.write_str("; padding: 12px; overflow: auto;\"")?;
+        w.write_str("; padding: 12px; overflow: auto;")?;
+        if let Some(start) = start_line {
+            // CSS counter starting at (start - 1) so the first increment
+            // produces the correct starting number.
+            let mut buf = String::new();
+            write!(
+                buf,
+                " counter-reset: line-number {};",
+                start.saturating_sub(1)
+            )
+            .expect("write to String never fails");
+            w.write_str(&buf)?;
+        }
+        w.write_str("\"")?;
+        if start_line.is_some() {
+            w.write_str(" class=\"line-numbers\"")?;
+        }
         html::render_attributes(w, source, arena[node_ref].attributes(), None)?;
         w.write_str("><code class=\"language-")?;
         w.write_str(lang)?;
@@ -241,16 +264,25 @@ impl<W: TextWrite> CodeBlockAttributeHtmlRenderer<W> {
 
         let mut h = HighlightLines::new(syntax, theme);
         for line in LinesWithEndings::from(&code) {
+            if start_line.is_some() {
+                w.write_str("<span class=\"code-line\">")?;
+            }
             if let Ok(regions) = h.highlight_line(line, ps) {
                 if let Ok(html_line) =
                     styled_line_to_highlighted_html(&regions[..], IncludeBackground::No)
                 {
                     w.write_str(&html_line)?;
+                    if start_line.is_some() {
+                        w.write_str("</span>")?;
+                    }
                     continue;
                 }
             }
             // Fallback: write the raw line (HTML-escaped by the writer).
             self.writer.raw_write(w, line)?;
+            if start_line.is_some() {
+                w.write_str("</span>")?;
+            }
         }
 
         w.write_str("</code></pre>\n")?;
@@ -501,6 +533,62 @@ mod tests {
         assert!(
             output.contains("class=\"language-rust\""),
             "output should contain language class: {output}"
+        );
+    }
+
+    #[test]
+    fn html_rendering_with_start_attribute() {
+        let input = "```rust {start=10}\nfn main() {}\n```\n";
+        let (arena, doc_ref) = parse_with_code_block_attrs(input);
+
+        let renderer = html::Renderer::with_extensions(
+            html::Options::default(),
+            code_block_attribute_html_renderer_extension(
+                CodeBlockAttributeHtmlRendererOptions::default(),
+            ),
+        );
+        let mut output = String::new();
+        renderer
+            .render(&mut output, input, &arena, doc_ref)
+            .unwrap();
+
+        assert!(
+            output.contains("class=\"line-numbers\""),
+            "output should contain line-numbers class: {output}"
+        );
+        assert!(
+            output.contains("counter-reset: line-number 9;"),
+            "output should contain counter-reset with start-1: {output}"
+        );
+        assert!(
+            output.contains("<span class=\"code-line\">"),
+            "output should contain code-line spans: {output}"
+        );
+    }
+
+    #[test]
+    fn html_rendering_without_start_has_no_line_numbers() {
+        let input = "```rust\nfn main() {}\n```\n";
+        let (arena, doc_ref) = parse_with_code_block_attrs(input);
+
+        let renderer = html::Renderer::with_extensions(
+            html::Options::default(),
+            code_block_attribute_html_renderer_extension(
+                CodeBlockAttributeHtmlRendererOptions::default(),
+            ),
+        );
+        let mut output = String::new();
+        renderer
+            .render(&mut output, input, &arena, doc_ref)
+            .unwrap();
+
+        assert!(
+            !output.contains("line-numbers"),
+            "output should NOT contain line-numbers class: {output}"
+        );
+        assert!(
+            !output.contains("code-line"),
+            "output should NOT contain code-line spans: {output}"
         );
     }
 
