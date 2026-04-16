@@ -159,4 +159,52 @@ pub enum Command {
         /// Target directory to create (must not already exist).
         target: PathBuf,
     },
+
+    /// Publish a document to an external platform.
+    Publish {
+        #[command(subcommand)]
+        target: PublishTarget,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PublishTarget {
+    /// Publish to Confluence.
+    Confluence {
+        /// Root markdown file.
+        #[arg(short = 'i', long)]
+        input: PathBuf,
+
+        /// Base directory for absolute path resolution.
+        /// Defaults to the parent directory of the input file.
+        #[arg(short = 'b', long)]
+        base: Option<PathBuf>,
+
+        /// Confluence server URL (e.g. https://confluence.example.com).
+        /// Can also be set via the `confluence.server` front-matter field.
+        #[arg(short = 's', long)]
+        server: Option<String>,
+
+        /// Confluence space key.  Can also be set via the
+        /// `confluence.space` front-matter field.
+        #[arg(long)]
+        space: Option<String>,
+
+        /// Ancestor page title (repeatable).  Pages are resolved
+        /// top-down; all ancestors must already exist.
+        /// Can also be set via `confluence.path` in front matter
+        /// (all elements except the last).
+        #[arg(long)]
+        parent: Vec<String>,
+
+        /// Page title in Confluence.  Defaults to the last element of
+        /// `confluence.path` in front matter, or to `title`.
+        #[arg(long)]
+        name: Option<String>,
+
+        /// How to handle broken links: "warn" prints diagnostics and
+        /// continues, "error" aborts.  Defaults to "error".
+        #[arg(long, default_value = "error")]
+        broken_links: BrokenLinkMode,
+    },
 }

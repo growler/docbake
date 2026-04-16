@@ -4,8 +4,11 @@ pub(crate) mod cache;
 pub(crate) mod caption;
 pub mod cli;
 pub(crate) mod code_block_attribute;
+pub(crate) mod confluence;
 pub(crate) mod diagram;
 pub(crate) mod graph;
+mod publish;
+mod render_confluence;
 mod render_html;
 mod render_html_common;
 mod render_html_multi;
@@ -115,6 +118,28 @@ pub fn run(cli: Cli) -> Result<()> {
             eprintln!("Default theme exported to {}", target.display());
             Ok(())
         }
+        cli::Command::Publish { ref target } => match target {
+            cli::PublishTarget::Confluence {
+                ref input,
+                ref base,
+                ref server,
+                ref space,
+                ref parent,
+                ref name,
+                broken_links,
+            } => publish::publish_confluence_command(
+                &logger,
+                &cache,
+                &theme,
+                input,
+                base.as_deref(),
+                server.as_deref(),
+                space.as_deref(),
+                parent,
+                name.as_deref(),
+                *broken_links,
+            ),
+        },
     }
 }
 
@@ -475,7 +500,7 @@ fn check_command(
 
 /// Output format names recognised by the format-gating fenced-div logic.
 /// Both `html` and `html-multi` output share the `"html"` gate.
-pub(crate) const KNOWN_OUTPUT_FORMATS: &[&str] = &["html", "pdf", "markdown"];
+pub(crate) const KNOWN_OUTPUT_FORMATS: &[&str] = &["html", "pdf", "markdown", "confluence"];
 
 /// Fenced-div class names recognised as admonitions (callout blocks).
 pub(crate) const ADMONITION_TYPES: &[&str] =

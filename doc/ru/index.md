@@ -2,6 +2,7 @@
 title:   Система подготовки документации
 lang:    ru-RU
 version: 0.1.0
+confluence-space: ~growler
 ---
 # Назначение
 

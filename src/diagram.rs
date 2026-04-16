@@ -963,9 +963,11 @@ pub(crate) fn render_typst_svg(
 }
 
 /// Output format for the Draw.io CLI renderer.
+#[allow(dead_code)]
 pub(crate) enum DrawioFormat {
     Svg,
     Pdf,
+    Png,
 }
 
 /// Render a Draw.io diagram by shelling out to the `drawio` binary.
@@ -991,6 +993,7 @@ pub(crate) fn render_drawio(
     let (suffix, fmt_flag) = match format {
         DrawioFormat::Svg => (".svg", "svg"),
         DrawioFormat::Pdf => (".pdf", "pdf"),
+        DrawioFormat::Png => (".png", "png"),
     };
 
     let tmp = tempfile::Builder::new().suffix(suffix).tempfile()?;
@@ -1052,6 +1055,162 @@ pub(crate) fn render_d2_svg(
     let output = child.wait_with_output()?;
     if output.status.success() {
         Ok(String::from_utf8(output.stdout)?)
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).into_owned().into())
+    }
+}
+
+// ============================================================================
+// PNG rendering functions (available for future use)
+// ============================================================================
+
+/// Render a PlantUML diagram to PNG by shelling out to the `plantuml` binary.
+#[allow(dead_code)]
+pub(crate) fn render_plantuml_png(
+    command: Option<&str>,
+    src: &[u8],
+) -> std::result::Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let path = match command {
+        Some(cmd) => std::path::PathBuf::from(cmd),
+        None => which::which("plantuml")?,
+    };
+
+    let mut child = Command::new(path)
+        .args(["-tpng", "-p", "-Djava.awt.headless=true"])
+        .env("JAVA_OPTS", "-Djava.awt.headless=true")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    {
+        let stdin = child
+            .stdin
+            .as_mut()
+            .ok_or("failed to open plantuml stdin")?;
+        stdin.write_all(src)?;
+    }
+
+    let output = child.wait_with_output()?;
+    if output.status.success() {
+        Ok(output.stdout)
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).into_owned().into())
+    }
+}
+
+/// Render a Mermaid diagram to PNG by shelling out to `mmdc`.
+///
+/// Unlike SVG rendering, PNG does not have a built-in fallback.
+/// If `mmdc` is not available this function returns an error.
+#[allow(dead_code)]
+pub(crate) fn render_mermaid_png(
+    command: Option<&str>,
+    src: &str,
+) -> std::result::Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let path = match command {
+        Some(cmd) => std::path::PathBuf::from(cmd),
+        None => which::which("mmdc")?,
+    };
+
+    let tmp = tempfile::Builder::new().suffix(".png").tempfile()?;
+    let tmp_path = tmp.path().to_path_buf();
+
+    let mut child = Command::new(path)
+        .args(["-i", "-", "-o"])
+        .arg(&tmp_path)
+        .args(["-e", "png", "-q"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    {
+        let stdin = child.stdin.as_mut().ok_or("failed to open mmdc stdin")?;
+        stdin.write_all(src.as_bytes())?;
+    }
+
+    let output = child.wait_with_output()?;
+    if output.status.success() {
+        let data =
+            fs::read(&tmp_path).map_err(|e| format!("failed to read mmdc PNG output: {e}"))?;
+        Ok(data)
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).into_owned().into())
+    }
+}
+
+/// Render a D2 diagram to PNG by shelling out to the `d2` binary.
+#[allow(dead_code)]
+pub(crate) fn render_d2_png(
+    command: Option<&str>,
+    src: &str,
+) -> std::result::Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let path = match command {
+        Some(cmd) => std::path::PathBuf::from(cmd),
+        None => which::which("d2")?,
+    };
+
+    let tmp = tempfile::Builder::new().suffix(".png").tempfile()?;
+    let tmp_path = tmp.path().to_path_buf();
+
+    let mut child = Command::new(path)
+        .args(["-", &tmp_path.to_string_lossy()])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    {
+        let stdin = child.stdin.as_mut().ok_or("failed to open d2 stdin")?;
+        stdin.write_all(src.as_bytes())?;
+    }
+
+    let output = child.wait_with_output()?;
+    if output.status.success() {
+        let data = fs::read(&tmp_path).map_err(|e| format!("failed to read d2 PNG output: {e}"))?;
+        Ok(data)
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).into_owned().into())
+    }
+}
+
+/// Render a Typst diagram to PNG by shelling out to `typst compile`.
+#[allow(dead_code)]
+pub(crate) fn render_typst_png(
+    command: Option<&str>,
+    src: &str,
+) -> std::result::Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let path = match command {
+        Some(cmd) => std::path::PathBuf::from(cmd),
+        None => which::which("typst")?,
+    };
+
+    let input = format!("{TYPST_SVG_PREAMBLE}{src}");
+
+    let tmp = tempfile::Builder::new().suffix(".png").tempfile()?;
+    let tmp_path = tmp.path().to_path_buf();
+
+    let output = Command::new(path)
+        .args(["compile", "--format", "png", "-"])
+        .arg(&tmp_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            child
+                .stdin
+                .as_mut()
+                .ok_or(std::io::Error::other("failed to open typst stdin"))?
+                .write_all(input.as_bytes())?;
+            child.wait_with_output()
+        })?;
+
+    if output.status.success() {
+        let data =
+            fs::read(&tmp_path).map_err(|e| format!("failed to read typst PNG output: {e}"))?;
+        Ok(data)
     } else {
         Err(String::from_utf8_lossy(&output.stderr).into_owned().into())
     }
