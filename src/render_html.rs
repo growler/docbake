@@ -11,7 +11,7 @@ use anyhow::{bail, Context, Result};
 use rushdown::as_extension_data;
 use rushdown::as_kind_data;
 use rushdown::ast::{Arena, Heading, Image, KindData, Link, NodeRef, WalkStatus};
-use rushdown::context::{ContextKey, ContextKeyRegistry, UsizeValue};
+use rushdown::context::{ContextKey, ContextKeyRegistry, NodeRefValue, UsizeValue};
 use rushdown::renderer;
 use rushdown::renderer::html::{self, Renderer, RendererExtension, RendererExtensionFn};
 use rushdown::renderer::{
@@ -25,12 +25,13 @@ use rushdown_footnote::FootnoteReference;
 
 use crate::graph::{DocumentGraph, NodeLocation, PreparedDocument};
 use crate::render_html_common::{
-    heading_text_html, html_escape, render_image_attributes, SuppressDocumentRenderer,
-    SuppressFootnoteDefinitionRenderer,
+    heading_text_html, html_escape, is_admonition_title_heading, render_image_attributes,
+    SuppressDocumentRenderer, SuppressFootnoteDefinitionRenderer,
 };
 
 const CURRENT_DOC_ID: &str = "docbake-html-current-doc-id";
 const HEADING_SHIFT: &str = "docbake-html-heading-shift";
+const SKIP_ADMONITION_HEADING: &str = "docbake-skip-admonition-heading";
 
 #[derive(Clone, Copy)]
 struct GraphRenderKeys {
@@ -150,6 +151,10 @@ pub fn build_toc(graph: &DocumentGraph) -> String {
         let KindData::Heading(heading) = doc.arena[node_ref].kind_data() else {
             continue;
         };
+        // Skip headings used as admonition titles.
+        if is_admonition_title_heading(&doc.arena, node_ref, &doc.source) {
+            continue;
+        }
         let classes = doc.arena[node_ref]
             .attributes()
             .get("class")
@@ -396,14 +401,23 @@ struct GraphHeadingHtmlRenderer<W: TextWrite> {
     _phantom: std::marker::PhantomData<W>,
     writer: html::Writer,
     keys: GraphRenderKeys,
+    skip_heading_key: ContextKey<NodeRefValue>,
 }
 
 impl<W: TextWrite> GraphHeadingHtmlRenderer<W> {
-    fn new(options: html::Options, keys: GraphRenderKeys) -> Self {
+    fn new(
+        options: html::Options,
+        keys: GraphRenderKeys,
+        reg: Rc<RefCell<ContextKeyRegistry>>,
+    ) -> Self {
+        let skip_heading_key = reg
+            .borrow_mut()
+            .get_or_create::<NodeRefValue>(SKIP_ADMONITION_HEADING);
         Self {
             _phantom: std::marker::PhantomData,
             writer: html::Writer::with_options(options),
             keys,
+            skip_heading_key,
         }
     }
 }
@@ -419,6 +433,15 @@ impl<W: TextWrite> RenderNode<W> for GraphHeadingHtmlRenderer<W> {
         ctx: &mut renderer::Context,
     ) -> rushdown::Result<WalkStatus> {
         let heading = as_kind_data!(arena, node_ref, Heading);
+        // Skip headings that were already rendered as admonition titles.
+        if let Some(&skip_ref) = ctx.get(self.skip_heading_key) {
+            if skip_ref == node_ref {
+                if !entering {
+                    ctx.remove(self.skip_heading_key);
+                }
+                return Ok(WalkStatus::SkipChildren);
+            }
+        }
         let shift = ctx.get(self.keys.heading_shift).copied().unwrap_or(0);
         let level = (heading.level() as usize + shift).min(6);
         if entering {
@@ -631,13 +654,18 @@ where
 struct FormatAwareFencedDivHtmlRenderer<W: TextWrite> {
     _phantom: std::marker::PhantomData<W>,
     writer: html::Writer,
+    skip_heading_key: ContextKey<NodeRefValue>,
 }
 
 impl<W: TextWrite> FormatAwareFencedDivHtmlRenderer<W> {
-    fn with_options(options: html::Options, _: rushdown::renderer::NoRendererOptions) -> Self {
+    fn with_options(options: html::Options, reg: Rc<RefCell<ContextKeyRegistry>>) -> Self {
+        let skip_heading_key = reg
+            .borrow_mut()
+            .get_or_create::<NodeRefValue>(SKIP_ADMONITION_HEADING);
         Self {
             _phantom: std::marker::PhantomData,
             writer: html::Writer::with_options(options),
+            skip_heading_key,
         }
     }
 }
@@ -650,7 +678,7 @@ impl<W: TextWrite> RenderNode<W> for FormatAwareFencedDivHtmlRenderer<W> {
         arena: &'a Arena,
         node_ref: NodeRef,
         entering: bool,
-        _ctx: &mut renderer::Context,
+        ctx: &mut renderer::Context,
     ) -> rushdown::Result<WalkStatus> {
         let _ = as_extension_data!(arena, node_ref, FencedDiv);
         let classes = arena[node_ref]
@@ -689,6 +717,20 @@ impl<W: TextWrite> RenderNode<W> for FormatAwareFencedDivHtmlRenderer<W> {
                     w.write_str("\"")?;
                 }
                 w.write_str(">")?;
+
+                // If the first child is a heading, render it as a title
+                // element instead of a real heading (to keep it out of the
+                // TOC and avoid semantic heading pollution).
+                if let Some(first_child) = arena[node_ref].children(arena).next() {
+                    if matches!(arena[first_child].kind_data(), KindData::Heading(_)) {
+                        let title_html = heading_text_html(arena, first_child, source);
+                        w.write_str("<p class=\"admonition-title\">")?;
+                        w.write_str(&title_html)?;
+                        w.write_str("</p>\n")?;
+                        // Tell the heading renderer to skip this node.
+                        ctx.insert(self.skip_heading_key, first_child);
+                    }
+                }
             } else {
                 self.writer.write_safe_str(w, "<div")?;
                 html::render_attributes(w, source, arena[node_ref].attributes(), None)?;
@@ -716,7 +758,9 @@ where
 {
     RendererExtensionFn::new(move |renderer: &mut Renderer<'cb, W>| {
         renderer.add_node_renderer(
-            FormatAwareFencedDivHtmlRenderer::with_options,
+            |options: html::Options, reg: Rc<RefCell<ContextKeyRegistry>>| {
+                FormatAwareFencedDivHtmlRenderer::with_options(options, reg)
+            },
             rushdown::renderer::NoRendererOptions,
         );
     })
@@ -746,7 +790,7 @@ where
         );
         renderer.add_node_renderer(
             move |options: html::Options, reg: Rc<RefCell<ContextKeyRegistry>>| {
-                GraphHeadingHtmlRenderer::new(options, GraphRenderKeys::new(reg))
+                GraphHeadingHtmlRenderer::new(options, GraphRenderKeys::new(reg.clone()), reg)
             },
             rushdown::renderer::NoRendererOptions,
         );

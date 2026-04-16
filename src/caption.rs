@@ -33,7 +33,7 @@ use std::fmt::Write;
 
 use rushdown::as_kind_data;
 use rushdown::ast::{
-    pp_indent, Arena, KindData, NodeKind, NodeRef, NodeType, PrettyPrint, WalkStatus,
+    self, pp_indent, Arena, KindData, NodeKind, NodeRef, NodeType, PrettyPrint, WalkStatus,
 };
 use rushdown::matches_extension_kind;
 use rushdown::parser::{self, AnyAstTransformer, AstTransformer};
@@ -262,45 +262,62 @@ impl AstTransformer for CaptionAstTransformer {
         let source = reader.source();
 
         // Phase 1: collect candidates (read-only pass).
+        //
+        // Walk the entire tree so that caption paragraphs nested inside
+        // container blocks (fenced divs such as `:::related`, blockquotes,
+        // etc.) are discovered — not only direct children of the document
+        // root.
         let mut candidates = Vec::new();
         let mut used_targets: Vec<NodeRef> = Vec::new();
 
-        for child in arena[doc_ref].children(arena).collect::<Vec<_>>() {
-            let KindData::Paragraph(_) = arena[child].kind_data() else {
-                continue;
-            };
-            // Find the first text child of the paragraph.
-            let Some(first_child) = arena[child].children(arena).next() else {
-                continue;
-            };
-            let KindData::Text(text_val) = arena[first_child].kind_data() else {
-                continue;
-            };
-            let text_str = text_val.str(source);
-            let Some((kind, prefix_len)) = detect_caption_prefix(text_str) else {
-                continue;
-            };
+        ast::walk(
+            arena,
+            doc_ref,
+            &mut |arena: &Arena,
+                  node_ref: NodeRef,
+                  entering: bool|
+             -> rushdown::Result<WalkStatus> {
+                if !entering {
+                    return Ok(WalkStatus::Continue);
+                }
+                let KindData::Paragraph(_) = arena[node_ref].kind_data() else {
+                    return Ok(WalkStatus::Continue);
+                };
+                // Find the first text child of the paragraph.
+                let Some(first_child) = arena[node_ref].children(arena).next() else {
+                    return Ok(WalkStatus::Continue);
+                };
+                let KindData::Text(text_val) = arena[first_child].kind_data() else {
+                    return Ok(WalkStatus::Continue);
+                };
+                let text_str = text_val.str(source);
+                let Some((kind, prefix_len)) = detect_caption_prefix(text_str) else {
+                    return Ok(WalkStatus::Continue);
+                };
 
-            // Look for a captionable sibling: prefer next, then previous.
-            let Some((target, position)) =
-                find_captionable_sibling(arena, child, source, &used_targets)
-            else {
-                eprintln!(
-                    "warning: caption paragraph has no adjacent captionable block, \
+                // Look for a captionable sibling: prefer next, then previous.
+                let Some((target, position)) =
+                    find_captionable_sibling(arena, node_ref, source, &used_targets)
+                else {
+                    eprintln!(
+                        "warning: caption paragraph has no adjacent captionable block, \
                      rendering as normal paragraph"
-                );
-                continue;
-            };
+                    );
+                    return Ok(WalkStatus::Continue);
+                };
 
-            used_targets.push(target);
-            candidates.push(CaptionCandidate {
-                paragraph: child,
-                target,
-                kind,
-                prefix_len,
-                position,
-            });
-        }
+                used_targets.push(target);
+                candidates.push(CaptionCandidate {
+                    paragraph: node_ref,
+                    target,
+                    kind,
+                    prefix_len,
+                    position,
+                });
+                Ok(WalkStatus::Continue)
+            },
+        )
+        .ok();
 
         // Phase 2: rewrite AST.
         for candidate in candidates {
@@ -1066,6 +1083,63 @@ mod tests {
         assert!(
             html.contains("{#id} trailing"),
             "non-trailing attributes should stay as text: {html}"
+        );
+    }
+
+    // -- Nested container tests --
+
+    #[test]
+    fn caption_inside_fenced_div() {
+        // Regression: caption paragraphs inside fenced divs (e.g. :::note,
+        // :::related) must be detected, not only top-level ones.
+        let source = ":::note\nListing: Nested code {#nested-listing}\n\n```rust\nfn nested() {}\n```\n:::\n";
+        let (arena, doc_ref) = parse(source);
+
+        // Walk the tree to find a Caption node anywhere.
+        let mut found_caption = false;
+        let mut caption_id = None;
+        ast::walk(
+            &arena,
+            doc_ref,
+            &mut |arena: &Arena,
+                  node_ref: NodeRef,
+                  entering: bool|
+             -> rushdown::Result<WalkStatus> {
+                if entering && matches_extension_kind!(arena, node_ref, Caption) {
+                    found_caption = true;
+                    caption_id = arena[node_ref]
+                        .attributes()
+                        .get("id")
+                        .map(|v| v.str(source).to_string());
+                }
+                Ok(WalkStatus::Continue)
+            },
+        )
+        .ok();
+
+        assert!(
+            found_caption,
+            "Caption node should exist inside the fenced div"
+        );
+        assert_eq!(
+            caption_id,
+            Some("nested-listing".to_string()),
+            "Caption should have the explicit id"
+        );
+    }
+
+    #[test]
+    fn caption_inside_fenced_div_html() {
+        let source = ":::note\nListing: Nested listing\n\n```rust\nfn nested() {}\n```\n:::\n";
+        let html = render_html(source);
+
+        assert!(
+            html.contains("<figure class=\"listing\">"),
+            "should contain <figure class=\"listing\"> inside fenced div: {html}"
+        );
+        assert!(
+            html.contains("<figcaption>Nested listing</figcaption>"),
+            "should contain figcaption inside fenced div: {html}"
         );
     }
 }

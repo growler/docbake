@@ -7,6 +7,7 @@ use rushdown::renderer::html;
 use rushdown::renderer::{
     BoxRenderNode, NodeRenderer, NodeRendererRegistry, RenderNode, TextWrite,
 };
+use rushdown_fenced_div::FencedDiv;
 use rushdown_footnote::FootnoteDefinition;
 
 /// Returns `true` when the image at `node_ref` is not the sole child of a
@@ -55,6 +56,26 @@ pub(crate) fn heading_text_html(arena: &Arena, node_ref: NodeRef, source: &str) 
         Ok(WalkStatus::Continue)
     });
     html
+}
+
+/// Returns `true` when the heading at `node_ref` is the first child of an
+/// admonition fenced div.  Such headings are rendered as admonition titles
+/// rather than structural headings, so they must be excluded from the TOC.
+pub(crate) fn is_admonition_title_heading(arena: &Arena, node_ref: NodeRef, source: &str) -> bool {
+    if let Some(parent_ref) = arena[node_ref].parent() {
+        if rushdown::matches_extension_kind!(arena, parent_ref, FencedDiv) {
+            let classes = arena[parent_ref]
+                .attributes()
+                .get("class")
+                .map(|v| v.str(source))
+                .unwrap_or_default();
+            if crate::admonition_type(&classes).is_some() {
+                // Check this heading is the first child.
+                return arena[node_ref].previous_sibling().is_none();
+            }
+        }
+    }
+    false
 }
 
 /// Render the image attribute portion of an `<img>` tag: the `.inline-image`

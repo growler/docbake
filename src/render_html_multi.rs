@@ -11,14 +11,14 @@ use crate::diagram::{diagram_html_renderer_extension, DiagramHtmlRendererOptions
 use crate::graph::resolve::heading_text;
 use crate::graph::{DocumentGraph, NodeLocation, PreparedDocument};
 use crate::render_html_common::{
-    heading_text_html, html_escape, render_image_attributes, SuppressDocumentRenderer,
-    SuppressFootnoteDefinitionRenderer,
+    heading_text_html, html_escape, is_admonition_title_heading, render_image_attributes,
+    SuppressDocumentRenderer, SuppressFootnoteDefinitionRenderer,
 };
 use anyhow::{bail, Context, Result};
 use rushdown::as_extension_data;
 use rushdown::as_kind_data;
 use rushdown::ast::{Arena, Heading, Image, KindData, Link, NodeRef, WalkStatus};
-use rushdown::context::{ContextKey, ContextKeyRegistry, UsizeValue};
+use rushdown::context::{ContextKey, ContextKeyRegistry, NodeRefValue, UsizeValue};
 use rushdown::renderer;
 use rushdown::renderer::html::{self, Renderer, RendererExtension, RendererExtensionFn};
 use rushdown::renderer::{
@@ -387,6 +387,10 @@ fn collect_headings_recursive(
     }
 
     if let KindData::Heading(heading) = doc.arena[node_ref].kind_data() {
+        // Skip headings used as admonition titles.
+        if is_admonition_title_heading(&doc.arena, node_ref, &doc.source) {
+            return;
+        }
         let classes = doc.arena[node_ref]
             .attributes()
             .get("class")
@@ -417,6 +421,7 @@ fn collect_headings_recursive(
 // ---------------------------------------------------------------------------
 
 const MULTI_CURRENT_DOC_ID: &str = "docbake-multi-current-doc-id";
+const MULTI_SKIP_ADMONITION_HEADING: &str = "docbake-multi-skip-admonition-heading";
 
 #[derive(Clone, Copy)]
 struct MultiRenderKeys {
@@ -570,13 +575,18 @@ impl<'a, W: TextWrite> PreRender<W> for MultiPageRenderHook<'a> {
 struct MultiHeadingHtmlRenderer<W: TextWrite> {
     _phantom: std::marker::PhantomData<W>,
     writer: html::Writer,
+    skip_heading_key: ContextKey<NodeRefValue>,
 }
 
 impl<W: TextWrite> MultiHeadingHtmlRenderer<W> {
-    fn new(options: html::Options) -> Self {
+    fn new(options: html::Options, reg: Rc<RefCell<ContextKeyRegistry>>) -> Self {
+        let skip_heading_key = reg
+            .borrow_mut()
+            .get_or_create::<NodeRefValue>(MULTI_SKIP_ADMONITION_HEADING);
         Self {
             _phantom: std::marker::PhantomData,
             writer: html::Writer::with_options(options),
+            skip_heading_key,
         }
     }
 }
@@ -589,9 +599,18 @@ impl<W: TextWrite> RenderNode<W> for MultiHeadingHtmlRenderer<W> {
         arena: &'a Arena,
         node_ref: NodeRef,
         entering: bool,
-        _ctx: &mut renderer::Context,
+        ctx: &mut renderer::Context,
     ) -> rushdown::Result<WalkStatus> {
         let heading = as_kind_data!(arena, node_ref, Heading);
+        // Skip headings that were already rendered as admonition titles.
+        if let Some(&skip_ref) = ctx.get(self.skip_heading_key) {
+            if skip_ref == node_ref {
+                if !entering {
+                    ctx.remove(self.skip_heading_key);
+                }
+                return Ok(WalkStatus::SkipChildren);
+            }
+        }
         let level = heading.level() as usize;
         if entering {
             w.write_str(&format!("<h{level}"))?;
@@ -948,13 +967,18 @@ impl<'a, W: TextWrite> PostRender<W> for MultiFootnotePostRenderHook<'a> {
 struct MultiFormatFencedDivHtmlRenderer<W: TextWrite> {
     _phantom: std::marker::PhantomData<W>,
     writer: html::Writer,
+    skip_heading_key: ContextKey<NodeRefValue>,
 }
 
 impl<W: TextWrite> MultiFormatFencedDivHtmlRenderer<W> {
-    fn with_options(options: html::Options, _: rushdown::renderer::NoRendererOptions) -> Self {
+    fn with_options(options: html::Options, reg: Rc<RefCell<ContextKeyRegistry>>) -> Self {
+        let skip_heading_key = reg
+            .borrow_mut()
+            .get_or_create::<NodeRefValue>(MULTI_SKIP_ADMONITION_HEADING);
         Self {
             _phantom: std::marker::PhantomData,
             writer: html::Writer::with_options(options),
+            skip_heading_key,
         }
     }
 }
@@ -967,7 +991,7 @@ impl<W: TextWrite> RenderNode<W> for MultiFormatFencedDivHtmlRenderer<W> {
         arena: &'a Arena,
         node_ref: NodeRef,
         entering: bool,
-        _ctx: &mut renderer::Context,
+        ctx: &mut renderer::Context,
     ) -> rushdown::Result<WalkStatus> {
         let _ = as_extension_data!(arena, node_ref, FencedDiv);
         let classes = arena[node_ref]
@@ -1010,6 +1034,18 @@ impl<W: TextWrite> RenderNode<W> for MultiFormatFencedDivHtmlRenderer<W> {
                     w.write_str("\"")?;
                 }
                 w.write_str(">")?;
+
+                // If the first child is a heading, render it as a title
+                // element instead of a real heading.
+                if let Some(first_child) = arena[node_ref].children(arena).next() {
+                    if matches!(arena[first_child].kind_data(), KindData::Heading(_)) {
+                        let title_html = heading_text_html(arena, first_child, source);
+                        w.write_str("<p class=\"admonition-title\">")?;
+                        w.write_str(&title_html)?;
+                        w.write_str("</p>\n")?;
+                        ctx.insert(self.skip_heading_key, first_child);
+                    }
+                }
             } else {
                 self.writer.write_safe_str(w, "<div")?;
                 html::render_attributes(w, source, arena[node_ref].attributes(), None)?;
@@ -1041,7 +1077,9 @@ where
 {
     RendererExtensionFn::new(move |renderer: &mut Renderer<'cb, W>| {
         renderer.add_node_renderer(
-            MultiFormatFencedDivHtmlRenderer::with_options,
+            |options: html::Options, reg: Rc<RefCell<ContextKeyRegistry>>| {
+                MultiFormatFencedDivHtmlRenderer::with_options(options, reg)
+            },
             rushdown::renderer::NoRendererOptions,
         );
     })
@@ -1077,7 +1115,9 @@ where
             rushdown::renderer::NoRendererOptions,
         );
         renderer.add_node_renderer(
-            move |options: html::Options| MultiHeadingHtmlRenderer::new(options),
+            move |options: html::Options, reg: Rc<RefCell<ContextKeyRegistry>>| {
+                MultiHeadingHtmlRenderer::new(options, reg)
+            },
             rushdown::renderer::NoRendererOptions,
         );
         renderer.add_node_renderer(

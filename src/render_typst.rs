@@ -169,17 +169,21 @@ impl TypstRenderer {
                 if value.ends_with('\n') {
                     value.pop();
                 }
-                out.push_str("#raw(\"");
+                out.push_str("#code(\"");
                 out.push_str(&escape_typst_string(&value));
                 if let Some(lang) = code.language_str(source) {
-                    write!(
-                        out,
-                        "\", block: true, lang: \"{}\")",
-                        escape_typst_string(lang)
-                    )?;
+                    write!(out, "\", lang: \"{}\"", escape_typst_string(lang))?;
                 } else {
-                    out.push_str("\", block: true)");
+                    out.push('"');
                 }
+                if let Some(start) = arena[node_ref]
+                    .attributes()
+                    .get("start")
+                    .and_then(|s| s.str(source).parse::<u64>().ok())
+                {
+                    write!(out, ", start-line: {}", start)?;
+                }
+                out.push(')');
                 if let Some(id) = arena[node_ref].attributes().get("id") {
                     write!(out, " <{}>", id.str(source))?;
                 }
@@ -983,7 +987,7 @@ impl TypstRenderer {
             KindData::CodeSpan(cs) => {
                 write!(
                     out,
-                    "#raw(\"{}\")",
+                    "#inline-code(\"{}\")",
                     escape_typst_string(&cs.value_str(source))
                 )?;
             }
