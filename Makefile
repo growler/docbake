@@ -32,7 +32,7 @@ build:
 		echo "--- building native (x86_64-unknown-linux-gnu) ---"; \
 		cargo build --release; \
 		export SDKROOT=/usr/opt/MacOSX11.3.sdk; \
-		export CARGO_ZIGBUILD_CACHE_DIR=/tmp/zigbuild-cache; \
+		export CARGO_ZIGBUILD_CACHE_DIR=/root/src/target/.zigbuild-cache; \
 		mkdir -p "$$CARGO_ZIGBUILD_CACHE_DIR/bin"; \
 		ln -sf "$$(which cargo-zigbuild)" "$$CARGO_ZIGBUILD_CACHE_DIR/bin/x86_64-w64-mingw32-dlltool"; \
 		export PATH="$$CARGO_ZIGBUILD_CACHE_DIR/bin:$$PATH"; \
