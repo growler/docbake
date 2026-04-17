@@ -80,8 +80,7 @@ debian-package:
 		set -eu; \
 		cd /root/src; \
 		dpkg-buildpackage -b -us -uc; \
-		echo "--- .deb packages ---"; \
-		ls -lh /root/src/../*.deb \
+		mv /root/src/../*.deb /root/src/target \
 	'
 
 # ---------------------------------------------------------------------------
