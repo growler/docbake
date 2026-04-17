@@ -1,4 +1,4 @@
-docbake (0.1.0) trixie; urgency=low
+docbake (0.1.0) unstable; urgency=low
 
   * Initial release.
 
