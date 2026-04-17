@@ -1,10 +1,6 @@
 MANIFEST     := builder.toml
 DEBOSTREE    := deb-ostree -m $(MANIFEST)
 
-ZIGBUILD_VERSION := 0.22.1
-ZIGBUILD_VENDOR  := target/cargo-zigbuild
-ZIGBUILD_TARBALL := target/cargo-zigbuild-$(ZIGBUILD_VERSION)-vendored.tar.xz
-
 CROSS_TARGETS := \
 	x86_64-unknown-linux-musl \
 	x86_64-pc-windows-gnu \
@@ -17,36 +13,12 @@ CONTAINER_RUN := ostree-podman run --rm \
 	--rootfs $$($(DEBOSTREE) spec build-ref):O
 
 # ---------------------------------------------------------------------------
-# Vendor cargo-zigbuild
-# ---------------------------------------------------------------------------
-
-$(ZIGBUILD_VENDOR)/vendor/cargo-zigbuild:
-	mkdir -p $(ZIGBUILD_VENDOR)
-	cd $(ZIGBUILD_VENDOR) && cargo init --name _stub . 2>/dev/null || true
-	printf '[dependencies]\ncargo-zigbuild = "=%s"\n' $(ZIGBUILD_VERSION) \
-		>> $(ZIGBUILD_VENDOR)/Cargo.toml
-	cargo generate-lockfile --manifest-path $(ZIGBUILD_VENDOR)/Cargo.toml
-	cargo vendor --manifest-path $(ZIGBUILD_VENDOR)/Cargo.toml $(ZIGBUILD_VENDOR)/vendor
-	rm -f $(ZIGBUILD_VENDOR)/Cargo.toml $(ZIGBUILD_VENDOR)/Cargo.lock
-	rm -rf $(ZIGBUILD_VENDOR)/src
-	mkdir -p $(ZIGBUILD_VENDOR)/.cargo
-	printf '[source.crates-io]\nreplace-with = "vendored-sources"\n\n[source.vendored-sources]\ndirectory = "vendor"\n' \
-		> $(ZIGBUILD_VENDOR)/.cargo/config.toml
-
-$(ZIGBUILD_TARBALL): $(ZIGBUILD_VENDOR)/vendor/cargo-zigbuild
-	tar -cJf $@ -C target cargo-zigbuild
-
-.PHONY: vendor-zigbuild
-vendor-zigbuild: $(ZIGBUILD_TARBALL)
-
-# ---------------------------------------------------------------------------
 # Build the deb-ostree tree
 # ---------------------------------------------------------------------------
 
 .PHONY: build-tree
-build-tree: $(ZIGBUILD_TARBALL)
-	$(DEBOSTREE) update
-	$(DEBOSTREE) build
+build-tree:
+	scripts/build-builder
 
 # ---------------------------------------------------------------------------
 # Build packages in a container
@@ -89,4 +61,4 @@ debian-package:
 
 .PHONY: clean-vendor
 clean-vendor:
-	rm -rf $(ZIGBUILD_VENDOR) $(ZIGBUILD_TARBALL)
+	rm -rf target/cargo-zigbuild target/cargo-zigbuild-*-vendored.tar.xz
