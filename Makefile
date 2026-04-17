@@ -51,6 +51,7 @@ debian-package:
 	$(CONTAINER_RUN) /bin/sh -c '\
 		set -eu; \
 		cd /root/src; \
+		export SOURCE_DATE_EPOCH=$$(dpkg-parsechangelog -S Date | date -u -f - +%s); \
 		dpkg-buildpackage -b -us -uc; \
 		mv /root/src/../*.deb /root/src/target \
 	'
