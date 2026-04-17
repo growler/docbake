@@ -93,6 +93,7 @@ The project uses `cargo-zigbuild` (via Nix flake) to cross-compile for distribut
 cargo build --release                                              # macOS aarch64 (native)
 cargo zigbuild --release --target x86_64-unknown-linux-musl        # Linux x86_64 (static)
 cargo zigbuild --release --target x86_64-pc-windows-gnu            # Windows x86_64
+cargo zigbuild --release --target x86_64-apple-darwin              # Windows x86_64
 ```
 
 The Nix devshell (`flake.nix`) provides Rust with cross-compilation targets, `zig`, and `cargo-zigbuild`. `CARGO_ZIGBUILD_CACHE_DIR` is set to `target/zigbuild-cache` to keep build artifacts out of the project root.

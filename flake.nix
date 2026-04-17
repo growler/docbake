@@ -28,6 +28,7 @@
           ...
         }:
         let
+          isLinux = pkgs.stdenv.isLinux;
           extensions = [
             "rust-analyzer"
             "rustfmt"
@@ -37,11 +38,23 @@
           crossTargets = [
             "x86_64-unknown-linux-musl"
             "x86_64-pc-windows-gnu"
+            "aarch64-apple-darwin"
+            "x86_64-apple-darwin"
           ];
           rust-toolchain = pkgs.rust-bin.stable."1.91.0".default.override {
             inherit extensions;
             targets = crossTargets;
           };
+          # macOS SDK needed on Linux hosts to cross-compile for Darwin
+          # (frameworks like CoreFoundation, CoreServices).
+          macOS-SDK = pkgs.fetchurl {
+            url = "https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX11.3.sdk.tar.xz";
+            hash = "sha256-zU8Ip1V3FFuPBSRaKXX3yBQB116VNdz/u4ee4d7vy/Q=";
+          };
+          macOS-SDK-unpacked = pkgs.runCommand "MacOSX11.3.sdk" { } ''
+            mkdir -p $out
+            tar -xJf ${macOS-SDK} -C $out --strip-components=1
+          '';
         in
         {
           _module.args.pkgs = import nixpkgs {
@@ -57,16 +70,26 @@
               pkgs.zig
             ];
             name = "docbake";
-            CARGO_ZIGBUILD_CACHE_DIR = "target/zigbuild-cache";
-            shellHook = ''
-              # cargo-zigbuild acts as a dlltool wrapper when invoked via
-              # a x86_64-w64-mingw32-dlltool symlink. The windows-sys crate's
-              # build script needs this on PATH to create import libraries.
-              _zigbuild_bin="target/zigbuild-cache/bin"
-              mkdir -p "$_zigbuild_bin"
-              ln -sf "$(which cargo-zigbuild)" "$_zigbuild_bin/x86_64-w64-mingw32-dlltool"
-              export PATH="$PWD/$_zigbuild_bin:$PATH"
-            '';
+            shellHook =
+              ''
+                # cargo-zigbuild generates zig-cc wrapper scripts inside the
+                # cache dir and passes their paths to cc-rs via CC_<target>.
+                # The path MUST be absolute so that build-scripts running from
+                # other working directories can find the wrappers.
+                export CARGO_ZIGBUILD_CACHE_DIR="$PWD/target/zigbuild-cache"
+
+                # cargo-zigbuild acts as a dlltool wrapper when invoked via
+                # a x86_64-w64-mingw32-dlltool symlink. The windows-sys crate's
+                # build script needs this on PATH to create import libraries.
+                _zigbuild_bin="$CARGO_ZIGBUILD_CACHE_DIR/bin"
+                mkdir -p "$_zigbuild_bin"
+                ln -sf "$(which cargo-zigbuild)" "$_zigbuild_bin/x86_64-w64-mingw32-dlltool"
+                export PATH="$_zigbuild_bin:$PATH"
+              ''
+              + pkgs.lib.optionalString isLinux ''
+                # macOS SDK for cross-compiling Darwin targets from Linux.
+                export SDKROOT="${macOS-SDK-unpacked}"
+              '';
           };
         };
     };

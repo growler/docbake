@@ -1,0 +1,15 @@
+Source: docbake
+Section: text
+Priority: optional
+Maintainer: Alexey Naidyonov <alexey.naidyonov@gmail.com>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.7.0
+
+Package: docbake
+Architecture: amd64
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Multi-file Markdown documentation compiler
+ Compiles multi-file Markdown documentation into single-page HTML,
+ multi-page HTML, or PDF (via Typst). Supports include directives,
+ heading ID assignment, link rewriting, footnote collection, syntax
+ highlighting, and diagram rendering.

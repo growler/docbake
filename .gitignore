@@ -4,3 +4,10 @@
 .DS_Store
 libnull.a
 *.drawio.bkp
+
+# debian build temporaries
+/debian/docbake/
+/debian/.debhelper/
+/debian/debhelper-build-stamp
+/debian/docbake.substvars
+/debian/files
