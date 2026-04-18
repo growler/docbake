@@ -68,6 +68,8 @@
               rust-toolchain
               pkgs.cargo-zigbuild
               pkgs.zig
+              pkgs.dpkg 
+              pkgs.debian-devscripts 
             ];
             name = "docbake";
             shellHook =
