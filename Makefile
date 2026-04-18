@@ -52,6 +52,7 @@ debian-package:
 		set -eu; \
 		cd /root/src; \
 		export SOURCE_DATE_EPOCH=$$(dpkg-parsechangelog -S Date | date -u -f - +%s); \
+		find debian -exec touch -d @$$SOURCE_DATE_EPOCH {} +; \
 		dpkg-buildpackage -b -us -uc; \
 		mv /root/src/../*.deb /root/src/target \
 	'
