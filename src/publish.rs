@@ -29,12 +29,6 @@ pub(crate) fn publish_confluence_command(
     cli_name: Option<&str>,
     broken_links: BrokenLinkMode,
 ) -> Result<()> {
-    // ── authentication ──────────────────────────────────────────────────
-    let token = std::env::var("CONFLUENCE_TOKEN").context(
-        "CONFLUENCE_TOKEN environment variable is not set.\n\
-         Set it to a Confluence Personal Access Token (PAT).",
-    )?;
-
     // ── resolve input / base ────────────────────────────────────────────
     let (source, base_dir) = crate::resolve_input_and_base(input, base)?;
     let doc_name = source
@@ -56,6 +50,11 @@ pub(crate) fn publish_confluence_command(
     // ── resolve publish parameters ──────────────────────────────────────
     let (server, space, parents, name) =
         resolve_publish_params(cli_server, cli_space, cli_parents, cli_name, &metadata)?;
+
+    // ── authentication ──────────────────────────────────────────────────
+    // CONFLUENCE_TOKEN env var takes precedence; otherwise look up a
+    // stored credential for this server (see `docbake auth confluence`).
+    let token = crate::credentials::resolve_token(&server)?;
 
     logger.log(format!(
         "target: server={}, space={}, parents={:?}, name={}",

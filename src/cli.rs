@@ -166,6 +166,25 @@ pub enum Command {
         #[command(subcommand)]
         target: PublishTarget,
     },
+
+    /// Manage authentication credentials for external platforms.
+    Auth {
+        #[command(subcommand)]
+        target: AuthTarget,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AuthTarget {
+    /// Store a Confluence Personal Access Token (PAT).
+    Confluence {
+        /// Confluence server URL (e.g. https://confluence.example.com).
+        server: String,
+
+        /// Token value.  If omitted, the token is read from standard
+        /// input (with a prompt when stdin is a terminal).
+        token: Option<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]

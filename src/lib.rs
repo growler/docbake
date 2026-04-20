@@ -5,6 +5,7 @@ pub(crate) mod caption;
 pub mod cli;
 pub(crate) mod code_block_attribute;
 pub(crate) mod confluence;
+pub(crate) mod credentials;
 pub(crate) mod diagram;
 pub(crate) mod graph;
 mod publish;
@@ -140,7 +141,43 @@ pub fn run(cli: Cli) -> Result<()> {
                 *broken_links,
             ),
         },
+        cli::Command::Auth { ref target } => match target {
+            cli::AuthTarget::Confluence {
+                ref server,
+                ref token,
+            } => auth_confluence(server, token.as_deref()),
+        },
     }
+}
+
+/// Handle `auth confluence <server> [<token>]`.
+///
+/// If `token` is `None`, reads the token from standard input.  When stdin
+/// is a terminal, a prompt is printed to stderr first.
+fn auth_confluence(server: &str, token: Option<&str>) -> Result<()> {
+    let token = match token {
+        Some(t) => t.to_string(),
+        None => {
+            use std::io::{self, BufRead, IsTerminal};
+            let stdin = io::stdin();
+            if stdin.is_terminal() {
+                eprint!("Enter Confluence token for {}: ", server);
+            }
+            let mut line = String::new();
+            stdin.lock().read_line(&mut line)
+                .context("failed to read token from stdin")?;
+            let trimmed = line.trim().to_string();
+            if trimmed.is_empty() {
+                bail!("empty token");
+            }
+            trimmed
+        }
+    };
+
+    credentials::store_token(server, &token)?;
+    let normalized = credentials::normalize_server(server);
+    eprintln!("Token stored for {normalized}");
+    Ok(())
 }
 
 /// Canonicalize an input path and derive the base directory.
