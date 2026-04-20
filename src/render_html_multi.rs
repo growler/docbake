@@ -362,6 +362,68 @@ fn build_expanded_toc_node(
     html.push_str("</li>\n");
 }
 
+/// Build the intra-page TOC: headings within the current page only,
+/// excluding the page's own title heading (the first one).
+/// Returns a nested `<ul>/<li>/<a>` HTML string suitable for a right-side
+/// "on this page" sidebar.
+pub(crate) fn build_intra_page_toc(graph: &DocumentGraph, doc_id: usize) -> String {
+    let all_headings = collect_page_headings(graph, doc_id);
+    // Skip the first heading — it is the page title.
+    let headings: Vec<_> = all_headings.into_iter().skip(1).collect();
+    if headings.is_empty() {
+        return String::new();
+    }
+
+    let mut html = String::new();
+    html.push_str("<ul>\n");
+
+    let base_level = headings.iter().map(|(l, _, _)| *l).min().unwrap_or(2);
+    let mut current_level = 0usize;
+    let mut li_open = false;
+
+    for (level, id, text) in &headings {
+        // Normalise levels so the shallowest heading is depth 1.
+        let level = level.saturating_sub(base_level) + 1;
+
+        if level > current_level {
+            while current_level < level {
+                if current_level > 0 {
+                    html.push_str("<ul>\n");
+                }
+                current_level += 1;
+            }
+        } else if level < current_level {
+            if li_open {
+                html.push_str("</li>\n");
+            }
+            while current_level > level {
+                html.push_str("</ul>\n</li>\n");
+                current_level -= 1;
+            }
+        } else if li_open {
+            html.push_str("</li>\n");
+        }
+
+        html.push_str(&format!(
+            "<li><a href=\"#{}\">{}</a>\n",
+            html_escape(id),
+            text,
+        ));
+        li_open = true;
+    }
+
+    if li_open {
+        html.push_str("</li>\n");
+    }
+    while current_level > 1 {
+        html.push_str("</ul>\n</li>\n");
+        current_level -= 1;
+    }
+
+    html.push_str("</ul>\n");
+    html
+}
+
 /// Collect headings for a single page (not recursing into includes).
 /// Returns `(level, id, text_html)` tuples.
 fn collect_page_headings(graph: &DocumentGraph, doc_id: usize) -> Vec<(usize, String, String)> {
@@ -1248,9 +1310,10 @@ pub(crate) fn build_multi_page_html(
             .render(&mut body, &doc.source, &doc.arena, doc.doc_ref)
             .map_err(|error| anyhow::anyhow!("failed to render HTML body: {error:?}"))?;
 
-        // Build TOC.
+        // Build TOC variants.
         let toc = build_page_toc(&plan, page_idx, &page_info.output_path);
         let toc_expanded = build_page_toc_expanded(&plan, page_idx, graph, &page_info.output_path);
+        let toc_page = build_intra_page_toc(graph, page_info.doc_id);
 
         // Build nav links.
         let prev = page_info.prev_index.map(|i| {
@@ -1278,14 +1341,36 @@ pub(crate) fn build_multi_page_html(
         // Root href (relative path from current page to root index).
         let root_href = compute_relative_href(&page_info.output_path, &plan.pages[0].output_path);
 
+        // Build breadcrumbs: walk parent chain from current page up to root, then reverse.
+        let mut breadcrumbs: Vec<NavLink> = Vec::new();
+        {
+            // Current page (last crumb, no link needed — template renders it as plain text).
+            breadcrumbs.push(NavLink {
+                href: String::new(),
+                title: page_info.title.clone(),
+            });
+            let mut idx = page_idx;
+            while let Some(parent_idx) = plan.pages[idx].parent_index {
+                let p = &plan.pages[parent_idx];
+                breadcrumbs.push(NavLink {
+                    href: compute_relative_href(&page_info.output_path, &p.output_path),
+                    title: p.title.clone(),
+                });
+                idx = parent_idx;
+            }
+            breadcrumbs.reverse();
+        }
+
         // Assemble Tera context.
         let mut page_ctx = context.clone();
         page_ctx.insert("asset_prefix", &asset_prefix);
         page_ctx.insert("body", &body);
         page_ctx.insert("toc", &toc);
         page_ctx.insert("toc_expanded", &toc_expanded);
+        page_ctx.insert("toc_page", &toc_page);
         page_ctx.insert("page_title", &page_info.title);
         page_ctx.insert("root_href", &root_href);
+        page_ctx.insert("breadcrumbs", &breadcrumbs);
         if let Some(ref prev) = prev {
             page_ctx.insert("prev", prev);
         }

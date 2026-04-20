@@ -95,13 +95,11 @@ confluence:
 Использование `id:` удобно, когда заголовок родительской страницы
 слишком длинный или может измениться.
 
-Для аутентификации используется переменная окружения `CONFLUENCE_TOKEN`
-(Personal Access Token).
-
-По умолчанию в CI/CD присутствует переменная `CONFLUENCE_BOT_TOKEN`, если 
-ее значение дать переменной `CONFLUENCE_TOKEN`, то публикация будет выполняется
-от имени пользователя **documentabot** — ему необходимо предоставить права
-на запись в целевом пространстве Confluence.
+По умолчанию в CI/CD публикация будет выполняется от имени пользователя 
+**documentabot** — ему необходимо предоставить права на запись в целевом 
+пространстве Confluence. Если надо публиковать от своего имени, то надо 
+в настройках CI/CD проекта задать переменную `CONFLUENCE_TOKEN` с личным 
+Personal Access Token.
 
 ## CI/CD
 
@@ -113,7 +111,7 @@ confluence:
 build:docs:html:
   stage: build
   script:
-    - docbake build -f html -i doc/ru/index.md -o public/index.html
+    - docbake build -f html -b doc -i doc/ru/index.md -o public/index.html
   artifacts:
     paths:
       - public/
@@ -121,7 +119,7 @@ build:docs:html:
 build:docs:html-multi:
   stage: build
   script:
-    - docbake build -f html-multi -i doc/ru/index.md -o public
+    - docbake build -f html-multi -b doc -i doc/ru/index.md -o public
   artifacts:
     paths:
       - public/
@@ -129,19 +127,34 @@ build:docs:html-multi:
 build:docs:pdf:
   stage: build
   script:
-    - docbake build -f pdf -i doc/ru/index.md -o public/document.pdf
+    - docbake build -f pdf -b doc -i doc/ru/index.md -o public/document.pdf
   artifacts:
     paths:
       - public/
+
+build:docs:kb:
+  stage: build
+  script:
+    - |
+      docbake publish confluence \
+        --meta confluence.server https://confluence.example.com \
+        --meta confluence.space SA \
+        --meta confluence.path id:204837448 \
+        --meta confluence.path "Document Publisher" \ 
+        -b doc -i doc/ru/index.md
 ```
 
-### Обёртка publish-docs
+### Сервер docs.blank 
 
-В проекте используется обёртка `publish-docs`, которая вызывает
-`docbake` с нужными параметрами и сразу публикуте документ на сервере 
-[http://doc.blank](http://doc.blank) с путем `<giltab-group>/<gitlab-project>/<branch|tag>/html` 
-для HTML single page и `<giltab-group>/<gitlab-project>/<branch|tag>/pdf/<gitlab-group>-<gitlab-project>.pdf`
-для PDF:
+Есть сервис doc.blank с настроенным окружением для публикации документов. Для 
+удобства, там есть обёртка `publish-docs`, которая вызывает
+`docbake` с нужными параметрами и сразу публикует документ во всех форматах:
+
+HTML Single Page: `<giltab-group>/<gitlab-project>/<branch|tag>/html`\
+HTML Multi Page: `<giltab-group>/<gitlab-project>/<branch|tag>/site`\
+PDF: `<giltab-group>/<gitlab-project>/<branch|tag>/pdf/<gitlab-group>-<gitlab-project>.pdf`
+
+а также публикует в kb.blank.com, если в преамбуле есть соответствующие параметры.
 
 ```yaml
 build:docs:
@@ -153,4 +166,3 @@ build:docs:
   script:
     - publish-docs -i doc/ru/index.md -b doc
 ```
-
