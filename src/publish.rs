@@ -180,11 +180,21 @@ pub(crate) fn publish_confluence_command(
 ///     - Page Title         # last element = page name
 /// ```
 ///
-/// Each element in `path` is either a page title or a literal Confluence
-/// content ID prefixed with `id:`.
+/// `path` may also be a plain string, in which case the page is created
+/// directly in the space root with that string as the title:
+///
+/// ```yaml
+/// confluence:
+///   server: https://confluence.example.com
+///   space: PROJ
+///   path: My Page Title
+/// ```
+///
+/// When `path` is an array, each element is either a page title or a
+/// literal Confluence content ID prefixed with `id:`.
 ///
 /// All fields can be overridden via `--meta` (e.g.
-/// `--meta confluence.server https://…`).
+/// `--meta confluence.path "Page Title"`).
 ///
 /// Returns `(server, space, parents, name)`.
 fn resolve_publish_params(
@@ -224,21 +234,31 @@ fn resolve_publish_params(
         .to_string();
 
     // ── path → parents + name ───────────────────────────────────────────
-    if let Some(path_arr) = conf.get("path").and_then(|v| v.as_array()) {
-        if path_arr.is_empty() {
-            bail!("`confluence.path` is empty");
+    if let Some(path_val) = conf.get("path") {
+        if let Some(path_arr) = path_val.as_array() {
+            if path_arr.is_empty() {
+                bail!("`confluence.path` is empty");
+            }
+            let path_strings: Vec<String> = path_arr
+                .iter()
+                .map(|v| {
+                    v.as_str()
+                        .map(|s| s.to_string())
+                        .context("each element of `confluence.path` must be a string")
+                })
+                .collect::<Result<_>>()?;
+            // Last element is the page name, rest are parents.
+            let (parents, name_slice) = path_strings.split_at(path_strings.len() - 1);
+            return Ok((server, space, parents.to_vec(), name_slice[0].clone()));
+        } else if let Some(s) = path_val.as_str() {
+            // String value = page name directly in the space root, no parents.
+            if s.is_empty() {
+                bail!("`confluence.path` is empty");
+            }
+            return Ok((server, space, Vec::new(), s.to_string()));
+        } else {
+            bail!("`confluence.path` must be an array or a string");
         }
-        let path_strings: Vec<String> = path_arr
-            .iter()
-            .map(|v| {
-                v.as_str()
-                    .map(|s| s.to_string())
-                    .context("each element of `confluence.path` must be a string")
-            })
-            .collect::<Result<_>>()?;
-        // Last element is the page name, rest are parents.
-        let (parents, name_slice) = path_strings.split_at(path_strings.len() - 1);
-        return Ok((server, space, parents.to_vec(), name_slice[0].clone()));
     }
 
     // ── fall back to title ──────────────────────────────────────────────

@@ -59,6 +59,7 @@
         {
           _module.args.pkgs = import nixpkgs {
             inherit system;
+            config.allowUnfree = true;
             overlays = [ (import rust-overlay) ];
           };
           devShells.default = pkgs.mkShell {
@@ -70,6 +71,11 @@
               pkgs.zig
               pkgs.dpkg 
               pkgs.debian-devscripts 
+            ] ++ pkgs.lib.optionals isLinux [
+              pkgs.d2
+              pkgs.drawio-headless
+              pkgs.plantuml
+              pkgs.mermaid-cli
             ];
             name = "docbake";
             shellHook =
