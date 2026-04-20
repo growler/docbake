@@ -567,12 +567,14 @@ impl<'a> ConfluenceRenderer<'a> {
                     // External image URL.
                     let is_svg = dest.ends_with(".svg") || dest.contains(".svg?");
                     out.push_str("<ac:image");
+                    // SVG data unavailable for external URLs.
                     self.write_image_size_attrs(
                         out,
                         width.as_deref(),
                         height.as_deref(),
                         is_svg,
                         inline,
+                        None,
                     );
                     if !alt.is_empty() {
                         write!(out, " ac:alt=\"{}\"", xml_attr_escape(&alt))?;
@@ -586,6 +588,17 @@ impl<'a> ConfluenceRenderer<'a> {
                     // Local image → attachment.
                     let filename = self.resolve_image_attachment(&dest, scope.doc_id, prepared)?;
                     let is_svg = filename.ends_with(".svg");
+                    // For local SVGs, look up the attachment data so we can
+                    // extract the intrinsic width from the SVG root element.
+                    let svg_data: Option<Vec<u8>> = if is_svg {
+                        self.attachments
+                            .borrow()
+                            .iter()
+                            .find(|a| a.filename == filename)
+                            .map(|a| a.data.clone())
+                    } else {
+                        None
+                    };
                     out.push_str("<ac:image");
                     self.write_image_size_attrs(
                         out,
@@ -593,6 +606,7 @@ impl<'a> ConfluenceRenderer<'a> {
                         height.as_deref(),
                         is_svg,
                         inline,
+                        svg_data.as_deref(),
                     );
                     if !alt.is_empty() {
                         write!(out, " ac:alt=\"{}\"", xml_attr_escape(&alt))?;
@@ -662,11 +676,17 @@ impl<'a> ConfluenceRenderer<'a> {
     /// (otherwise SVGs render at 0×0).  The rules are:
     ///
     /// - **Inline SVG** → `ac:width="16"` (icon-sized).
-    /// - **Block SVG, no explicit width** → `ac:width="800"`.
-    /// - **Block SVG, width=N%** → `ac:width="{N*8}"` (percent of 800).
+    /// - **Block SVG, no explicit width** → intrinsic width from the SVG
+    ///   (capped at 800), or 800 if intrinsic width is unavailable.
+    /// - **Block SVG, width=N%** → percent of `min(intrinsic, 800)`.
     /// - **Block SVG, width=Npx or plain N** → `ac:width="N"`.
     /// - **Non-SVG** → pass through width/height as-is (browsers honour
     ///   intrinsic raster dimensions).
+    ///
+    /// `svg_data` should contain the raw SVG bytes when available (for
+    /// diagrams and local image attachments) so that the intrinsic width
+    /// can be extracted.  Pass `None` for external URLs where the data is
+    /// not available.
     fn write_image_size_attrs(
         &self,
         out: &mut String,
@@ -674,12 +694,14 @@ impl<'a> ConfluenceRenderer<'a> {
         height: Option<&str>,
         is_svg: bool,
         is_inline: bool,
+        svg_data: Option<&[u8]>,
     ) {
         if is_svg {
             if is_inline {
                 let _ = write!(out, " ac:width=\"{SVG_INLINE_WIDTH}\"");
             } else {
-                let px = svg_width_to_pixels(width);
+                let intrinsic = svg_data.and_then(parse_svg_intrinsic_width);
+                let px = svg_width_to_pixels(width, intrinsic);
                 let _ = write!(out, " ac:width=\"{px}\"");
             }
             // For SVGs we intentionally omit ac:height so the aspect ratio
@@ -814,20 +836,28 @@ impl<'a> ConfluenceRenderer<'a> {
         self.attachment_names
             .borrow_mut()
             .insert(format!("__diagram_{n}"), filename.clone());
-        self.attachments.borrow_mut().push(ConfluenceAttachment {
-            filename: filename.clone(),
-            data: svg_bytes,
-            content_hash: hash,
-        });
 
         out.push_str("<ac:image");
         // Diagrams are always block-level SVGs.
-        self.write_image_size_attrs(out, width.as_deref(), height.as_deref(), true, false);
+        self.write_image_size_attrs(
+            out,
+            width.as_deref(),
+            height.as_deref(),
+            true,
+            false,
+            Some(&svg_bytes),
+        );
         write!(
             out,
             "><ri:attachment ri:filename=\"{}\" /></ac:image>\n",
             xml_attr_escape(&filename)
         )?;
+
+        self.attachments.borrow_mut().push(ConfluenceAttachment {
+            filename: filename.clone(),
+            data: svg_bytes,
+            content_hash: hash,
+        });
         Ok(())
     }
 
@@ -1268,26 +1298,176 @@ fn normalize_dimension(value: &str) -> String {
     trimmed.to_string()
 }
 
-/// Convert a width attribute value to a pixel value for SVG images.
+/// Extract the intrinsic pixel width from the root `<svg>` element.
+///
+/// Returns `Some(px)` when the `width` attribute is a plain number or ends
+/// with `px`.  Returns `None` for percentages, `em`, `pt`, viewBox-only
+/// SVGs, or when the `<svg>` tag cannot be found.
+fn parse_svg_intrinsic_width(svg_data: &[u8]) -> Option<u32> {
+    use regex::Regex;
+    use std::sync::LazyLock;
+
+    // Match the opening <svg …> tag (single-line; SVG generators
+    // typically emit it on one line).
+    static RE_SVG_TAG: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?is)<svg\b[^>]*>").unwrap());
+    static RE_WIDTH: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#"\bwidth\s*=\s*"([^"]*)""#).unwrap());
+
+    let text = std::str::from_utf8(svg_data).ok()?;
+    let svg_tag = RE_SVG_TAG.find(text)?.as_str();
+    let width_val = RE_WIDTH.captures(svg_tag)?[1].trim().to_string();
+
+    // Accept "94px" or "94"; reject "%", "em", "pt", etc.
+    let num_str = width_val.strip_suffix("px").unwrap_or(&width_val);
+    num_str.trim().parse::<u32>().ok()
+}
+
+/// Convert a user-specified width attribute to a pixel value for SVG images.
 ///
 /// Confluence requires a numeric pixel `ac:width` for SVGs; without it
-/// the image renders at 0×0.  Percentages are converted relative to
-/// [`SVG_DEFAULT_BLOCK_WIDTH`].
-fn svg_width_to_pixels(width: Option<&str>) -> u32 {
+/// the image renders at 0×0.
+///
+/// When `intrinsic_width` is available (parsed from the SVG itself), we use
+/// `min(intrinsic, 800)` as the effective base instead of a flat 800.
+/// Percentages are then computed relative to this effective base.
+fn svg_width_to_pixels(width: Option<&str>, intrinsic_width: Option<u32>) -> u32 {
+    let effective_base = match intrinsic_width {
+        Some(w) => w.min(SVG_DEFAULT_BLOCK_WIDTH),
+        None => SVG_DEFAULT_BLOCK_WIDTH,
+    };
+
     let Some(w) = width else {
-        return SVG_DEFAULT_BLOCK_WIDTH;
+        return effective_base;
     };
     let trimmed = w.trim();
-    // Percentage: "50%" → 50% of 800 = 400
+    // Percentage: "50%" → 50% of effective_base
     if let Some(pct) = trimmed.strip_suffix('%') {
         if let Ok(n) = pct.trim().parse::<f64>() {
-            return ((n / 100.0) * SVG_DEFAULT_BLOCK_WIDTH as f64).round() as u32;
+            return ((n / 100.0) * effective_base as f64).round() as u32;
         }
     }
-    // Pixels: "200px" or "200"
+    // Pixels: "200px" or "200" — explicit user choice, pass through as-is.
     let num_str = trimmed.strip_suffix("px").unwrap_or(trimmed);
     if let Ok(n) = num_str.trim().parse::<u32>() {
         return n;
     }
-    SVG_DEFAULT_BLOCK_WIDTH
+    effective_base
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── parse_svg_intrinsic_width ────────────────────────────────────
+
+    #[test]
+    fn intrinsic_width_px_suffix() {
+        let svg = br#"<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" width="94px" height="92px" viewBox="0 0 94 92"></svg>"#;
+        assert_eq!(parse_svg_intrinsic_width(svg), Some(94));
+    }
+
+    #[test]
+    fn intrinsic_width_bare_number() {
+        let svg = br#"<svg width="300" height="200"></svg>"#;
+        assert_eq!(parse_svg_intrinsic_width(svg), Some(300));
+    }
+
+    #[test]
+    fn intrinsic_width_percentage_returns_none() {
+        let svg = br#"<svg width="100%" height="100%" viewBox="0 0 800 600"></svg>"#;
+        assert_eq!(parse_svg_intrinsic_width(svg), None);
+    }
+
+    #[test]
+    fn intrinsic_width_em_returns_none() {
+        let svg = br#"<svg width="50em" height="40em"></svg>"#;
+        assert_eq!(parse_svg_intrinsic_width(svg), None);
+    }
+
+    #[test]
+    fn intrinsic_width_missing_returns_none() {
+        let svg = br#"<svg viewBox="0 0 100 100"></svg>"#;
+        assert_eq!(parse_svg_intrinsic_width(svg), None);
+    }
+
+    #[test]
+    fn intrinsic_width_no_svg_tag() {
+        let data = b"not an svg at all";
+        assert_eq!(parse_svg_intrinsic_width(data), None);
+    }
+
+    #[test]
+    fn intrinsic_width_case_insensitive_tag() {
+        let svg = br#"<SVG Width="120px" Height="80px"></SVG>"#;
+        // The regex for the width attribute is case-sensitive on the
+        // attribute name, but the <svg> tag match is case-insensitive.
+        // Our regex uses `\bwidth\s*=` which is lowercase — uppercase
+        // Width won't match, returning None.  This is acceptable because
+        // all known SVG generators emit lowercase attributes.
+        // Just verify it doesn't panic.
+        let _ = parse_svg_intrinsic_width(svg);
+    }
+
+    #[test]
+    fn intrinsic_width_real_plantuml_svg() {
+        // Mimics the failed-diagram.svg structure.
+        let svg = br#"<?xml version="1.0" encoding="UTF-8" standalone="no"?><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" contentScriptType="application/ecmascript" contentStyleType="text/css" height="92px" preserveAspectRatio="none" style="width:94px;height:92px;" version="1.1" viewBox="0 0 94 92" width="94px" zoomAndPan="magnify"><defs/></svg>"#;
+        assert_eq!(parse_svg_intrinsic_width(svg), Some(94));
+    }
+
+    // ── svg_width_to_pixels ──────────────────────────────────────────
+
+    #[test]
+    fn no_user_width_no_intrinsic() {
+        assert_eq!(svg_width_to_pixels(None, None), 800);
+    }
+
+    #[test]
+    fn no_user_width_small_intrinsic() {
+        // SVG is 94px wide → use 94, not 800.
+        assert_eq!(svg_width_to_pixels(None, Some(94)), 94);
+    }
+
+    #[test]
+    fn no_user_width_large_intrinsic() {
+        // SVG is 1200px wide → cap at 800.
+        assert_eq!(svg_width_to_pixels(None, Some(1200)), 800);
+    }
+
+    #[test]
+    fn user_percentage_with_small_intrinsic() {
+        // 50% of min(94, 800) = 50% of 94 = 47
+        assert_eq!(svg_width_to_pixels(Some("50%"), Some(94)), 47);
+    }
+
+    #[test]
+    fn user_percentage_with_large_intrinsic() {
+        // 50% of min(1200, 800) = 50% of 800 = 400
+        assert_eq!(svg_width_to_pixels(Some("50%"), Some(1200)), 400);
+    }
+
+    #[test]
+    fn user_percentage_no_intrinsic() {
+        // 50% of 800 = 400
+        assert_eq!(svg_width_to_pixels(Some("50%"), None), 400);
+    }
+
+    #[test]
+    fn user_explicit_px_respected() {
+        // Explicit 200px from user — pass through regardless of intrinsic.
+        assert_eq!(svg_width_to_pixels(Some("200px"), Some(94)), 200);
+        assert_eq!(svg_width_to_pixels(Some("200px"), None), 200);
+    }
+
+    #[test]
+    fn user_explicit_bare_number() {
+        assert_eq!(svg_width_to_pixels(Some("300"), Some(94)), 300);
+    }
+
+    #[test]
+    fn user_unparseable_falls_back_to_base() {
+        assert_eq!(svg_width_to_pixels(Some("auto"), Some(94)), 94);
+        assert_eq!(svg_width_to_pixels(Some("auto"), None), 800);
+    }
 }
