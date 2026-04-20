@@ -78,7 +78,7 @@ pub enum Command {
 
         /// Remove a front-matter key before applying --meta overrides.
         /// Repeatable.  Key may use dot-notation (e.g. "confluence.path").
-        #[arg(long = "meta-drop")]
+        #[arg(long = "meta-drop", value_name = "KEY")]
         meta_drop: Vec<String>,
     },
 
