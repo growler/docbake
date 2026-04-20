@@ -65,7 +65,7 @@ impl DocumentOccurrence {
     }
 }
 
-fn meta_to_json(meta: &Meta) -> JsonValue {
+pub(crate) fn meta_to_json(meta: &Meta) -> JsonValue {
     match meta {
         Meta::Null => JsonValue::Null,
         Meta::Bool(value) => JsonValue::Bool(*value),

@@ -70,6 +70,11 @@ pub enum Command {
         /// continues, "error" aborts the build.  Defaults to "error".
         #[arg(long, default_value = "error")]
         broken_links: BrokenLinkMode,
+
+        /// Override a front-matter value.  Repeatable.
+        /// Key may use dot-notation (e.g. "confluence.server").
+        #[arg(long = "meta", value_names = ["KEY", "VALUE"], num_args = 2)]
+        meta: Vec<String>,
     },
 
     /// Dump the document include-graph for a markdown file.
@@ -80,6 +85,16 @@ pub enum Command {
         /// Defaults to the parent directory of the input file.
         #[arg(short = 'b', long)]
         base: Option<PathBuf>,
+    },
+
+    /// Read a metadata value from the document's YAML front matter.
+    Meta {
+        /// Root markdown file.
+        #[arg(short = 'i', long)]
+        input: PathBuf,
+
+        /// Metadata key (dot-separated for nested access, e.g. "confluence.server").
+        key: String,
     },
 
     /// Dump the parsed AST for a markdown file.
@@ -116,6 +131,11 @@ pub enum Command {
         /// continues, "error" aborts the build.  Defaults to "warn".
         #[arg(long, default_value = "warn")]
         broken_links: BrokenLinkMode,
+
+        /// Override a front-matter value.  Repeatable.
+        /// Key may use dot-notation (e.g. "confluence.server").
+        #[arg(long = "meta", value_names = ["KEY", "VALUE"], num_args = 2)]
+        meta: Vec<String>,
     },
 
     /// Watch source files and rebuild on changes.
@@ -141,6 +161,11 @@ pub enum Command {
         /// continues, "error" aborts the build.  Defaults to "warn".
         #[arg(long, default_value = "warn")]
         broken_links: BrokenLinkMode,
+
+        /// Override a front-matter value.  Repeatable.
+        /// Key may use dot-notation (e.g. "confluence.server").
+        #[arg(long = "meta", value_names = ["KEY", "VALUE"], num_args = 2)]
+        meta: Vec<String>,
     },
 
     /// Validate the document: check all links and render all diagrams.
@@ -200,31 +225,14 @@ pub enum PublishTarget {
         #[arg(short = 'b', long)]
         base: Option<PathBuf>,
 
-        /// Confluence server URL (e.g. https://confluence.example.com).
-        /// Can also be set via the `confluence.server` front-matter field.
-        #[arg(short = 's', long)]
-        server: Option<String>,
-
-        /// Confluence space key.  Can also be set via the
-        /// `confluence.space` front-matter field.
-        #[arg(long)]
-        space: Option<String>,
-
-        /// Ancestor page title (repeatable).  Pages are resolved
-        /// top-down; all ancestors must already exist.
-        /// Can also be set via `confluence.path` in front matter
-        /// (all elements except the last).
-        #[arg(long)]
-        parent: Vec<String>,
-
-        /// Page title in Confluence.  Defaults to the last element of
-        /// `confluence.path` in front matter, or to `title`.
-        #[arg(long)]
-        name: Option<String>,
-
         /// How to handle broken links: "warn" prints diagnostics and
         /// continues, "error" aborts.  Defaults to "error".
         #[arg(long, default_value = "error")]
         broken_links: BrokenLinkMode,
+
+        /// Override a front-matter value.  Repeatable.
+        /// Key may use dot-notation (e.g. "confluence.server").
+        #[arg(long = "meta", value_names = ["KEY", "VALUE"], num_args = 2)]
+        meta: Vec<String>,
     },
 }

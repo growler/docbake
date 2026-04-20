@@ -32,6 +32,7 @@ use crate::render_html_multi::build_multi_page_html;
 use crate::render_typst::TypstRenderer;
 use crate::theme::Theme;
 use anyhow::{anyhow, bail, Context, Result};
+use serde_json::{Map as JsonMap, Value as JsonValue};
 
 pub fn run(cli: Cli) -> Result<()> {
     let logger = DebugDumper::new(cli.debug_dump);
@@ -56,16 +57,21 @@ pub fn run(cli: Cli) -> Result<()> {
             ref output,
             ref base,
             broken_links,
-        } => build_command(
-            &logger,
-            &cache,
-            &theme,
-            format,
-            input,
-            output,
-            base.as_deref(),
-            broken_links,
-        ),
+            ref meta,
+        } => {
+            let meta_overrides = parse_meta_pairs(meta)?;
+            build_command(
+                &logger,
+                &cache,
+                &theme,
+                format,
+                input,
+                output,
+                base.as_deref(),
+                broken_links,
+                &meta_overrides,
+            )
+        }
         cli::Command::Dump { ref path, ref base } => {
             let (source, base_dir) = resolve_input_and_base(path, base.as_deref())?;
             let build = prepare_document(&logger, &base_dir, &source, None, BrokenLinkMode::Error)?;
@@ -78,38 +84,52 @@ pub fn run(cli: Cli) -> Result<()> {
             print!("{}", build.parse_dump()?);
             Ok(())
         }
+        cli::Command::Meta {
+            ref input,
+            ref key,
+        } => meta_command(input, key),
         cli::Command::Serve {
             format,
             ref input,
             ref base,
             port,
             broken_links,
-        } => serve::serve_command(
-            &logger,
-            &cache,
-            &theme,
-            format,
-            input,
-            base.as_deref(),
-            port.unwrap_or(0),
-            broken_links,
-        ),
+            ref meta,
+        } => {
+            let meta_overrides = parse_meta_pairs(meta)?;
+            serve::serve_command(
+                &logger,
+                &cache,
+                &theme,
+                format,
+                input,
+                base.as_deref(),
+                port.unwrap_or(0),
+                broken_links,
+                &meta_overrides,
+            )
+        }
         cli::Command::Watch {
             format,
             ref input,
             ref output,
             ref base,
             broken_links,
-        } => watch::watch_command(
-            &logger,
-            &cache,
-            &theme,
-            format,
-            input,
-            output,
-            base.as_deref(),
-            broken_links,
-        ),
+            ref meta,
+        } => {
+            let meta_overrides = parse_meta_pairs(meta)?;
+            watch::watch_command(
+                &logger,
+                &cache,
+                &theme,
+                format,
+                input,
+                output,
+                base.as_deref(),
+                broken_links,
+                &meta_overrides,
+            )
+        }
         cli::Command::Check {
             ref input,
             ref base,
@@ -123,23 +143,20 @@ pub fn run(cli: Cli) -> Result<()> {
             cli::PublishTarget::Confluence {
                 ref input,
                 ref base,
-                ref server,
-                ref space,
-                ref parent,
-                ref name,
                 broken_links,
-            } => publish::publish_confluence_command(
-                &logger,
-                &cache,
-                &theme,
-                input,
-                base.as_deref(),
-                server.as_deref(),
-                space.as_deref(),
-                parent,
-                name.as_deref(),
-                *broken_links,
-            ),
+                ref meta,
+            } => {
+                let meta_overrides = parse_meta_pairs(meta)?;
+                publish::publish_confluence_command(
+                    &logger,
+                    &cache,
+                    &theme,
+                    input,
+                    base.as_deref(),
+                    *broken_links,
+                    &meta_overrides,
+                )
+            }
         },
         cli::Command::Auth { ref target } => match target {
             cli::AuthTarget::Confluence {
@@ -210,6 +227,120 @@ pub(crate) fn resolve_input_and_base(
     Ok((source, base_dir))
 }
 
+/// Parse the flat `--meta KEY VALUE …` vector into `(key, value)` pairs.
+///
+/// Clap's `num_args = 2` guarantees the count is even, so this is an
+/// internal consistency check rather than user-facing validation.
+fn parse_meta_pairs(raw: &[String]) -> Result<Vec<(String, String)>> {
+    debug_assert!(
+        raw.len().is_multiple_of(2),
+        "clap guarantees --meta always takes two values"
+    );
+    Ok(raw
+        .chunks(2)
+        .map(|c| (c[0].clone(), c[1].clone()))
+        .collect())
+}
+
+/// Apply `--meta` overrides to a metadata map.
+///
+/// Dot-separated keys create or traverse nested objects.  For example,
+/// `--meta confluence.server https://x.com` sets
+/// `metadata["confluence"]["server"]` to `"https://x.com"`, creating the
+/// intermediate `confluence` object if it does not exist.
+pub(crate) fn apply_meta_overrides(
+    metadata: &mut JsonMap<String, JsonValue>,
+    overrides: &[(String, String)],
+) -> Result<()> {
+    for (key, value) in overrides {
+        let parts: Vec<&str> = key.split('.').collect();
+        let mut target = &mut *metadata;
+        for &part in &parts[..parts.len() - 1] {
+            let entry = target
+                .entry(part)
+                .or_insert_with(|| JsonValue::Object(JsonMap::new()));
+            target = entry.as_object_mut().ok_or_else(|| {
+                anyhow!(
+                    "--meta: '{}' is not an object when setting '{}'",
+                    part,
+                    key
+                )
+            })?;
+        }
+        if let Some(leaf) = parts.last() {
+            target.insert((*leaf).to_string(), JsonValue::String(value.clone()));
+        }
+    }
+    Ok(())
+}
+
+/// Read a single metadata value from a document's YAML front matter.
+///
+/// Returns an error if the file has no front matter (or empty front matter).
+/// If the key is not found, prints nothing and returns `Ok(())`.
+/// Dot-separated keys traverse nested objects (e.g. `confluence.server`).
+fn meta_command(input: &Path, key: &str) -> Result<()> {
+    use rushdown::ast::KindData;
+    use rushdown::text::BasicReader;
+    use rushdown_meta::{meta_parser_extension, MetaParserOptions};
+    use serde_json::{Map as JsonMap, Value as JsonValue};
+
+    use crate::graph::types::meta_to_json;
+
+    let content = fs::read_to_string(input)
+        .with_context(|| format!("failed to read {}", input.display()))?;
+
+    // Check for front matter presence before parsing.
+    if graph::build::split_front_matter(&content).0.is_none() {
+        bail!("{}: no YAML front matter", input.display());
+    }
+
+    // Parse with a minimal rushdown parser (meta extension only).
+    let parser = rushdown::parser::Parser::with_extensions(
+        rushdown::parser::Options::default(),
+        meta_parser_extension(MetaParserOptions::default()),
+    );
+    let mut reader = BasicReader::new(&content);
+    let (arena, doc_ref) = parser.parse(&mut reader);
+
+    let KindData::Document(doc) = arena[doc_ref].kind_data() else {
+        bail!("{}: failed to parse document", input.display());
+    };
+
+    let metadata: JsonMap<String, JsonValue> = doc
+        .metadata()
+        .iter()
+        .map(|(k, v)| (k.clone(), meta_to_json(v)))
+        .collect();
+
+    if metadata.is_empty() {
+        bail!("{}: no YAML front matter", input.display());
+    }
+
+    // Traverse the dot-separated key path.
+    let mut current: &JsonValue = &JsonValue::Object(metadata);
+    for part in key.split('.') {
+        match current {
+            JsonValue::Object(map) => match map.get(part) {
+                Some(v) => current = v,
+                None => return Ok(()),
+            },
+            _ => return Ok(()),
+        }
+    }
+
+    // Print the value.
+    match current {
+        JsonValue::String(s) => println!("{s}"),
+        JsonValue::Null => {}
+        JsonValue::Bool(b) => println!("{b}"),
+        JsonValue::Number(n) => println!("{n}"),
+        _ => println!("{}", serde_json::to_string(current).unwrap()),
+    }
+
+    Ok(())
+}
+
 /// Resolve the output path from the `-o` flag, the format, and the input
 /// file name.  Returns `(output_file, output_dir)` where `output_dir` is
 /// the directory that should contain assets (static/ and assets/).
@@ -257,6 +388,7 @@ fn resolve_output(output: &Path, input: &Path, format: OutputFormat) -> Result<(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_command(
     logger: &DebugDumper,
     cache: &Cache,
@@ -266,6 +398,7 @@ pub(crate) fn build_command(
     output: &Path,
     base: Option<&Path>,
     broken_links: BrokenLinkMode,
+    meta_overrides: &[(String, String)],
 ) -> Result<()> {
     let (source, base_dir) = resolve_input_and_base(input, base)?;
     let (output_file, output_dir) = resolve_output(output, &source, format)?;
@@ -318,7 +451,8 @@ pub(crate) fn build_command(
     theme.copy_assets_to(&work_dir)?;
 
     // ── Build template context from front matter ────────────────────────
-    let metadata = build.document_metadata();
+    let mut metadata = build.document_metadata();
+    apply_meta_overrides(&mut metadata, meta_overrides)?;
     let style = theme.style_css()?;
     let mut template_context = build_template_context(&metadata, style.as_deref())?;
 

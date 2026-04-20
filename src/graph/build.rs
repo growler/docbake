@@ -288,7 +288,7 @@ fn resolve_include_target(base_dir: &Path, base: &Path, target: &str) -> Result<
     super::resolve::resolve_base_path(base_dir, base, target)
 }
 
-fn split_front_matter(input: &str) -> (Option<String>, &str) {
+pub(crate) fn split_front_matter(input: &str) -> (Option<String>, &str) {
     let Some(_rest) = input.strip_prefix("---") else {
         return (None, input);
     };

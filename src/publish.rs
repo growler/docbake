@@ -23,11 +23,8 @@ pub(crate) fn publish_confluence_command(
     theme: &Theme,
     input: &Path,
     base: Option<&Path>,
-    cli_server: Option<&str>,
-    cli_space: Option<&str>,
-    cli_parents: &[String],
-    cli_name: Option<&str>,
     broken_links: BrokenLinkMode,
+    meta_overrides: &[(String, String)],
 ) -> Result<()> {
     // ── resolve input / base ────────────────────────────────────────────
     let (source, base_dir) = crate::resolve_input_and_base(input, base)?;
@@ -45,11 +42,11 @@ pub(crate) fn publish_confluence_command(
 
     // ── prepare document graph ──────────────────────────────────────────
     let build = prepare_document(logger, &base_dir, &source, Some(&doc_name), broken_links)?;
-    let metadata = build.document_metadata();
+    let mut metadata = build.document_metadata();
+    crate::apply_meta_overrides(&mut metadata, meta_overrides)?;
 
     // ── resolve publish parameters ──────────────────────────────────────
-    let (server, space, parents, name) =
-        resolve_publish_params(cli_server, cli_space, cli_parents, cli_name, &metadata)?;
+    let (server, space, parents, name) = resolve_publish_params(&metadata)?;
 
     // ── authentication ──────────────────────────────────────────────────
     // CONFLUENCE_TOKEN env var takes precedence; otherwise look up a
@@ -167,9 +164,9 @@ pub(crate) fn publish_confluence_command(
 
 // ── parameter resolution ────────────────────────────────────────────────
 
-/// Merge CLI flags with front-matter defaults.
+/// Resolve Confluence publish parameters from document metadata.
 ///
-/// Front matter uses a nested `confluence:` object:
+/// The `confluence` front-matter key must be a dictionary:
 ///
 /// ```yaml
 /// confluence:
@@ -178,74 +175,56 @@ pub(crate) fn publish_confluence_command(
 ///   path:
 ///     - Parent Page        # looked up by title
 ///     - id:12345678        # or by content ID
-///     - Page Title
+///     - Page Title         # last element = page name
 /// ```
 ///
-/// Each element in `path` (and each `--parent` CLI flag) is either a
-/// page title or a literal Confluence content ID prefixed with `id:`.
+/// Each element in `path` is either a page title or a literal Confluence
+/// content ID prefixed with `id:`.
 ///
-/// All fields are optional; CLI flags take precedence.
+/// All fields can be overridden via `--meta` (e.g.
+/// `--meta confluence.server https://…`).
 ///
 /// Returns `(server, space, parents, name)`.
 fn resolve_publish_params(
-    cli_server: Option<&str>,
-    cli_space: Option<&str>,
-    cli_parents: &[String],
-    cli_name: Option<&str>,
     metadata: &serde_json::Map<String, JsonValue>,
 ) -> Result<(String, String, Vec<String>, String)> {
-    // Extract the `confluence` front-matter object (if present).
-    let conf = metadata.get("confluence").and_then(|v| v.as_object());
+    let conf = metadata
+        .get("confluence")
+        .and_then(|v| v.as_object())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Confluence settings not found.\n\
+                 Set the `confluence` object in front matter or use --meta."
+            )
+        })?;
 
     // Helper: read a string field from the `confluence` object.
-    let conf_str =
-        |key: &str| -> Option<&str> { conf.and_then(|c| c.get(key)).and_then(|v| v.as_str()) };
+    let conf_str = |key: &str| -> Option<&str> { conf.get(key).and_then(|v| v.as_str()) };
 
     // ── server ──────────────────────────────────────────────────────────
-    let server = if let Some(s) = cli_server {
-        s.to_string()
-    } else if let Some(s) = conf_str("server") {
-        s.to_string()
-    } else {
-        bail!(
-            "Confluence server not specified.\n\
-             Use --server or set `confluence.server` in front matter."
-        );
-    };
+    let server = conf_str("server")
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Confluence server not specified.\n\
+                 Set `confluence.server` in front matter or use --meta confluence.server <url>."
+            )
+        })?
+        .to_string();
 
     // ── space ───────────────────────────────────────────────────────────
-    let space = if let Some(s) = cli_space {
-        s.to_string()
-    } else if let Some(s) = conf_str("space") {
-        s.to_string()
-    } else {
-        bail!(
-            "Confluence space not specified.\n\
-             Use --space or set `confluence.space` in front matter."
-        );
-    };
+    let space = conf_str("space")
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Confluence space not specified.\n\
+                 Set `confluence.space` in front matter or use --meta confluence.space <key>."
+            )
+        })?
+        .to_string();
 
-    // ── parents and name from CLI ───────────────────────────────────────
-    if !cli_parents.is_empty() || cli_name.is_some() {
-        // CLI path was (partially) specified — use it.
-        let name = if let Some(n) = cli_name {
-            n.to_string()
-        } else if let Some(title) = metadata.get("title").and_then(|v| v.as_str()) {
-            title.to_string()
-        } else {
-            bail!(
-                "Page name not specified.\n\
-                 Use --name, or set `title` in front matter."
-            );
-        };
-        return Ok((server, space, cli_parents.to_vec(), name));
-    }
-
-    // ── fall back to confluence.path from front matter ───────────────────
-    let fm_path = conf.and_then(|c| c.get("path")).and_then(|v| v.as_array());
-    if let Some(path_arr) = fm_path {
+    // ── path → parents + name ───────────────────────────────────────────
+    if let Some(path_arr) = conf.get("path").and_then(|v| v.as_array()) {
         if path_arr.is_empty() {
-            bail!("`confluence.path` in front matter is empty");
+            bail!("`confluence.path` is empty");
         }
         let path_strings: Vec<String> = path_arr
             .iter()
@@ -267,7 +246,7 @@ fn resolve_publish_params(
 
     bail!(
         "Page name not specified.\n\
-         Use --name, set `title` in front matter, or provide `confluence.path`."
+         Set `title` in front matter or provide `confluence.path`."
     );
 }
 

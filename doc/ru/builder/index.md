@@ -22,9 +22,13 @@ Usage: docbake [OPTIONS] <COMMAND>
 Commands:
   build       Build a document in the specified format
   dump        Dump the document include-graph for a markdown file
+  meta        Read a metadata value from the document's YAML front matter
   parse       Dump the parsed AST for a markdown file
   serve       Serve a document with live-reload on file changes
+  watch       Watch source files and rebuild on changes
+  check       Validate the document: check all links and render all diagrams
   init-theme  Export the default theme to a directory for customisation
+  publish     Publish a document to an external platform
   help        Print this message or the help of the given subcommand(s)
 
 Options:
@@ -45,13 +49,18 @@ Usage: docbake build [OPTIONS] --format <FORMAT> --input <INPUT>
                          --output <OUTPUT>
 
 Options:
-  -f, --format <FORMAT>  Output format [possible values: html, html-multi,
-                         pdf, markdown]
-  -i, --input <INPUT>    Root markdown file
-  -o, --output <OUTPUT>  Output file or directory
-  -b, --base <BASE>      Base directory for absolute path resolution.
-                         Defaults to the parent directory of the input file
-  -h, --help             Print help
+  -f, --format <FORMAT>          Output format [possible values: html,
+                                 html-multi, pdf, typst, markdown]
+  -i, --input <INPUT>            Root markdown file
+  -o, --output <OUTPUT>          Output file or directory
+  -b, --base <BASE>              Base directory for absolute path resolution.
+                                 Defaults to the parent directory of the
+                                 input file
+      --broken-links <MODE>      How to handle broken links: "warn" or
+                                 "error" [default: error]
+      --meta <KEY> <VALUE>       Override a front-matter value. Repeatable.
+                                 Key may use dot-notation
+  -h, --help                     Print help
 ~~~
 
 ~~~
@@ -61,21 +70,20 @@ Serve a document with live-reload on file changes
 Usage: docbake serve [OPTIONS] --format <FORMAT> --input <INPUT>
 
 Options:
-      --debug-dump
-  -f, --format <FORMAT>  Output format (only html and html-multi are
-                         supported) [possible values: html, html-multi,
-                         pdf, markdown]
-  -i, --input <INPUT>    Root markdown file
-  -t, --theme <THEME>    Theme directory. When omitted the built-in
-                         default theme is used
-  -b, --base <BASE>      Base directory for absolute path resolution.
-                         Defaults to the parent directory of the input file
-      --cache <CACHE>    Override the default cache directory for rendered
-                         artifacts
-      --no-cache         Disable artifact caching entirely
-  -p, --port <PORT>      Port to listen on. If not specified, an available
-                         port is chosen automatically
-  -h, --help             Print help
+  -f, --format <FORMAT>          Output format (only html and html-multi
+                                 are supported) [possible values: html,
+                                 html-multi, pdf, typst, markdown]
+  -i, --input <INPUT>            Root markdown file
+  -b, --base <BASE>              Base directory for absolute path resolution.
+                                 Defaults to the parent directory of the
+                                 input file
+  -p, --port <PORT>              Port to listen on. If not specified, an
+                                 available port is chosen automatically
+      --broken-links <MODE>      How to handle broken links: "warn" or
+                                 "error" [default: warn]
+      --meta <KEY> <VALUE>       Override a front-matter value. Repeatable.
+                                 Key may use dot-notation
+  -h, --help                     Print help
 ~~~
 
 ## Использование
@@ -112,6 +120,24 @@ $ docbake build -f markdown -i doc/ru/index.md -o target/doc-out/builder.md -b d
 Флаг `-b` задаёт базовый каталог для разрешения абсолютных путей (по умолчанию
 — каталог входного файла). Флаг `-t` позволяет указать каталог собственной темы.
 
+### Переопределение метаданных {#переопределение-метаданных .unnumbered}
+
+Флаг `--meta KEY VALUE` позволяет переопределить значение из YAML-преамбулы
+документа при сборке. Флаг можно указывать несколько раз. Ключ поддерживает
+точечную нотацию для обращения к вложенным объектам.
+
+~~~
+$ docbake build -f html -i doc.md -o out.html \
+    --meta title "Новый заголовок" \
+    --meta confluence.server "https://other.example.com"
+~~~
+
+Если промежуточный объект не существует, он будет создан автоматически.
+Переопределение действует только на текущую сборку и не изменяет исходный файл.
+
+Флаг `--meta` доступен в командах `build`, `serve`, `watch`
+и `publish confluence`.
+
 ## Предварительный просмотр {.unnumbered}
 
 Команда `serve` запускает локальный HTTP-сервер и открывает документ в браузере.
@@ -142,6 +168,19 @@ $ docbake serve -f html -i doc/ru/index.md -b doc -p 3000
 Сервер работает на `127.0.0.1` (loopback) и доступен только локально. Для
 завершения работы нажмите `Ctrl+C`.
 
+## Отслеживание изменений {.unnumbered}
+
+Команда `watch` выполняет сборку документа и отслеживает изменения файлов
+в базовом каталоге. При обнаружении изменений документ автоматически
+пересобирается. В отличие от `serve`, `watch` не запускает HTTP-сервер,
+а записывает результат в файл или каталог.
+
+~~~
+$ docbake watch -f html -i doc/ru/index.md -o target/doc-out/builder.html -b doc
+~~~
+
+Для завершения работы нажмите `Ctrl+C`.
+
 ## Проверка документа {.unnumbered}
 
 Команда `check` загружает документ, проверяет все ссылки и рендерит все
@@ -167,6 +206,66 @@ Draw.io и Typst-диаграммы проходят через соответс
 
 Как и при сборке, флаги `--theme`, `--cache` и `--no-cache` позволяют
 управлять темой и кешированием артефактов.
+
+## Чтение метаданных {.unnumbered}
+
+Команда `meta` извлекает значение из YAML-преамбулы документа и выводит
+его в `stdout`. Команда предназначена для использования в скриптах.
+
+~~~
+$ docbake meta -i doc/ru/index.md title
+Система подготовки документации
+~~~
+
+Ключ поддерживает точечную нотацию для доступа к вложенным объектам:
+
+~~~
+$ docbake meta -i doc/ru/index.md confluence.server
+https://confluence.example.com
+~~~
+
+Коды возврата:
+
+- **0** — преамбула найдена. Если ключ существует, его значение выводится
+  в `stdout`; если ключ отсутствует, ничего не выводится.
+- **1** — файл не содержит YAML-преамбулы (сообщение об ошибке выводится
+  в `stderr`).
+
+Для составных значений (массивы, словари) выводится компактный JSON.
+
+## Публикация в Confluence {.unnumbered}
+
+Команда `publish confluence` публикует документ в Confluence Server.
+Параметры подключения задаются в YAML-преамбуле документа в виде словаря
+`confluence` (см. [Параметры документа](../document.md#параметры-документа)):
+
+~~~yaml
+confluence:
+  server: https://confluence.example.com
+  space: PROJ
+  path:
+    - "Родительская страница"
+    - "Название документа"
+~~~
+
+Последний элемент `path` используется как заголовок страницы в Confluence,
+остальные — как цепочка страниц-предков. Каждый элемент может быть заголовком
+страницы или литеральным ID в формате `id:12345678`.
+
+Для аутентификации необходимо задать переменную окружения `CONFLUENCE_TOKEN`
+с персональным токеном (PAT) Confluence.
+
+~~~
+$ export CONFLUENCE_TOKEN=...
+$ docbake publish confluence -i doc/ru/index.md -b doc
+~~~
+
+Любой параметр преамбулы можно переопределить флагом `--meta`:
+
+~~~
+$ docbake publish confluence -i doc/ru/index.md -b doc \
+    --meta confluence.server "https://other.example.com"
+~~~
 
 ## Отладка
 

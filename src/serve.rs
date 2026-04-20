@@ -32,6 +32,7 @@ const LIVE_UPDATE_JS: &str = r#"<script>
 })();
 </script>"#;
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn serve_command(
     logger: &DebugDumper,
     cache: &Cache,
@@ -41,6 +42,7 @@ pub(crate) fn serve_command(
     base: Option<&Path>,
     port: u16,
     broken_links: BrokenLinkMode,
+    meta_overrides: &[(String, String)],
 ) -> Result<()> {
     match format {
         OutputFormat::Html | OutputFormat::HtmlMulti => {}
@@ -65,6 +67,7 @@ pub(crate) fn serve_command(
         &base_dir,
         &output_dir,
         broken_links,
+        meta_overrides,
     )?;
 
     // Version counter polled by the live-reload script.
@@ -94,6 +97,7 @@ pub(crate) fn serve_command(
     let source_w = source.clone();
     let base_dir_w = base_dir.clone();
     let output_dir_w = output_dir.clone();
+    let meta_w: Vec<(String, String)> = meta_overrides.to_vec();
     let rebuild_lock = Arc::new(Mutex::new(()));
 
     let _debouncer = {
@@ -111,6 +115,7 @@ pub(crate) fn serve_command(
                     &base_dir_w,
                     &output_dir_w,
                     broken_links,
+                    &meta_w,
                 ) {
                     Ok(()) => {
                         version_w.fetch_add(1, Ordering::Relaxed);
@@ -192,6 +197,7 @@ pub(crate) fn serve_command(
 // Build
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn rebuild(
     logger: &DebugDumper,
     cache: &Cache,
@@ -201,6 +207,7 @@ fn rebuild(
     base_dir: &Path,
     output_dir: &Path,
     broken_links: BrokenLinkMode,
+    meta_overrides: &[(String, String)],
 ) -> Result<()> {
     let doc_name = source
         .file_stem()
@@ -223,7 +230,8 @@ fn rebuild(
     copy_assets(base_dir, output_dir, &document_assets, logger)?;
     theme.copy_assets_to(output_dir)?;
 
-    let metadata = build.document_metadata();
+    let mut metadata = build.document_metadata();
+    crate::apply_meta_overrides(&mut metadata, meta_overrides)?;
     let style = theme.style_css()?;
     let mut template_context = build_template_context(&metadata, style.as_deref())?;
     template_context.insert("live_update", LIVE_UPDATE_JS);
