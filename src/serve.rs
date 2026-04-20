@@ -42,6 +42,7 @@ pub(crate) fn serve_command(
     base: Option<&Path>,
     port: u16,
     broken_links: BrokenLinkMode,
+    meta_drops: &[String],
     meta_overrides: &[(String, String)],
 ) -> Result<()> {
     match format {
@@ -67,6 +68,7 @@ pub(crate) fn serve_command(
         &base_dir,
         &output_dir,
         broken_links,
+        meta_drops,
         meta_overrides,
     )?;
 
@@ -97,6 +99,7 @@ pub(crate) fn serve_command(
     let source_w = source.clone();
     let base_dir_w = base_dir.clone();
     let output_dir_w = output_dir.clone();
+    let meta_drops_w: Vec<String> = meta_drops.to_vec();
     let meta_w: Vec<(String, String)> = meta_overrides.to_vec();
     let rebuild_lock = Arc::new(Mutex::new(()));
 
@@ -115,6 +118,7 @@ pub(crate) fn serve_command(
                     &base_dir_w,
                     &output_dir_w,
                     broken_links,
+                    &meta_drops_w,
                     &meta_w,
                 ) {
                     Ok(()) => {
@@ -207,6 +211,7 @@ fn rebuild(
     base_dir: &Path,
     output_dir: &Path,
     broken_links: BrokenLinkMode,
+    meta_drops: &[String],
     meta_overrides: &[(String, String)],
 ) -> Result<()> {
     let doc_name = source
@@ -231,6 +236,7 @@ fn rebuild(
     theme.copy_assets_to(output_dir)?;
 
     let mut metadata = build.document_metadata();
+    crate::apply_meta_drops(&mut metadata, meta_drops);
     crate::apply_meta_overrides(&mut metadata, meta_overrides)?;
     let style = theme.style_css()?;
     let mut template_context = build_template_context(&metadata, style.as_deref())?;

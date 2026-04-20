@@ -60,6 +60,8 @@ Options:
                                  "error" [default: error]
       --meta <KEY> <VALUE>       Override a front-matter value. Repeatable.
                                  Key may use dot-notation
+      --meta-drop <KEY>          Remove a front-matter key before applying
+                                 --meta overrides. Repeatable
   -h, --help                     Print help
 ~~~
 
@@ -83,6 +85,8 @@ Options:
                                  "error" [default: warn]
       --meta <KEY> <VALUE>       Override a front-matter value. Repeatable.
                                  Key may use dot-notation
+      --meta-drop <KEY>          Remove a front-matter key before applying
+                                 --meta overrides. Repeatable
   -h, --help                     Print help
 ~~~
 
@@ -135,7 +139,31 @@ $ docbake build -f html -i doc.md -o out.html \
 Если промежуточный объект не существует, он будет создан автоматически.
 Переопределение действует только на текущую сборку и не изменяет исходный файл.
 
-Флаг `--meta` доступен в командах `build`, `serve`, `watch`
+Флаг `--meta-drop KEY` удаляет указанный ключ из метаданных **до** применения
+`--meta`. Это полезно для удаления массивов и вложенных объектов, которые
+невозможно переопределить через `--meta`. Ключ также поддерживает точечную
+нотацию.
+
+Например, при смене пространства Confluence необходимо удалить массив `path`,
+чтобы он не указывал на несуществующие страницы в новом пространстве:
+
+~~~
+$ docbake publish confluence -i doc.md \
+    --meta-drop confluence.path \
+    --meta confluence.server "https://other.example.com" \
+    --meta confluence.space "NEWSPACE"
+~~~
+
+Можно также удалить весь вложенный объект и задать его заново:
+
+~~~
+$ docbake publish confluence -i doc.md \
+    --meta-drop confluence \
+    --meta confluence.server "https://other.example.com" \
+    --meta confluence.space "NEWSPACE"
+~~~
+
+Флаги `--meta` и `--meta-drop` доступны в командах `build`, `serve`, `watch`
 и `publish confluence`.
 
 ## Предварительный просмотр {.unnumbered}
@@ -260,11 +288,15 @@ $ export CONFLUENCE_TOKEN=...
 $ docbake publish confluence -i doc/ru/index.md -b doc
 ~~~
 
-Любой параметр преамбулы можно переопределить флагом `--meta`:
+Любой параметр преамбулы можно переопределить флагом `--meta`. Для удаления
+ключей (например, `confluence.path` при смене пространства) используется
+`--meta-drop`:
 
 ~~~
 $ docbake publish confluence -i doc/ru/index.md -b doc \
-    --meta confluence.server "https://other.example.com"
+    --meta-drop confluence.path \
+    --meta confluence.server "https://other.example.com" \
+    --meta confluence.space "NEWSPACE"
 ~~~
 
 ## Отладка

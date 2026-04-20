@@ -24,6 +24,7 @@ pub(crate) fn publish_confluence_command(
     input: &Path,
     base: Option<&Path>,
     broken_links: BrokenLinkMode,
+    meta_drops: &[String],
     meta_overrides: &[(String, String)],
 ) -> Result<()> {
     // ── resolve input / base ────────────────────────────────────────────
@@ -43,6 +44,7 @@ pub(crate) fn publish_confluence_command(
     // ── prepare document graph ──────────────────────────────────────────
     let build = prepare_document(logger, &base_dir, &source, Some(&doc_name), broken_links)?;
     let mut metadata = build.document_metadata();
+    crate::apply_meta_drops(&mut metadata, meta_drops);
     crate::apply_meta_overrides(&mut metadata, meta_overrides)?;
 
     // ── resolve publish parameters ──────────────────────────────────────

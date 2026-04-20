@@ -58,6 +58,7 @@ pub fn run(cli: Cli) -> Result<()> {
             ref base,
             broken_links,
             ref meta,
+            ref meta_drop,
         } => {
             let meta_overrides = parse_meta_pairs(meta)?;
             build_command(
@@ -69,6 +70,7 @@ pub fn run(cli: Cli) -> Result<()> {
                 output,
                 base.as_deref(),
                 broken_links,
+                meta_drop,
                 &meta_overrides,
             )
         }
@@ -95,6 +97,7 @@ pub fn run(cli: Cli) -> Result<()> {
             port,
             broken_links,
             ref meta,
+            ref meta_drop,
         } => {
             let meta_overrides = parse_meta_pairs(meta)?;
             serve::serve_command(
@@ -106,6 +109,7 @@ pub fn run(cli: Cli) -> Result<()> {
                 base.as_deref(),
                 port.unwrap_or(0),
                 broken_links,
+                meta_drop,
                 &meta_overrides,
             )
         }
@@ -116,6 +120,7 @@ pub fn run(cli: Cli) -> Result<()> {
             ref base,
             broken_links,
             ref meta,
+            ref meta_drop,
         } => {
             let meta_overrides = parse_meta_pairs(meta)?;
             watch::watch_command(
@@ -127,6 +132,7 @@ pub fn run(cli: Cli) -> Result<()> {
                 output,
                 base.as_deref(),
                 broken_links,
+                meta_drop,
                 &meta_overrides,
             )
         }
@@ -145,6 +151,7 @@ pub fn run(cli: Cli) -> Result<()> {
                 ref base,
                 broken_links,
                 ref meta,
+                ref meta_drop,
             } => {
                 let meta_overrides = parse_meta_pairs(meta)?;
                 publish::publish_confluence_command(
@@ -154,6 +161,7 @@ pub fn run(cli: Cli) -> Result<()> {
                     input,
                     base.as_deref(),
                     *broken_links,
+                    meta_drop,
                     &meta_overrides,
                 )
             }
@@ -240,6 +248,38 @@ fn parse_meta_pairs(raw: &[String]) -> Result<Vec<(String, String)>> {
         .chunks(2)
         .map(|c| (c[0].clone(), c[1].clone()))
         .collect())
+}
+
+/// Remove keys listed in `--meta-drop` from a metadata map.
+///
+/// Dot-separated keys navigate into nested objects.  For example,
+/// `--meta-drop confluence.path` removes the `path` key from the
+/// `confluence` object.  If any intermediate object does not exist,
+/// the drop is silently ignored.
+pub(crate) fn apply_meta_drops(metadata: &mut JsonMap<String, JsonValue>, drops: &[String]) {
+    'outer: for key in drops {
+        let parts: Vec<&str> = key.split('.').collect();
+        if parts.len() == 1 {
+            metadata.remove(parts[0]);
+            continue;
+        }
+        // Navigate to the parent object, then remove the leaf.
+        let leaf = parts[parts.len() - 1];
+        let parent_parts = &parts[..parts.len() - 1];
+        let mut current: &mut JsonValue = match metadata.get_mut(parent_parts[0]) {
+            Some(v) => v,
+            None => continue,
+        };
+        for &part in &parent_parts[1..] {
+            match current.as_object_mut().and_then(|m| m.get_mut(part)) {
+                Some(v) => current = v,
+                None => continue 'outer,
+            };
+        }
+        if let Some(obj) = current.as_object_mut() {
+            obj.remove(leaf);
+        }
+    }
 }
 
 /// Apply `--meta` overrides to a metadata map.
@@ -398,6 +438,7 @@ pub(crate) fn build_command(
     output: &Path,
     base: Option<&Path>,
     broken_links: BrokenLinkMode,
+    meta_drops: &[String],
     meta_overrides: &[(String, String)],
 ) -> Result<()> {
     let (source, base_dir) = resolve_input_and_base(input, base)?;
@@ -452,6 +493,7 @@ pub(crate) fn build_command(
 
     // ── Build template context from front matter ────────────────────────
     let mut metadata = build.document_metadata();
+    apply_meta_drops(&mut metadata, meta_drops);
     apply_meta_overrides(&mut metadata, meta_overrides)?;
     let style = theme.style_css()?;
     let mut template_context = build_template_context(&metadata, style.as_deref())?;

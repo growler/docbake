@@ -75,6 +75,11 @@ pub enum Command {
         /// Key may use dot-notation (e.g. "confluence.server").
         #[arg(long = "meta", value_names = ["KEY", "VALUE"], num_args = 2)]
         meta: Vec<String>,
+
+        /// Remove a front-matter key before applying --meta overrides.
+        /// Repeatable.  Key may use dot-notation (e.g. "confluence.path").
+        #[arg(long = "meta-drop")]
+        meta_drop: Vec<String>,
     },
 
     /// Dump the document include-graph for a markdown file.
@@ -136,6 +141,11 @@ pub enum Command {
         /// Key may use dot-notation (e.g. "confluence.server").
         #[arg(long = "meta", value_names = ["KEY", "VALUE"], num_args = 2)]
         meta: Vec<String>,
+
+        /// Remove a front-matter key before applying --meta overrides.
+        /// Repeatable.  Key may use dot-notation (e.g. "confluence.path").
+        #[arg(long = "meta-drop")]
+        meta_drop: Vec<String>,
     },
 
     /// Watch source files and rebuild on changes.
@@ -166,6 +176,11 @@ pub enum Command {
         /// Key may use dot-notation (e.g. "confluence.server").
         #[arg(long = "meta", value_names = ["KEY", "VALUE"], num_args = 2)]
         meta: Vec<String>,
+
+        /// Remove a front-matter key before applying --meta overrides.
+        /// Repeatable.  Key may use dot-notation (e.g. "confluence.path").
+        #[arg(long = "meta-drop")]
+        meta_drop: Vec<String>,
     },
 
     /// Validate the document: check all links and render all diagrams.
@@ -234,5 +249,10 @@ pub enum PublishTarget {
         /// Key may use dot-notation (e.g. "confluence.server").
         #[arg(long = "meta", value_names = ["KEY", "VALUE"], num_args = 2)]
         meta: Vec<String>,
+
+        /// Remove a front-matter key before applying --meta overrides.
+        /// Repeatable.  Key may use dot-notation (e.g. "confluence.path").
+        #[arg(long = "meta-drop")]
+        meta_drop: Vec<String>,
     },
 }
