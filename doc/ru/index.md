@@ -3,7 +3,7 @@ title:   Система подготовки документации
 lang:    ru-RU
 version: 0.1.0
 confluence: 
-  server: https://confluence.example.com 
+  server: https://confluence.example.com
   space: SA
   path:
     - id:204837448 
