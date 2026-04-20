@@ -38,7 +38,7 @@ docbake serve -f html -i doc/ru/index.md
 # Live-rebuild сервер (удобнее для PDF)
 docbake watch -f pdf -i doc/ru/index.md -o output.pdf
 
-[В](#в)алидация документа (ссылки + диаграммы)
+Валидация документа (ссылки + диаграммы)
 docbake check -i doc/ru/index.md
 ```
 

@@ -1,3 +1,10 @@
+docbake (0.1.5) unstable; urgency=medium
+
+  * fix: do not scale up SVG when publishing to confluence
+  * feat: use id:<page number> as confluence page parent
+
+ -- Alexey Naidyonov <alexey.naidyonov@gmail.com>  Mon, 20 Apr 2026 13:06:31 +0200
+
 docbake (0.1.4) unstable; urgency=medium
 
   * fix: ci/cd build
