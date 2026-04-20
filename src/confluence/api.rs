@@ -138,6 +138,16 @@ impl ConfluenceClient {
         Ok(None)
     }
 
+    /// Get a page by its content ID.
+    ///
+    /// This is used when the caller already has a numeric page ID
+    /// (e.g. from a `id:12345` reference in `confluence.path`).
+    pub fn get_page_by_id(&self, page_id: &str) -> Result<PageInfo> {
+        let path = format!("/content/{}?expand=version", page_id);
+        let json = self.get_json(&path)?;
+        parse_page_info(&json)
+    }
+
     /// Get the page body in storage format and current version.
     pub fn get_page_body(&self, page_id: &str) -> Result<(String, u32)> {
         let path = format!("/content/{}?expand=body.storage,version", page_id);

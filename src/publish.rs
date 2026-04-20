@@ -177,9 +177,13 @@ pub(crate) fn publish_confluence_command(
 ///   server: https://confluence.example.com
 ///   space: PROJ
 ///   path:
-///     - Parent Page
+///     - Parent Page        # looked up by title
+///     - id:12345678        # or by content ID
 ///     - Page Title
 /// ```
+///
+/// Each element in `path` (and each `--parent` CLI flag) is either a
+/// page title or a literal Confluence content ID prefixed with `id:`.
 ///
 /// All fields are optional; CLI flags take precedence.
 ///
@@ -272,6 +276,11 @@ fn resolve_publish_params(
 ///
 /// Returns `Some(page_id)` of the deepest parent, or `None` if
 /// `parents` is empty (page goes at the space root).
+///
+/// Each element in `parents` is either a page title (looked up via the
+/// Confluence search API) or a literal content ID prefixed with `id:`
+/// (e.g. `"id:12345678"`).  When an `id:` reference is encountered the
+/// page is fetched directly by ID, skipping the title-based search.
 fn resolve_parent_chain(
     client: &ConfluenceClient,
     space: &str,
@@ -280,25 +289,50 @@ fn resolve_parent_chain(
     if parents.is_empty() {
         return Ok(None);
     }
-    // First parent is found by title at the space level.
-    let mut current = client.find_page(space, &parents[0])?.ok_or_else(|| {
-        anyhow::anyhow!("parent page '{}' not found in space {}", parents[0], space)
-    })?;
 
-    // Subsequent parents are found as children of the previous.
-    for title in &parents[1..] {
-        current = client
-            .find_child_by_title(&current.id, title)?
+    // Resolve the first parent — either by ID or by title at the space level.
+    let mut current = if let Some(id) = strip_id_prefix(&parents[0]) {
+        client
+            .get_page_by_id(id)
+            .with_context(|| format!("parent page id:{id} not found"))?
+    } else {
+        client
+            .find_page(space, &parents[0])?
             .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "parent page '{}' not found under '{}'",
-                    title,
-                    current.title
-                )
-            })?;
+                anyhow::anyhow!("parent page '{}' not found in space {}", parents[0], space)
+            })?
+    };
+
+    // Subsequent parents are resolved as children of the previous (by title)
+    // or fetched directly (by ID).
+    for entry in &parents[1..] {
+        current = if let Some(id) = strip_id_prefix(entry) {
+            client
+                .get_page_by_id(id)
+                .with_context(|| format!("parent page id:{id} not found"))?
+        } else {
+            client
+                .find_child_by_title(&current.id, entry)?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "parent page '{}' not found under '{}'",
+                        entry,
+                        current.title
+                    )
+                })?
+        };
     }
 
     Ok(Some(current.id))
+}
+
+/// If `value` starts with `id:` return the remainder (the numeric ID),
+/// otherwise return `None`.
+fn strip_id_prefix(value: &str) -> Option<&str> {
+    value
+        .strip_prefix("id:")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
 }
 
 // ── attachment diffing ──────────────────────────────────────────────────
