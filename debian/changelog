@@ -1,3 +1,13 @@
+docbake (0.1.6) unstable; urgency=medium
+
+  * Add `auth confluence <server>` command for credential management
+  * Add --meta flag to override document metadata from CLI
+  * Add --meta-drop flag to remove metadata keys before rendering
+  * Add --version flag
+  * Accept both String and []String for confluence.path in metadata
+
+ -- Alexey Naidyonov <alexey.naidyonov@gmail.com>  Mon, 20 Apr 2026 17:44:04 +0200
+
 docbake (0.1.5) unstable; urgency=medium
 
   * fix: do not scale up SVG when publishing to confluence
