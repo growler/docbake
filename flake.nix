@@ -62,6 +62,22 @@
             config.allowUnfree = true;
             overlays = [ (import rust-overlay) ];
           };
+          packages = rec {
+            docbake = pkgs.rustPlatform.buildRustPackage {
+              pname = "docbake";
+              version = "0.1.6";
+              src = ./.;
+              cargoLock = {
+                lockFile = ./Cargo.lock;
+              };
+              doCheck = false;
+              meta = {
+                description = "Multi-format Markdown documentation compiler";
+                mainProgram = "docbake";
+              };
+            };
+            default = docbake;
+          };
           devShells.default = pkgs.mkShell {
             buildInputs = [
             ];
