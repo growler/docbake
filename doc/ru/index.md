@@ -2,7 +2,13 @@
 title:   Система подготовки документации
 lang:    ru-RU
 version: 0.1.0
-confluence-space: ~growler
+confluence: 
+  server: https://confluence.example.com 
+  space: ~SA
+  path:
+    - "[3] Ресурсы и материалы для новых людей в команде SA"
+    - "[3] Инструкции и гайдлайны"
+    - "Система публикации документации"
 ---
 # Назначение
 
