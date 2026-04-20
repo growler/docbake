@@ -5,6 +5,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 #[derive(Debug, Parser)]
 #[command(
     name = "docbake",
+    version,
     about = "Produce single-page HTML, multi-page HTML, or PDF from markdown"
 )]
 pub struct Cli {
