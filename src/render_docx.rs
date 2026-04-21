@@ -4,6 +4,12 @@
 //! crate.  The output is designed for upload to Google Drive with automatic
 //! conversion to native Google Docs format.
 //!
+//! The main rendering loop mirrors the Typst renderer: it iterates
+//! **document-level children** (resolving includes recursively) and calls
+//! `render_block` for each top-level block.  `render_block` handles
+//! children internally — this avoids the duplication that would occur with
+//! a flat preorder walk.
+//!
 //! Diagrams are rendered to PNG and embedded as inline images.
 //! Regular images are read from disk and embedded directly.
 
@@ -20,8 +26,9 @@ use rushdown_definition_list::{DefinitionList, Term, TermDefinition};
 use rushdown_fenced_div::FencedDiv;
 
 use crate::cache::Cache;
+use crate::caption::{Caption, CaptionText};
 use crate::diagram::DiagramThemes;
-use crate::graph::PreparedDocument;
+use crate::graph::{DocumentGraph, PreparedDocument};
 use crate::DebugDumper;
 
 /// Numbering ID for unordered (bullet) lists.
@@ -34,6 +41,48 @@ const EMU_PER_PX: u32 = 9525;
 
 /// Maximum image width in EMU (~6 inches at 96 DPI).
 const MAX_IMAGE_WIDTH_EMU: u32 = 5_760_000;
+
+/// Standard body font family.
+const BODY_FONT: &str = "Calibri";
+
+/// Heading font sizes in half-points, indexed by heading level (1-based).
+/// H1=28pt, H2=22pt, H3=16pt, H4=14pt, H5=12pt, H6=11pt.
+const HEADING_SIZES: [usize; 7] = [0, 56, 44, 32, 28, 24, 22];
+
+/// Space before heading in twips, by level.
+const HEADING_BEFORE: [u32; 7] = [0, 360, 280, 240, 200, 200, 200];
+
+/// Space after heading in twips, by level.
+const HEADING_AFTER: [u32; 7] = [0, 120, 100, 80, 60, 60, 60];
+
+/// Code block background fill colour (light grey).
+const CODE_BG: &str = "F2F2F2";
+
+/// Code block border colour (slightly darker grey).
+const CODE_BORDER: &str = "D9D9D9";
+
+/// TOC depth: include heading levels 1..=TOC_DEPTH.
+const TOC_DEPTH: usize = 3;
+
+/// Admonition colour scheme: (border, title_fill, body_fill).
+/// Inspired by the MS Office styling captured from office.docx.
+fn admonition_colors(adm_type: &str) -> (&'static str, &'static str, &'static str) {
+    match adm_type {
+        // green
+        "tip" => ("8DD873", "B3E5A1", "D9F2D0"),
+        // blue
+        "note" => ("6CB4EE", "A6D1F2", "D4E9F9"),
+        // red-orange
+        "warning" => ("E8895C", "F2C4A6", "F9E2D4"),
+        // orange
+        "caution" => ("E8B95C", "F2DCA6", "F9EED4"),
+        // dark red
+        "important" => ("E86C6C", "F2ADAD", "F9D6D6"),
+        // grey-blue
+        "related" => ("8CA1B8", "BCCBDA", "DDE5ED"),
+        _ => ("8CA1B8", "BCCBDA", "DDE5ED"),
+    }
+}
 
 pub(crate) struct DocxRenderer<'a> {
     cache: &'a Cache,
@@ -63,10 +112,59 @@ impl<'a> DocxRenderer<'a> {
     /// Render the document graph to DOCX bytes.
     pub fn render(&self, prepared: &PreparedDocument) -> Result<Vec<u8>> {
         let graph = prepared.graph();
+        let metadata = prepared.document_metadata();
 
-        let mut docx = Docx::new();
+        let body_fonts = RunFonts::new()
+            .ascii(BODY_FONT)
+            .hi_ansi(BODY_FONT)
+            .east_asia(BODY_FONT)
+            .cs(BODY_FONT);
 
-        // Define list numbering styles.
+        let mut docx = Docx::new()
+            // ── Document-wide defaults ──────────────────────────────────
+            // 1.15x line spacing (276/240), 6pt after each paragraph.
+            .default_line_spacing(
+                LineSpacing::new()
+                    .after(120) // 6pt after
+                    .line(276) // 1.15x
+                    .line_rule(LineSpacingType::Auto),
+            )
+            .default_fonts(body_fonts)
+            .default_size(22); // 11pt body text (half-points)
+
+        // ── Register heading styles ─────────────────────────────────────
+        let heading_fonts = RunFonts::new()
+            .ascii("Calibri")
+            .hi_ansi("Calibri")
+            .east_asia("Calibri")
+            .cs("Calibri");
+
+        for level in 1..=6usize {
+            let style_id = format!("Heading{level}");
+            let style_name = format!("heading {level}");
+
+            let spacing = LineSpacing::new()
+                .before(HEADING_BEFORE[level])
+                .after(HEADING_AFTER[level])
+                .line(240) // single-spaced headings
+                .line_rule(LineSpacingType::Auto);
+
+            let mut style = Style::new(&style_id, StyleType::Paragraph)
+                .name(&style_name)
+                .size(HEADING_SIZES[level])
+                .bold()
+                .fonts(heading_fonts.clone())
+                .outline_lvl(level - 1)
+                .line_spacing(spacing);
+
+            if level >= 4 {
+                style = style.color("333333");
+            }
+
+            docx = docx.add_style(style);
+        }
+
+        // ── Define list numbering styles ────────────────────────────────
         docx = docx
             .add_abstract_numbering(
                 AbstractNumbering::new(BULLET_NUMBERING_ID)
@@ -167,19 +265,140 @@ impl<'a> DocxRenderer<'a> {
             .add_numbering(Numbering::new(BULLET_NUMBERING_ID, BULLET_NUMBERING_ID))
             .add_numbering(Numbering::new(ORDERED_NUMBERING_ID, ORDERED_NUMBERING_ID));
 
-        // Walk the document graph in rendered order.
-        for (doc_id, node_ref, heading_shift) in graph.rendered_nodes_preorder() {
-            let doc = graph.document(doc_id);
-            self.render_block(
-                &mut docx,
-                &doc.arena,
-                &doc.source,
-                node_ref,
-                heading_shift,
-                doc_id,
-                graph,
-            )?;
+        // ── Title page ──────────────────────────────────────────────────
+        let title = metadata
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        let subtitle = metadata
+            .get("subtitle")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        let author = metadata
+            .get("author")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        let version_str = metadata
+            .get("version")
+            .map(|v| match v {
+                serde_json::Value::String(s) => s.clone(),
+                serde_json::Value::Number(n) => n.to_string(),
+                _ => String::new(),
+            })
+            .unwrap_or_default();
+        let date = metadata
+            .get("date")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+
+        let cal_fonts = RunFonts::new()
+            .ascii("Calibri")
+            .hi_ansi("Calibri")
+            .east_asia("Calibri")
+            .cs("Calibri");
+
+        let has_title_page = !title.is_empty();
+
+        if has_title_page {
+            for _ in 0..6 {
+                let spacer = Paragraph::new()
+                    .add_run(Run::new().add_text(""))
+                    .line_spacing(LineSpacing::new().after(0).line(240));
+                docx = docx.add_paragraph(spacer);
+            }
+
+            let title_run = Run::new()
+                .add_text(title)
+                .size(60)
+                .bold()
+                .fonts(cal_fonts.clone());
+            docx = docx.add_paragraph(
+                Paragraph::new()
+                    .add_run(title_run)
+                    .align(AlignmentType::Center)
+                    .line_spacing(LineSpacing::new().after(200).line(240)),
+            );
+
+            if !subtitle.is_empty() {
+                let sub_run = Run::new()
+                    .add_text(subtitle)
+                    .size(36)
+                    .color("666666")
+                    .fonts(cal_fonts.clone());
+                docx = docx.add_paragraph(
+                    Paragraph::new()
+                        .add_run(sub_run)
+                        .align(AlignmentType::Center)
+                        .line_spacing(LineSpacing::new().after(200).line(240)),
+                );
+            }
+
+            if !version_str.is_empty() {
+                let ver_run = Run::new()
+                    .add_text(format!("v{version_str}"))
+                    .size(28)
+                    .color("888888")
+                    .fonts(cal_fonts.clone());
+                docx = docx.add_paragraph(
+                    Paragraph::new()
+                        .add_run(ver_run)
+                        .align(AlignmentType::Center)
+                        .line_spacing(LineSpacing::new().after(120).line(240)),
+                );
+            }
+
+            if !author.is_empty() {
+                let author_run = Run::new()
+                    .add_text(author)
+                    .size(24)
+                    .color("666666")
+                    .fonts(cal_fonts.clone());
+                docx = docx.add_paragraph(
+                    Paragraph::new()
+                        .add_run(author_run)
+                        .align(AlignmentType::Center)
+                        .line_spacing(LineSpacing::new().after(120).line(240)),
+                );
+            }
+
+            if !date.is_empty() {
+                let date_run = Run::new()
+                    .add_text(date)
+                    .size(24)
+                    .color("888888")
+                    .fonts(cal_fonts);
+                docx = docx.add_paragraph(
+                    Paragraph::new()
+                        .add_run(date_run)
+                        .align(AlignmentType::Center)
+                        .line_spacing(LineSpacing::new().after(120).line(240)),
+                );
+            }
+
+            docx = docx.add_paragraph(
+                Paragraph::new()
+                    .add_run(Run::new().add_break(BreakType::Page))
+                    .line_spacing(LineSpacing::new().after(0).line(240)),
+            );
         }
+
+        // ── Static table of contents ────────────────────────────────────
+        // Google Docs does not render DOCX field-based TOCs.  Instead we
+        // generate a static TOC by walking the headings and emitting
+        // indented paragraphs with the heading text.
+        self.render_static_toc(&mut docx, graph);
+
+        docx = docx.add_paragraph(
+            Paragraph::new()
+                .add_run(Run::new().add_break(BreakType::Page))
+                .line_spacing(LineSpacing::new().after(0).line(240)),
+        );
+
+        // ── Walk the document graph (top-level children only) ───────────
+        // Mirror the Typst renderer approach: iterate document-level
+        // children, resolve includes recursively, call render_block for
+        // each top-level block.  render_block handles its own children.
+        self.render_graph_document(&mut docx, graph, graph.root_id, 0)?;
 
         // Serialize to bytes.
         let mut buf = Cursor::new(Vec::new());
@@ -187,6 +406,91 @@ impl<'a> DocxRenderer<'a> {
             .pack(&mut buf)
             .map_err(|e| anyhow!("failed to pack DOCX: {e}"))?;
         Ok(buf.into_inner())
+    }
+
+    /// Walk a document occurrence, resolving includes and rendering
+    /// top-level blocks.  Mirrors the Typst renderer's
+    /// `render_graph_document`.
+    fn render_graph_document(
+        &self,
+        docx: &mut Docx,
+        graph: &DocumentGraph,
+        doc_id: usize,
+        heading_shift: usize,
+    ) -> Result<()> {
+        let doc = graph.document(doc_id);
+        for child in doc.arena[doc.doc_ref].children(&doc.arena) {
+            if let Some(entries) = graph.include_entries(doc_id, child) {
+                for entry in entries {
+                    self.render_graph_document(
+                        docx,
+                        graph,
+                        entry.doc_id,
+                        heading_shift + entry.heading_shift,
+                    )?;
+                }
+                continue;
+            }
+            let arena = &doc.arena;
+            let source = &doc.source;
+            self.render_block(docx, arena, source, child, heading_shift, doc_id, graph)?;
+        }
+        Ok(())
+    }
+
+    /// Generate a static table of contents from headings in the graph.
+    fn render_static_toc(&self, docx: &mut Docx, graph: &DocumentGraph) {
+        // "Table of Contents" header — bold, larger, but NOT a heading
+        // style to avoid it appearing in the outline.
+        let toc_header = Paragraph::new()
+            .add_run(Run::new().add_text("Table of Contents").size(32).bold())
+            .line_spacing(LineSpacing::new().after(200).line(240));
+        *docx = std::mem::take(docx).add_paragraph(toc_header);
+
+        // Collect headings from the rendered node preorder walk.
+        for (doc_id, node_ref, heading_shift) in graph.rendered_nodes_preorder() {
+            let doc = graph.document(doc_id);
+            let arena = &doc.arena;
+            let source = &doc.source;
+
+            if let KindData::Heading(_) = arena[node_ref].kind_data() {
+                // Skip admonition title headings.
+                if crate::render_html_common::is_admonition_title_heading(
+                    arena, node_ref, source,
+                ) {
+                    continue;
+                }
+
+                let heading = as_kind_data!(arena[node_ref], Heading);
+                let level = (heading.level() as usize + heading_shift).min(6);
+
+                if level > TOC_DEPTH {
+                    continue;
+                }
+
+                let text = self.collect_inline_text(arena, source, node_ref);
+                if text.is_empty() {
+                    continue;
+                }
+
+                // Indent: 360 twips per level.
+                let indent = ((level - 1) as i32) * 360;
+                let size = match level {
+                    1 => 24, // 12pt bold
+                    2 => 22, // 11pt
+                    _ => 20, // 10pt
+                };
+                let mut run = Run::new().add_text(&text).size(size).color("333333");
+                if level == 1 {
+                    run = run.bold();
+                }
+                let para = Paragraph::new()
+                    .add_run(run)
+                    .indent(Some(indent), None, None, None)
+                    .line_spacing(LineSpacing::new().after(40).before(0).line(240));
+                *docx = std::mem::take(docx).add_paragraph(para);
+            }
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -206,7 +510,7 @@ impl<'a> DocxRenderer<'a> {
                 let level = (heading.level() as usize + heading_shift).min(6);
                 let style = format!("Heading{level}");
 
-                let mut para = Paragraph::new().style(&style);
+                let mut para = Paragraph::new().style(&style).keep_next(true);
                 for child in arena[node_ref].children(arena) {
                     let runs = self.render_inline_runs(arena, source, child, doc_id, graph);
                     for run in runs {
@@ -219,9 +523,8 @@ impl<'a> DocxRenderer<'a> {
                 let mut para = Paragraph::new();
                 for child in arena[node_ref].children(arena) {
                     match arena[child].kind_data() {
-                        KindData::Image(image) => {
-                            let dest = image.destination_str(source);
-                            if let Some(pic) = self.resolve_image(dest) {
+                        KindData::Image(_) => {
+                            if let Some(pic) = self.resolve_graph_image(graph, doc_id, child) {
                                 para = para.add_run(Run::new().add_image(pic));
                             }
                         }
@@ -241,26 +544,9 @@ impl<'a> DocxRenderer<'a> {
                 for line in code_block.value().iter(source) {
                     code_text.push_str(&line);
                 }
-                let mono_fonts = RunFonts::new()
-                    .ascii("Courier New")
-                    .hi_ansi("Courier New")
-                    .east_asia("Courier New")
-                    .cs("Courier New");
-
-                // Render each line as a separate paragraph with monospace font.
-                for line in code_text.lines() {
-                    let run = Run::new()
-                        .add_text(line)
-                        .fonts(mono_fonts.clone())
-                        .size(20); // 10pt (half-points)
-                    let para = Paragraph::new()
-                        .add_run(run)
-                        .line_spacing(LineSpacing::new().line(240));
-                    *docx = std::mem::take(docx).add_paragraph(para);
-                }
+                self.render_code_block_paragraphs(docx, &code_text);
             }
             KindData::Blockquote(_) => {
-                // Render blockquote children with indent.
                 for child in arena[node_ref].children(arena) {
                     self.render_block(
                         docx,
@@ -297,33 +583,203 @@ impl<'a> DocxRenderer<'a> {
                 self.render_table(docx, arena, source, node_ref, doc_id, graph)?;
             }
             KindData::ThematicBreak(_) => {
-                // Insert an empty paragraph as a separator.
                 let para = Paragraph::new().add_run(Run::new().add_text(""));
                 *docx = std::mem::take(docx).add_paragraph(para);
             }
             _ => {
-                // Handle extension nodes (diagrams, fenced divs, etc.)
-                if rushdown::matches_extension_kind!(arena, node_ref, crate::diagram::Diagram) {
+                // Handle extension nodes (diagrams, fenced divs, captions, etc.)
+                if rushdown::matches_extension_kind!(arena, node_ref, Caption) {
+                    self.render_caption(
+                        docx,
+                        arena,
+                        source,
+                        node_ref,
+                        heading_shift,
+                        doc_id,
+                        graph,
+                    )?;
+                } else if rushdown::matches_extension_kind!(
+                    arena,
+                    node_ref,
+                    crate::diagram::Diagram
+                ) {
                     self.render_diagram(docx, arena, source, node_ref)?;
                 } else if rushdown::matches_extension_kind!(arena, node_ref, FencedDiv) {
-                    // Render fenced div children as normal blocks.
-                    for child in arena[node_ref].children(arena) {
-                        self.render_block(
-                            docx,
-                            arena,
-                            source,
-                            child,
-                            heading_shift,
-                            doc_id,
-                            graph,
-                        )?;
-                    }
+                    self.render_fenced_div(
+                        docx,
+                        arena,
+                        source,
+                        node_ref,
+                        heading_shift,
+                        doc_id,
+                        graph,
+                    )?;
                 } else if rushdown::matches_extension_kind!(arena, node_ref, DefinitionList) {
                     self.render_definition_list(docx, arena, source, node_ref, doc_id, graph)?;
                 }
                 // FootnoteDefinition nodes are rendered inline at reference sites — skip here.
             }
         }
+        Ok(())
+    }
+
+    /// Render a fenced div, with special handling for admonition blocks.
+    ///
+    /// For admonition types (`note`, `warning`, `tip`, etc.) the first
+    /// child heading is rendered as bold text (not a real heading) to
+    /// avoid polluting the document outline / TOC.
+    #[allow(clippy::too_many_arguments)]
+    fn render_fenced_div(
+        &self,
+        docx: &mut Docx,
+        arena: &Arena,
+        source: &str,
+        node_ref: NodeRef,
+        heading_shift: usize,
+        doc_id: usize,
+        graph: &crate::graph::DocumentGraph,
+    ) -> Result<()> {
+        let classes = arena[node_ref]
+            .attributes()
+            .get("class")
+            .map(|v| v.str(source))
+            .unwrap_or_default();
+
+        let adm_type = crate::admonition_type(&classes);
+
+        if let Some(adm_type) = adm_type {
+            self.render_admonition(docx, arena, source, node_ref, heading_shift, doc_id, graph, adm_type)?;
+        } else {
+            // Non-admonition fenced div: render children as normal blocks.
+            for child in arena[node_ref].children(arena) {
+                self.render_block(docx, arena, source, child, heading_shift, doc_id, graph)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Render an admonition block with coloured borders and background.
+    ///
+    /// - Title paragraph: darker background, bold text, coloured border.
+    /// - Body paragraphs: lighter background, same coloured border.
+    /// - Adjacent paragraphs with identical borders merge into a
+    ///   continuous box in Word and Google Docs.
+    #[allow(clippy::too_many_arguments)]
+    fn render_admonition(
+        &self,
+        docx: &mut Docx,
+        arena: &Arena,
+        source: &str,
+        node_ref: NodeRef,
+        heading_shift: usize,
+        doc_id: usize,
+        graph: &crate::graph::DocumentGraph,
+        adm_type: &str,
+    ) -> Result<()> {
+        let children: Vec<_> = arena[node_ref].children(arena).collect();
+
+        let (title, skip_first) = if let Some(&first) = children.first() {
+            if matches!(arena[first].kind_data(), KindData::Heading(_)) {
+                let title = self.collect_inline_text(arena, source, first);
+                (title, true)
+            } else {
+                (admonition_default_title(adm_type).to_string(), false)
+            }
+        } else {
+            (admonition_default_title(adm_type).to_string(), false)
+        };
+
+        let (border_color, title_fill, body_fill) = admonition_colors(adm_type);
+
+        let make_borders = |color: &str| {
+            ParagraphBorders::with_empty()
+                .set(
+                    ParagraphBorder::new(ParagraphBorderPosition::Top)
+                        .val(BorderType::Single)
+                        .size(4)
+                        .space(1)
+                        .color(color),
+                )
+                .set(
+                    ParagraphBorder::new(ParagraphBorderPosition::Bottom)
+                        .val(BorderType::Single)
+                        .size(4)
+                        .space(1)
+                        .color(color),
+                )
+                .set(
+                    ParagraphBorder::new(ParagraphBorderPosition::Left)
+                        .val(BorderType::Single)
+                        .size(4)
+                        .space(4)
+                        .color(color),
+                )
+                .set(
+                    ParagraphBorder::new(ParagraphBorderPosition::Right)
+                        .val(BorderType::Single)
+                        .size(4)
+                        .space(4)
+                        .color(color),
+                )
+        };
+
+        let adm_borders = make_borders(border_color);
+
+        // ── Title paragraph ─────────────────────────────────────────
+        let title_run = Run::new().add_text(&title).bold().size(22);
+        let mut title_para = Paragraph::new()
+            .add_run(title_run)
+            .line_spacing(LineSpacing::new().before(120).after(60).line(240));
+        title_para.property = title_para
+            .property
+            .shading(Shading::new().fill(title_fill))
+            .set_borders(adm_borders.clone());
+        *docx = std::mem::take(docx).add_paragraph(title_para);
+
+        // ── Body children ───────────────────────────────────────────
+        // We need to apply the body styling to each body paragraph.
+        // For simple paragraphs we can set borders/shading directly.
+        // For complex blocks (tables, lists, code) we render them
+        // normally (they break out of the box visually, which is
+        // acceptable — same limitation as Google Docs import).
+        let body = if skip_first { &children[1..] } else { &children[..] };
+        let body_borders = adm_borders;
+        for &child in body {
+            match arena[child].kind_data() {
+                KindData::Paragraph(_) => {
+                    let mut para = Paragraph::new();
+                    for inline in arena[child].children(arena) {
+                        match arena[inline].kind_data() {
+                            KindData::Image(_) => {
+                                if let Some(pic) = self.resolve_graph_image(graph, doc_id, inline) {
+                                    para = para.add_run(Run::new().add_image(pic));
+                                }
+                            }
+                            _ => {
+                                let runs =
+                                    self.render_inline_runs(arena, source, inline, doc_id, graph);
+                                for run in runs {
+                                    para = para.add_run(run);
+                                }
+                            }
+                        }
+                    }
+                    para.property = para
+                        .property
+                        .shading(Shading::new().fill(body_fill))
+                        .set_borders(body_borders.clone());
+                    *docx = std::mem::take(docx).add_paragraph(para);
+                }
+                _ => {
+                    // Complex blocks (lists, tables, code, nested divs):
+                    // render normally without the admonition box styling.
+                    self.render_block(
+                        docx, arena, source, child, heading_shift, doc_id, graph,
+                    )?;
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -340,7 +796,6 @@ impl<'a> DocxRenderer<'a> {
             KindData::Text(text) => {
                 let content = text.str(source);
                 let mut runs = vec![Run::new().add_text(content)];
-                // Handle soft/hard breaks that may be attached as qualifiers.
                 if text.has_qualifiers(TextQualifier::HARD_LINE_BREAK) {
                     runs.push(Run::new().add_break(BreakType::TextWrapping));
                 } else if text.has_qualifiers(TextQualifier::SOFT_LINE_BREAK) {
@@ -355,16 +810,17 @@ impl<'a> DocxRenderer<'a> {
                     .hi_ansi("Courier New")
                     .east_asia("Courier New")
                     .cs("Courier New");
-                vec![Run::new().add_text(&*content).fonts(mono_fonts)]
+                vec![Run::new()
+                    .add_text(&*content)
+                    .fonts(mono_fonts)
+                    .shading(Shading::new().fill(CODE_BG))]
             }
             KindData::Emphasis(emphasis) if emphasis.level() == 1 => {
-                // Italic (emph)
                 let children_runs =
                     self.collect_child_runs(arena, source, node_ref, doc_id, graph);
                 children_runs.into_iter().map(|r| r.italic()).collect()
             }
             KindData::Emphasis(_) => {
-                // Bold (strong)
                 let children_runs =
                     self.collect_child_runs(arena, source, node_ref, doc_id, graph);
                 children_runs.into_iter().map(|r| r.bold()).collect()
@@ -376,20 +832,16 @@ impl<'a> DocxRenderer<'a> {
             }
             KindData::Link(link) => {
                 let text = self.collect_inline_text(arena, source, node_ref);
-                // Use the graph-resolved link target if available.
                 let _dest = graph
                     .link_target(doc_id, node_ref)
                     .unwrap_or(link.destination_str(source));
-                // DOCX hyperlinks require special handling via Paragraph::add_hyperlink,
-                // but since we're returning Runs, render as colored underlined text.
                 vec![Run::new()
                     .add_text(&text)
                     .color("0563C1")
                     .underline("single")]
             }
-            KindData::Image(image) => {
-                let dest = image.destination_str(source);
-                if let Some(pic) = self.resolve_image(dest) {
+            KindData::Image(_) => {
+                if let Some(pic) = self.resolve_graph_image(graph, doc_id, node_ref) {
                     vec![Run::new().add_image(pic)]
                 } else {
                     let alt = self.collect_inline_text(arena, source, node_ref);
@@ -400,10 +852,7 @@ impl<'a> DocxRenderer<'a> {
                     }
                 }
             }
-            _ => {
-                // For other inline nodes, collect text from children.
-                self.collect_child_runs(arena, source, node_ref, doc_id, graph)
-            }
+            _ => self.collect_child_runs(arena, source, node_ref, doc_id, graph),
         }
     }
 
@@ -530,7 +979,6 @@ impl<'a> DocxRenderer<'a> {
         let mut header_rows = Vec::new();
         let mut body_rows = Vec::new();
 
-        // Collect header and body rows from the table sections.
         for child in arena[table_ref].children(arena) {
             match arena[child].kind_data() {
                 KindData::TableHeader(_) => {
@@ -548,14 +996,10 @@ impl<'a> DocxRenderer<'a> {
         }
 
         let mut rows = Vec::new();
-
-        // Render header rows (bold text).
         for row_ref in &header_rows {
             let cells = self.render_table_row(docx, arena, source, *row_ref, doc_id, graph, true)?;
             rows.push(TableRow::new(cells));
         }
-
-        // Render body rows.
         for row_ref in &body_rows {
             let cells =
                 self.render_table_row(docx, arena, source, *row_ref, doc_id, graph, false)?;
@@ -565,7 +1009,6 @@ impl<'a> DocxRenderer<'a> {
         if !rows.is_empty() {
             let table = Table::new(rows);
             *docx = std::mem::take(docx).add_table(table);
-            // DOCX requires a paragraph after every table.
             *docx = std::mem::take(docx).add_paragraph(Paragraph::new());
         }
 
@@ -588,7 +1031,6 @@ impl<'a> DocxRenderer<'a> {
             if !matches!(arena[cell_ref].kind_data(), KindData::TableCell(_)) {
                 continue;
             }
-
             let mut para = Paragraph::new();
             for child in arena[cell_ref].children(arena) {
                 let mut runs = self.render_inline_runs(arena, source, child, doc_id, graph);
@@ -616,7 +1058,6 @@ impl<'a> DocxRenderer<'a> {
     ) -> Result<()> {
         for child in arena[node_ref].children(arena) {
             if rushdown::matches_extension_kind!(arena, child, Term) {
-                // Term — render as bold paragraph.
                 let mut para = Paragraph::new();
                 for inline in arena[child].children(arena) {
                     let runs = self.render_inline_runs(arena, source, inline, doc_id, graph);
@@ -626,7 +1067,6 @@ impl<'a> DocxRenderer<'a> {
                 }
                 *docx = std::mem::take(docx).add_paragraph(para);
             } else if rushdown::matches_extension_kind!(arena, child, TermDefinition) {
-                // Definition — render as indented paragraph.
                 for def_child in arena[child].children(arena) {
                     if matches!(arena[def_child].kind_data(), KindData::Paragraph(_)) {
                         let mut para = Paragraph::new().indent(Some(720), None, None, None);
@@ -643,6 +1083,111 @@ impl<'a> DocxRenderer<'a> {
             }
         }
         Ok(())
+    }
+
+    /// Render a Caption extension node.
+    #[allow(clippy::too_many_arguments)]
+    fn render_caption(
+        &self,
+        docx: &mut Docx,
+        arena: &Arena,
+        source: &str,
+        node_ref: NodeRef,
+        heading_shift: usize,
+        doc_id: usize,
+        graph: &crate::graph::DocumentGraph,
+    ) -> Result<()> {
+        let mut caption_text_ref = None;
+        let mut block_ref = None;
+
+        for child in arena[node_ref].children(arena) {
+            if rushdown::matches_extension_kind!(arena, child, CaptionText) {
+                caption_text_ref = Some(child);
+            } else {
+                block_ref = Some(child);
+            }
+        }
+
+        if let Some(ct_ref) = caption_text_ref {
+            let mut para = Paragraph::new().line_spacing(
+                LineSpacing::new()
+                    .after(60)
+                    .line(240),
+            );
+            for child in arena[ct_ref].children(arena) {
+                let runs = self.render_inline_runs(arena, source, child, doc_id, graph);
+                for run in runs {
+                    para = para.add_run(run.italic().color("444444"));
+                }
+            }
+            *docx = std::mem::take(docx).add_paragraph(para);
+        }
+
+        if let Some(br) = block_ref {
+            self.render_block(docx, arena, source, br, heading_shift, doc_id, graph)?;
+        }
+
+        Ok(())
+    }
+
+    /// Render code block lines as monospace paragraphs with grey background
+    /// and a light border box (matching MS Office code block styling).
+    fn render_code_block_paragraphs(&self, docx: &mut Docx, code_text: &str) {
+        let mono_fonts = RunFonts::new()
+            .ascii("Courier New")
+            .hi_ansi("Courier New")
+            .east_asia("Courier New")
+            .cs("Courier New");
+
+        // Paragraph-level borders: light grey single border on all sides.
+        // Adjacent paragraphs with identical borders merge into a
+        // continuous box in Word and Google Docs.
+        let code_borders = ParagraphBorders::with_empty()
+            .set(
+                ParagraphBorder::new(ParagraphBorderPosition::Top)
+                    .val(BorderType::Single)
+                    .size(4)
+                    .space(1)
+                    .color(CODE_BORDER),
+            )
+            .set(
+                ParagraphBorder::new(ParagraphBorderPosition::Bottom)
+                    .val(BorderType::Single)
+                    .size(4)
+                    .space(1)
+                    .color(CODE_BORDER),
+            )
+            .set(
+                ParagraphBorder::new(ParagraphBorderPosition::Left)
+                    .val(BorderType::Single)
+                    .size(4)
+                    .space(4)
+                    .color(CODE_BORDER),
+            )
+            .set(
+                ParagraphBorder::new(ParagraphBorderPosition::Right)
+                    .val(BorderType::Single)
+                    .size(4)
+                    .space(4)
+                    .color(CODE_BORDER),
+            );
+
+        for line in code_text.lines() {
+            let run = Run::new()
+                .add_text(line)
+                .fonts(mono_fonts.clone())
+                .size(20) // 10pt
+                .shading(Shading::new().fill(CODE_BG));
+            let mut para = Paragraph::new()
+                .add_run(run)
+                .line_spacing(LineSpacing::new().before(0).after(0).line(240));
+            // Apply paragraph-level shading and borders.
+            para.property = para
+                .property
+                .shading(Shading::new().fill(CODE_BG))
+                .set_borders(code_borders.clone());
+            *docx = std::mem::take(docx).add_paragraph(para);
+        }
     }
 
     /// Render a diagram to PNG and embed it as an inline image.
@@ -727,7 +1272,7 @@ impl<'a> DocxRenderer<'a> {
                         },
                     )
                 } else {
-                    return Ok(()); // no path, skip
+                    return Ok(());
                 }
             }
         };
@@ -745,7 +1290,6 @@ impl<'a> DocxRenderer<'a> {
             Err(e) => {
                 self.logger
                     .log(format!("warning: diagram rendering failed: {e}"));
-                // Insert error text as fallback.
                 let para = Paragraph::new().add_run(
                     Run::new()
                         .add_text(format!("[Diagram rendering error: {e}]"))
@@ -759,24 +1303,102 @@ impl<'a> DocxRenderer<'a> {
         Ok(())
     }
 
-    /// Resolve an image path and load it as a `Pic`.
-    fn resolve_image(&self, dest: &str) -> Option<Pic> {
-        // Skip external URLs — can't embed them in DOCX directly.
-        if dest.contains("://") {
-            return None;
-        }
-        if dest.is_empty() {
+    /// Look up the graph-resolved image target for an `Image` node and
+    /// load the file as a `Pic`.
+    fn resolve_graph_image(
+        &self,
+        graph: &DocumentGraph,
+        doc_id: usize,
+        node_ref: NodeRef,
+    ) -> Option<Pic> {
+        let target = graph.image_target(doc_id, node_ref)?;
+        self.resolve_image(target)
+    }
+
+    /// Resolve an image from the graph-resolved target path and load it as
+    /// a `Pic`.
+    ///
+    /// `target` is the value returned by `graph.image_target(doc_id,
+    /// node_ref)` — typically `static/<relative-to-base-dir>`.  We strip
+    /// the `static/` prefix and join with `base_dir` to locate the file
+    /// on disk.
+    ///
+    /// Falls back to treating `target` as a raw relative path against
+    /// `base_dir` when the prefix is absent.
+    fn resolve_image(&self, target: &str) -> Option<Pic> {
+        if target.contains("://") || target.is_empty() {
             return None;
         }
 
-        let path = if dest.starts_with('/') {
-            self.base_dir.join(dest.trim_start_matches('/'))
-        } else {
-            self.base_dir.join(dest)
+        let rel = target.strip_prefix("static/").unwrap_or(target);
+        let path = self.base_dir.join(rel);
+
+        let data = match std::fs::read(&path) {
+            Ok(d) => d,
+            Err(e) => {
+                self.logger.log(format!(
+                    "warning: cannot read image {}: {e}",
+                    path.display()
+                ));
+                return None;
+            }
         };
 
-        let data = std::fs::read(&path).ok()?;
-        self.pic_from_png(&data)
+        if data.is_empty() {
+            return None;
+        }
+
+        // SVG images are not supported by the DOCX `image` crate — skip
+        // with a warning.
+        let is_svg = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("svg"))
+            .unwrap_or(false);
+        if is_svg {
+            self.logger.log(format!(
+                "warning: SVG images are not supported in DOCX output, skipping {}",
+                path.display()
+            ));
+            return None;
+        }
+
+        // For PNG data we can use our fast IHDR-based dimension parser.
+        // For other raster formats (JPEG, GIF, …) `Pic::new` from
+        // docx-rs runs the full `image` crate decoder (which also
+        // converts the data to PNG internally).
+        if detect_png_dimensions(&data).is_some() {
+            self.pic_from_png(&data)
+        } else {
+            self.pic_from_raster(&data)
+        }
+    }
+
+    /// Create a `Pic` from a non-PNG raster image (JPEG, GIF, etc.).
+    ///
+    /// Uses `Pic::new` which internally decodes via the `image` crate and
+    /// re-encodes to PNG.  We then apply the `MAX_IMAGE_WIDTH_EMU` cap.
+    fn pic_from_raster(&self, data: &[u8]) -> Option<Pic> {
+        // `Pic::new` panics on unsupported formats — catch that.
+        let result = std::panic::catch_unwind(|| Pic::new(data));
+        match result {
+            Ok(pic) => {
+                // Apply our width cap (Pic stores size as (w_emu, h_emu)).
+                let (w_emu, h_emu) = pic.size;
+                let (final_w, final_h) = if w_emu > MAX_IMAGE_WIDTH_EMU {
+                    let scale = MAX_IMAGE_WIDTH_EMU as f64 / w_emu as f64;
+                    (MAX_IMAGE_WIDTH_EMU, (h_emu as f64 * scale) as u32)
+                } else {
+                    (w_emu, h_emu)
+                };
+                Some(pic.size(final_w, final_h))
+            }
+            Err(_) => {
+                self.logger
+                    .log("warning: failed to decode image for DOCX embedding");
+                None
+            }
+        }
     }
 
     /// Create a `Pic` from raw image bytes with size constraints.
@@ -784,13 +1406,10 @@ impl<'a> DocxRenderer<'a> {
         if data.is_empty() {
             return None;
         }
-        // Try to detect PNG dimensions from header.
         let (w_px, h_px) = detect_png_dimensions(data).unwrap_or((800, 600));
-
         let w_emu = w_px * EMU_PER_PX;
         let h_emu = h_px * EMU_PER_PX;
 
-        // Scale down if wider than max.
         let (final_w, final_h) = if w_emu > MAX_IMAGE_WIDTH_EMU {
             let scale = MAX_IMAGE_WIDTH_EMU as f64 / w_emu as f64;
             (MAX_IMAGE_WIDTH_EMU, (h_emu as f64 * scale) as u32)
@@ -802,14 +1421,24 @@ impl<'a> DocxRenderer<'a> {
     }
 }
 
+/// Default admonition title for a given type.
+fn admonition_default_title(adm_type: &str) -> &'static str {
+    match adm_type {
+        "note" => "Note",
+        "warning" => "Warning",
+        "important" => "Important",
+        "caution" => "Caution",
+        "tip" => "Tip",
+        "related" => "Related",
+        _ => "Note",
+    }
+}
+
 /// Detect PNG image dimensions from the IHDR chunk.
 fn detect_png_dimensions(data: &[u8]) -> Option<(u32, u32)> {
-    // PNG signature: 8 bytes, then IHDR chunk.
-    // IHDR starts at byte 8: 4 bytes length, 4 bytes "IHDR", then 4 bytes width, 4 bytes height.
     if data.len() < 24 {
         return None;
     }
-    // Check PNG signature.
     if &data[0..8] != b"\x89PNG\r\n\x1a\n" {
         return None;
     }
