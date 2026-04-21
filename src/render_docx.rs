@@ -19,6 +19,7 @@ use std::path::Path;
 
 use anyhow::{anyhow, Result};
 use docx_rs::*;
+use resvg::{tiny_skia, usvg};
 use rushdown::as_extension_data;
 use rushdown::as_kind_data;
 use rushdown::ast::{Arena, KindData, NodeRef, TextQualifier};
@@ -41,6 +42,9 @@ const EMU_PER_PX: u32 = 9525;
 
 /// Maximum image width in EMU (~6 inches at 96 DPI).
 const MAX_IMAGE_WIDTH_EMU: u32 = 5_760_000;
+const FRONT_LOGO_WIDTH_EMU: u32 = 1_712_140;
+const FRONT_LOGO_HEIGHT_EMU: u32 = 330_413;
+const ACCENT_ORANGE: &str = "EE721C";
 
 /// Standard body font family.
 const BODY_FONT: &str = "Calibri";
@@ -89,8 +93,10 @@ pub(crate) struct DocxRenderer<'a> {
     diagram_themes: &'a DiagramThemes,
     logger: &'a DebugDumper,
     base_dir: &'a Path,
+    logo_asset: Option<(Vec<u8>, String)>,
     #[allow(dead_code)]
     diagram_counter: RefCell<u32>,
+    first_h1_rendered: RefCell<bool>,
 }
 
 impl<'a> DocxRenderer<'a> {
@@ -99,13 +105,16 @@ impl<'a> DocxRenderer<'a> {
         diagram_themes: &'a DiagramThemes,
         logger: &'a DebugDumper,
         base_dir: &'a Path,
+        logo_asset: Option<(Vec<u8>, String)>,
     ) -> Self {
         Self {
             cache,
             diagram_themes,
             logger,
             base_dir,
+            logo_asset,
             diagram_counter: RefCell::new(0),
+            first_h1_rendered: RefCell::new(false),
         }
     }
 
@@ -291,6 +300,18 @@ impl<'a> DocxRenderer<'a> {
             .and_then(|v| v.as_str())
             .unwrap_or_default();
 
+        if !version_str.is_empty() {
+            docx = docx.custom_property("Version", &version_str);
+        }
+        if !title.is_empty() {
+            docx = docx.header(self.build_default_header(title));
+        } else {
+            docx = docx.header(self.build_default_header(""));
+        }
+        docx = docx
+            .footer(self.build_default_footer(&version_str))
+            .title_pg();
+
         let cal_fonts = RunFonts::new()
             .ascii("Calibri")
             .hi_ansi("Calibri")
@@ -300,10 +321,12 @@ impl<'a> DocxRenderer<'a> {
         let has_title_page = !title.is_empty();
 
         if has_title_page {
-            for _ in 0..6 {
-                let spacer = Paragraph::new()
-                    .add_run(Run::new().add_text(""))
-                    .line_spacing(LineSpacing::new().after(0).line(240));
+            if let Some(logo_pic) = self.resolve_front_logo() {
+                docx = docx.add_paragraph(Paragraph::new().add_run(Run::new().add_image(logo_pic)));
+            }
+
+            for _ in 0..5 {
+                let spacer = Paragraph::new().line_spacing(LineSpacing::new().after(0).line(240));
                 docx = docx.add_paragraph(spacer);
             }
 
@@ -312,12 +335,20 @@ impl<'a> DocxRenderer<'a> {
                 .size(60)
                 .bold()
                 .fonts(cal_fonts.clone());
-            docx = docx.add_paragraph(
-                Paragraph::new()
-                    .add_run(title_run)
-                    .align(AlignmentType::Center)
-                    .line_spacing(LineSpacing::new().after(200).line(240)),
+            let title_border = ParagraphBorders::with_empty().set(
+                ParagraphBorder::new(ParagraphBorderPosition::Bottom)
+                    .val(BorderType::Single)
+                    .size(4)
+                    .space(1)
+                    .color(ACCENT_ORANGE),
             );
+            let mut title_para = Paragraph::new()
+                .add_run(title_run)
+                .align(AlignmentType::Right)
+                .line_spacing(LineSpacing::new().after(200).line(240))
+                .color(ACCENT_ORANGE);
+            title_para.property = title_para.property.set_borders(title_border);
+            docx = docx.add_paragraph(title_para);
 
             if !subtitle.is_empty() {
                 let sub_run = Run::new()
@@ -335,14 +366,20 @@ impl<'a> DocxRenderer<'a> {
 
             if !version_str.is_empty() {
                 let ver_run = Run::new()
-                    .add_text(format!("v{version_str}"))
+                    .add_text("Version ")
+                    .size(28)
+                    .color("888888")
+                    .fonts(cal_fonts.clone());
+                let ver_val_run = Run::new()
+                    .add_text(&version_str)
                     .size(28)
                     .color("888888")
                     .fonts(cal_fonts.clone());
                 docx = docx.add_paragraph(
                     Paragraph::new()
                         .add_run(ver_run)
-                        .align(AlignmentType::Center)
+                        .add_run(ver_val_run)
+                        .align(AlignmentType::Right)
                         .line_spacing(LineSpacing::new().after(120).line(240)),
                 );
             }
@@ -382,11 +419,18 @@ impl<'a> DocxRenderer<'a> {
             );
         }
 
-        // ── Static table of contents ────────────────────────────────────
-        // Google Docs does not render DOCX field-based TOCs.  Instead we
-        // generate a static TOC by walking the headings and emitting
-        // indented paragraphs with the heading text.
-        self.render_static_toc(&mut docx, graph);
+        // ── Field-based table of contents ───────────────────────────────
+        // Google Docs updates this field and keeps links/page refs intact.
+        let mut toc = TableOfContents::new()
+            .heading_styles_range(1, TOC_DEPTH)
+            .hyperlink()
+            .without_sdt();
+        toc.instr = toc
+            .instr
+            .clone()
+            .hide_tab_and_page_numbers_in_webview()
+            .use_applied_paragraph_line_level();
+        docx = docx.add_table_of_contents(toc);
 
         docx = docx.add_paragraph(
             Paragraph::new()
@@ -439,6 +483,7 @@ impl<'a> DocxRenderer<'a> {
     }
 
     /// Generate a static table of contents from headings in the graph.
+    #[allow(dead_code)]
     fn render_static_toc(&self, docx: &mut Docx, graph: &DocumentGraph) {
         // "Table of Contents" header — bold, larger, but NOT a heading
         // style to avoid it appearing in the outline.
@@ -455,9 +500,7 @@ impl<'a> DocxRenderer<'a> {
 
             if let KindData::Heading(_) = arena[node_ref].kind_data() {
                 // Skip admonition title headings.
-                if crate::render_html_common::is_admonition_title_heading(
-                    arena, node_ref, source,
-                ) {
+                if crate::render_html_common::is_admonition_title_heading(arena, node_ref, source) {
                     continue;
                 }
 
@@ -511,6 +554,18 @@ impl<'a> DocxRenderer<'a> {
                 let style = format!("Heading{level}");
 
                 let mut para = Paragraph::new().style(&style).keep_next(true);
+                if level == 1 && !*self.first_h1_rendered.borrow() {
+                    let border = ParagraphBorders::with_empty().set(
+                        ParagraphBorder::new(ParagraphBorderPosition::Bottom)
+                            .val(BorderType::Single)
+                            .size(4)
+                            .space(1)
+                            .color(ACCENT_ORANGE),
+                    );
+                    para.property = para.property.set_borders(border);
+                    para = para.color(ACCENT_ORANGE);
+                    *self.first_h1_rendered.borrow_mut() = true;
+                }
                 for child in arena[node_ref].children(arena) {
                     let runs = self.render_inline_runs(arena, source, child, doc_id, graph);
                     for run in runs {
@@ -529,8 +584,7 @@ impl<'a> DocxRenderer<'a> {
                             }
                         }
                         _ => {
-                            let runs =
-                                self.render_inline_runs(arena, source, child, doc_id, graph);
+                            let runs = self.render_inline_runs(arena, source, child, doc_id, graph);
                             for run in runs {
                                 para = para.add_run(run);
                             }
@@ -548,15 +602,7 @@ impl<'a> DocxRenderer<'a> {
             }
             KindData::Blockquote(_) => {
                 for child in arena[node_ref].children(arena) {
-                    self.render_block(
-                        docx,
-                        arena,
-                        source,
-                        child,
-                        heading_shift,
-                        doc_id,
-                        graph,
-                    )?;
+                    self.render_block(docx, arena, source, child, heading_shift, doc_id, graph)?;
                 }
             }
             KindData::List(list) => {
@@ -648,7 +694,16 @@ impl<'a> DocxRenderer<'a> {
         let adm_type = crate::admonition_type(&classes);
 
         if let Some(adm_type) = adm_type {
-            self.render_admonition(docx, arena, source, node_ref, heading_shift, doc_id, graph, adm_type)?;
+            self.render_admonition(
+                docx,
+                arena,
+                source,
+                node_ref,
+                heading_shift,
+                doc_id,
+                graph,
+                adm_type,
+            )?;
         } else {
             // Non-admonition fenced div: render children as normal blocks.
             for child in arena[node_ref].children(arena) {
@@ -742,7 +797,11 @@ impl<'a> DocxRenderer<'a> {
         // For complex blocks (tables, lists, code) we render them
         // normally (they break out of the box visually, which is
         // acceptable — same limitation as Google Docs import).
-        let body = if skip_first { &children[1..] } else { &children[..] };
+        let body = if skip_first {
+            &children[1..]
+        } else {
+            &children[..]
+        };
         let body_borders = adm_borders;
         for &child in body {
             match arena[child].kind_data() {
@@ -773,9 +832,7 @@ impl<'a> DocxRenderer<'a> {
                 _ => {
                     // Complex blocks (lists, tables, code, nested divs):
                     // render normally without the admonition box styling.
-                    self.render_block(
-                        docx, arena, source, child, heading_shift, doc_id, graph,
-                    )?;
+                    self.render_block(docx, arena, source, child, heading_shift, doc_id, graph)?;
                 }
             }
         }
@@ -816,18 +873,15 @@ impl<'a> DocxRenderer<'a> {
                     .shading(Shading::new().fill(CODE_BG))]
             }
             KindData::Emphasis(emphasis) if emphasis.level() == 1 => {
-                let children_runs =
-                    self.collect_child_runs(arena, source, node_ref, doc_id, graph);
+                let children_runs = self.collect_child_runs(arena, source, node_ref, doc_id, graph);
                 children_runs.into_iter().map(|r| r.italic()).collect()
             }
             KindData::Emphasis(_) => {
-                let children_runs =
-                    self.collect_child_runs(arena, source, node_ref, doc_id, graph);
+                let children_runs = self.collect_child_runs(arena, source, node_ref, doc_id, graph);
                 children_runs.into_iter().map(|r| r.bold()).collect()
             }
             KindData::Strikethrough(_) => {
-                let children_runs =
-                    self.collect_child_runs(arena, source, node_ref, doc_id, graph);
+                let children_runs = self.collect_child_runs(arena, source, node_ref, doc_id, graph);
                 children_runs.into_iter().map(|r| r.strike()).collect()
             }
             KindData::Link(link) => {
@@ -997,7 +1051,8 @@ impl<'a> DocxRenderer<'a> {
 
         let mut rows = Vec::new();
         for row_ref in &header_rows {
-            let cells = self.render_table_row(docx, arena, source, *row_ref, doc_id, graph, true)?;
+            let cells =
+                self.render_table_row(docx, arena, source, *row_ref, doc_id, graph, true)?;
             rows.push(TableRow::new(cells));
         }
         for row_ref in &body_rows {
@@ -1109,11 +1164,7 @@ impl<'a> DocxRenderer<'a> {
         }
 
         if let Some(ct_ref) = caption_text_ref {
-            let mut para = Paragraph::new().line_spacing(
-                LineSpacing::new()
-                    .after(60)
-                    .line(240),
-            );
+            let mut para = Paragraph::new().line_spacing(LineSpacing::new().after(60).line(240));
             for child in arena[ct_ref].children(arena) {
                 let runs = self.render_inline_runs(arena, source, child, doc_id, graph);
                 for run in runs {
@@ -1235,25 +1286,17 @@ impl<'a> DocxRenderer<'a> {
             crate::diagram::DiagramType::D2 => {
                 let themed =
                     crate::diagram::apply_d2_theme(&src, self.diagram_themes.d2.as_deref());
-                crate::diagram::cached_render_bytes(
-                    self.cache,
-                    themed.as_bytes(),
-                    "d2.png",
-                    || {
-                        crate::diagram::render_d2_png(None, &themed)
-                            .map_err(|e| anyhow!("D2 PNG rendering: {e}"))
-                    },
-                )
+                crate::diagram::cached_render_bytes(self.cache, themed.as_bytes(), "d2.png", || {
+                    crate::diagram::render_d2_png(None, &themed)
+                        .map_err(|e| anyhow!("D2 PNG rendering: {e}"))
+                })
             }
-            crate::diagram::DiagramType::Typst => crate::diagram::cached_render_bytes(
-                self.cache,
-                src.as_bytes(),
-                "typst.png",
-                || {
+            crate::diagram::DiagramType::Typst => {
+                crate::diagram::cached_render_bytes(self.cache, src.as_bytes(), "typst.png", || {
                     crate::diagram::render_typst_png(None, &src)
                         .map_err(|e| anyhow!("Typst PNG rendering: {e}"))
-                },
-            ),
+                })
+            }
             crate::diagram::DiagramType::DrawIo => {
                 if let Some(path) = diagram.drawio_path() {
                     let cache_key = crate::diagram::drawio_cache_key(path, diagram.drawio_page());
@@ -1301,6 +1344,140 @@ impl<'a> DocxRenderer<'a> {
         }
 
         Ok(())
+    }
+
+    fn build_default_header(&self, title: &str) -> Header {
+        let header_border = ParagraphBorders::with_empty().set(
+            ParagraphBorder::new(ParagraphBorderPosition::Bottom)
+                .val(BorderType::Single)
+                .size(4)
+                .space(1)
+                .color(ACCENT_ORANGE),
+        );
+
+        let mut para = Paragraph::new();
+        para.property = para
+            .property
+            .style("Header")
+            .set_borders(header_border)
+            .add_tab(Tab::new().val(TabValueType::Center).pos(4680))
+            .add_tab(Tab::new().val(TabValueType::Right).pos(9360));
+
+        let run_style = Run::new().color(ACCENT_ORANGE).size(18);
+
+        para = para
+            .add_run(run_style.clone().add_tab())
+            .add_run(run_style.clone().add_tab())
+            .add_run(
+                run_style
+                    .clone()
+                    .add_field_char(FieldCharType::Begin, false),
+            )
+            .add_run(run_style.clone().add_instr_text(InstrText::Unsupported(
+                " TITLE  \\* MERGEFORMAT ".to_string(),
+            )))
+            .add_run(
+                run_style
+                    .clone()
+                    .add_field_char(FieldCharType::Separate, false),
+            );
+
+        if !title.is_empty() {
+            para = para.add_run(run_style.clone().add_text(title));
+        }
+
+        para = para.add_run(run_style.add_field_char(FieldCharType::End, false));
+
+        Header::new().add_paragraph(para)
+    }
+
+    fn build_default_footer(&self, version_str: &str) -> Footer {
+        let footer_border = ParagraphBorders::with_empty().set(
+            ParagraphBorder::new(ParagraphBorderPosition::Top)
+                .val(BorderType::Single)
+                .size(4)
+                .space(1)
+                .color(ACCENT_ORANGE),
+        );
+
+        let mut para = Paragraph::new();
+        para.property = para
+            .property
+            .style("Footer")
+            .set_borders(footer_border)
+            .add_tab(Tab::new().val(TabValueType::Center).pos(4680))
+            .add_tab(Tab::new().val(TabValueType::Right).pos(9360));
+
+        let run_style = Run::new().color(ACCENT_ORANGE).size(18);
+
+        para = para
+            .add_run(
+                run_style
+                    .clone()
+                    .add_field_char(FieldCharType::Begin, false),
+            )
+            .add_run(run_style.clone().add_instr_text(InstrText::Unsupported(
+                " DOCPROPERTY Version \\* MERGEFORMAT ".to_string(),
+            )))
+            .add_run(
+                run_style
+                    .clone()
+                    .add_field_char(FieldCharType::Separate, false),
+            );
+
+        if !version_str.is_empty() {
+            para = para.add_run(run_style.clone().add_text(version_str));
+        }
+
+        para = para
+            .add_run(run_style.clone().add_field_char(FieldCharType::End, false))
+            .add_run(run_style.clone().add_tab())
+            .add_run(run_style.clone().add_tab())
+            .add_run(
+                run_style
+                    .clone()
+                    .add_field_char(FieldCharType::Begin, false),
+            )
+            .add_run(
+                run_style
+                    .clone()
+                    .add_instr_text(InstrText::PAGE(InstrPAGE::new())),
+            )
+            .add_run(
+                run_style
+                    .clone()
+                    .add_field_char(FieldCharType::Separate, false),
+            )
+            .add_run(run_style.clone().add_text("1"))
+            .add_run(run_style.add_field_char(FieldCharType::End, false));
+
+        Footer::new().add_paragraph(para)
+    }
+
+    fn resolve_front_logo(&self) -> Option<Pic> {
+        let (bytes, ext) = self.logo_asset.as_ref()?;
+        let ext = ext.to_ascii_lowercase();
+
+        let pic = if ext == "svg" {
+            let png = self.svg_to_png(bytes)?;
+            self.pic_from_png(&png)?
+        } else if ext == "png" {
+            self.pic_from_png(bytes)?
+        } else {
+            self.pic_from_raster(bytes)?
+        };
+
+        Some(pic.size(FRONT_LOGO_WIDTH_EMU, FRONT_LOGO_HEIGHT_EMU))
+    }
+
+    fn svg_to_png(&self, svg_data: &[u8]) -> Option<Vec<u8>> {
+        let opt = usvg::Options::default();
+        let tree = usvg::Tree::from_data(svg_data, &opt).ok()?;
+        let size = tree.size().to_int_size();
+        let mut pixmap = tiny_skia::Pixmap::new(size.width(), size.height())?;
+        let mut pmut = pixmap.as_mut();
+        resvg::render(&tree, tiny_skia::Transform::default(), &mut pmut);
+        pixmap.encode_png().ok()
     }
 
     /// Look up the graph-resolved image target for an `Image` node and

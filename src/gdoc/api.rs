@@ -123,8 +123,8 @@ impl GoogleDriveClient {
     ) -> Result<DriveFile> {
         let boundary = format!("docbake_gdoc_{:016x}", rand_u64());
 
-        let metadata_json = serde_json::to_string(metadata)
-            .context("failed to serialize file metadata")?;
+        let metadata_json =
+            serde_json::to_string(metadata).context("failed to serialize file metadata")?;
 
         // Build multipart/related body (RFC 2387).
         let mut body = Vec::with_capacity(metadata_json.len() + docx_data.len() + 256);
@@ -161,9 +161,7 @@ impl GoogleDriveClient {
         let status = resp.status().as_u16();
         if status >= 400 {
             let err_body: String = resp.into_body().read_to_string().unwrap_or_default();
-            bail!(
-                "Google Drive API error (HTTP {status}): {err_body}"
-            );
+            bail!("Google Drive API error (HTTP {status}): {err_body}");
         }
 
         let file: DriveFile = resp
@@ -205,7 +203,7 @@ pub(crate) fn parse_folder_id(url_or_id: &str) -> &str {
     // Try to find "/folders/" in the URL.
     if let Some(idx) = url_or_id.find("/folders/") {
         let after = &url_or_id[idx + 9..]; // skip "/folders/"
-        // The ID ends at the next '/', '?', or '#' (or end of string).
+                                           // The ID ends at the next '/', '?', or '#' (or end of string).
         let end = after
             .find(|c: char| c == '/' || c == '?' || c == '#')
             .unwrap_or(after.len());

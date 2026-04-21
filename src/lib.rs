@@ -88,10 +88,7 @@ pub fn run(cli: Cli) -> Result<()> {
             print!("{}", build.parse_dump()?);
             Ok(())
         }
-        cli::Command::Meta {
-            ref input,
-            ref key,
-        } => meta_command(input, key),
+        cli::Command::Meta { ref input, ref key } => meta_command(input, key),
         cli::Command::Serve {
             format,
             ref input,
@@ -215,7 +212,9 @@ fn auth_confluence(server: &str, token: Option<&str>) -> Result<()> {
                 eprint!("Enter Confluence token for {}: ", server);
             }
             let mut line = String::new();
-            stdin.lock().read_line(&mut line)
+            stdin
+                .lock()
+                .read_line(&mut line)
                 .context("failed to read token from stdin")?;
             let trimmed = line.trim().to_string();
             if trimmed.is_empty() {
@@ -248,10 +247,7 @@ fn auth_gdoc(service_account: Option<&Path>) -> Result<()> {
             .with_context(|| format!("invalid service account JSON in {}", path.display()))?;
 
         credentials::store_gdoc_service_account(&key_json)?;
-        eprintln!(
-            "Service account key stored from {}",
-            path.display()
-        );
+        eprintln!("Service account key stored from {}", path.display());
     } else {
         let cred = gdoc::auth::oauth2_authorization_flow()?;
         let cred_json =
@@ -357,11 +353,7 @@ pub(crate) fn apply_meta_overrides(
                 .entry(part)
                 .or_insert_with(|| JsonValue::Object(JsonMap::new()));
             target = entry.as_object_mut().ok_or_else(|| {
-                anyhow!(
-                    "--meta: '{}' is not an object when setting '{}'",
-                    part,
-                    key
-                )
+                anyhow!("--meta: '{}' is not an object when setting '{}'", part, key)
             })?;
         }
         if let Some(leaf) = parts.last() {
@@ -384,8 +376,8 @@ fn meta_command(input: &Path, key: &str) -> Result<()> {
 
     use crate::graph::types::meta_to_json;
 
-    let content = fs::read_to_string(input)
-        .with_context(|| format!("failed to read {}", input.display()))?;
+    let content =
+        fs::read_to_string(input).with_context(|| format!("failed to read {}", input.display()))?;
 
     // Check for front matter presence before parsing.
     if graph::build::split_front_matter(&content).0.is_none() {
@@ -537,8 +529,9 @@ pub(crate) fn build_command(
             mermaid: theme.mermaid_theme()?,
             d2: theme.d2_theme()?,
         };
+        let logo_asset = theme.logo_asset()?;
         let renderer =
-            render_docx::DocxRenderer::new(cache, &diagram_themes, logger, &base_dir);
+            render_docx::DocxRenderer::new(cache, &diagram_themes, logger, &base_dir, logo_asset);
         let docx_bytes = renderer.render(&build)?;
         fs::write(&output_file, docx_bytes)
             .with_context(|| format!("failed to write {}", output_file.display()))?;

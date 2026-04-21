@@ -57,6 +57,31 @@ pub(crate) enum Theme {
 }
 
 impl Theme {
+    /// Return logo bytes from theme assets (`assets/logo.*`) for DOCX front page.
+    pub fn logo_asset(&self) -> Result<Option<(Vec<u8>, String)>> {
+        match self {
+            Theme::Default => Ok(Some((DEFAULT_LOGO_SVG.to_vec(), "svg".to_string()))),
+            Theme::Custom(dir) => {
+                let assets = dir.join(ASSETS_DIR);
+                let candidates = [
+                    ("logo.svg", "svg"),
+                    ("logo.png", "png"),
+                    ("logo.jpg", "jpg"),
+                    ("logo.jpeg", "jpeg"),
+                ];
+                for (name, ext) in candidates {
+                    let path = assets.join(name);
+                    if path.exists() {
+                        let data = fs::read(&path)
+                            .with_context(|| format!("failed to read {}", path.display()))?;
+                        return Ok(Some((data, ext.to_string())));
+                    }
+                }
+                Ok(None)
+            }
+        }
+    }
+
     /// Return the Tera template content for the given output format.
     pub fn template_for(&self, format: OutputFormat) -> Result<String> {
         let name = match format {

@@ -295,11 +295,9 @@ fn resolve_parent_chain(
             .get_page_by_id(id)
             .with_context(|| format!("parent page id:{id} not found"))?
     } else {
-        client
-            .find_page(space, &parents[0])?
-            .ok_or_else(|| {
-                anyhow::anyhow!("parent page '{}' not found in space {}", parents[0], space)
-            })?
+        client.find_page(space, &parents[0])?.ok_or_else(|| {
+            anyhow::anyhow!("parent page '{}' not found in space {}", parents[0], space)
+        })?
     };
 
     // Subsequent parents are resolved as children of the previous (by title)
@@ -429,9 +427,16 @@ pub(crate) fn publish_gdoc_command(
         mermaid: theme.mermaid_theme()?,
         d2: theme.d2_theme()?,
     };
+    let logo_asset = theme.logo_asset()?;
 
     // ── render to DOCX ──────────────────────────────────────────────────
-    let renderer = crate::render_docx::DocxRenderer::new(cache, &diagram_themes, logger, &base_dir);
+    let renderer = crate::render_docx::DocxRenderer::new(
+        cache,
+        &diagram_themes,
+        logger,
+        &base_dir,
+        logo_asset,
+    );
     let docx_bytes = renderer.render(&build)?;
 
     logger.log(format!("rendered: {} bytes DOCX", docx_bytes.len()));
@@ -589,7 +594,7 @@ fn split_front_matter_for_edit(content: &str) -> Option<(&str, &str)> {
     let after_first = after_first.strip_prefix('\n').unwrap_or(after_first);
     let end = after_first.find("\n---")?;
     let fm_end = 3 + (content.len() - after_first.len()) + end + 4; // include "\n---"
-    // Skip the newline after closing ---
+                                                                    // Skip the newline after closing ---
     let rest_start = if content.len() > fm_end && content.as_bytes()[fm_end] == b'\n' {
         fm_end + 1
     } else {

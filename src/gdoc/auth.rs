@@ -28,7 +28,8 @@ const DRIVE_FILE_SCOPE: &str = "https://www.googleapis.com/auth/drive.file";
 /// secret confidentiality.
 ///
 /// Replace these with your own values from Google Cloud Console.
-const OAUTH_CLIENT_ID: &str = "YOUR_CLIENT_ID.apps.googleusercontent.com";
+const OAUTH_CLIENT_ID: &str =
+    "YOUR_CLIENT_ID.apps.googleusercontent.com";
 const OAUTH_CLIENT_SECRET: &str = "YOUR_CLIENT_SECRET";
 
 // ── Service account types ───────────────────────────────────────────────
@@ -189,15 +190,15 @@ pub(crate) fn oauth2_authorization_flow() -> Result<OAuthCredential> {
         <h2>Authentication successful</h2>\
         <p>You can close this tab and return to the terminal.</p>\
         </body></html>";
-    let response = tiny_http::Response::from_string(response_html)
-        .with_header("Content-Type: text/html".parse::<tiny_http::Header>().unwrap());
+    let response = tiny_http::Response::from_string(response_html).with_header(
+        "Content-Type: text/html"
+            .parse::<tiny_http::Header>()
+            .unwrap(),
+    );
     let _ = request.respond(response);
 
     // Parse the callback URL to extract code and state.
-    let query = url
-        .split_once('?')
-        .map(|(_, q)| q)
-        .unwrap_or_default();
+    let query = url.split_once('?').map(|(_, q)| q).unwrap_or_default();
 
     let mut code = None;
     let mut returned_state = None;
@@ -324,8 +325,7 @@ fn generate_code_challenge(verifier: &str) -> String {
 
 /// Base64url encode without padding (RFC 4648 §5).
 fn base64url_encode(data: &[u8]) -> String {
-    const TABLE: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     let mut out = String::with_capacity((data.len() * 4 + 2) / 3);
     let mut i = 0;
     while i + 2 < data.len() {

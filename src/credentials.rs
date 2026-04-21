@@ -48,8 +48,7 @@ type CredentialStore = BTreeMap<String, BTreeMap<String, String>>;
 ///
 /// Does **not** create the file or parent directories.
 fn credentials_file_path() -> Result<PathBuf> {
-    let config =
-        dirs::config_dir().context("failed to determine platform config directory")?;
+    let config = dirs::config_dir().context("failed to determine platform config directory")?;
     Ok(config.join(APP_CONFIG_DIR).join(CREDENTIALS_FILE))
 }
 
@@ -89,8 +88,8 @@ fn read_store() -> Result<CredentialStore> {
     if !path.exists() {
         return Ok(CredentialStore::new());
     }
-    let data = fs::read_to_string(&path)
-        .with_context(|| format!("failed to read {}", path.display()))?;
+    let data =
+        fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
     let store: CredentialStore = serde_json::from_str(&data)
         .with_context(|| format!("failed to parse {}", path.display()))?;
     Ok(store)
@@ -104,8 +103,7 @@ fn write_store(store: &CredentialStore) -> Result<()> {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
-    let json =
-        serde_json::to_string_pretty(store).context("failed to serialise credentials")?;
+    let json = serde_json::to_string_pretty(store).context("failed to serialise credentials")?;
     fs::write(&path, json.as_bytes())
         .with_context(|| format!("failed to write {}", path.display()))?;
 
@@ -137,10 +135,7 @@ pub(crate) fn store_token(server: &str, token: &str) -> Result<()> {
 pub(crate) fn load_token(server: &str) -> Result<Option<String>> {
     let key = normalize_server(server);
     let store = read_store()?;
-    Ok(store
-        .get(CONFLUENCE_KEY)
-        .and_then(|m| m.get(&key))
-        .cloned())
+    Ok(store.get(CONFLUENCE_KEY).and_then(|m| m.get(&key)).cloned())
 }
 
 // ── Google Docs credential operations ────────────────────────────────────
@@ -177,10 +172,7 @@ pub(crate) fn store_gdoc_oauth(credential_json: &str) -> Result<()> {
 /// Load a stored Google Docs OAuth2 credential (JSON string).
 pub(crate) fn load_gdoc_oauth() -> Result<Option<String>> {
     let store = read_store()?;
-    Ok(store
-        .get(GDOC_KEY)
-        .and_then(|m| m.get("oauth"))
-        .cloned())
+    Ok(store.get(GDOC_KEY).and_then(|m| m.get("oauth")).cloned())
 }
 
 /// Resolve a Google Docs access token.
@@ -216,8 +208,8 @@ pub(crate) fn resolve_gdoc_access_token() -> Result<String> {
 
     // 3. Stored OAuth2 refresh token.
     if let Some(cred_json) = load_gdoc_oauth()? {
-        let cred: auth::OAuthCredential = serde_json::from_str(&cred_json)
-            .context("failed to parse stored OAuth credential")?;
+        let cred: auth::OAuthCredential =
+            serde_json::from_str(&cred_json).context("failed to parse stored OAuth credential")?;
 
         // Check if cached access token is still valid (with 5 min buffer).
         let now = std::time::SystemTime::now()
@@ -225,9 +217,7 @@ pub(crate) fn resolve_gdoc_access_token() -> Result<String> {
             .unwrap_or_default()
             .as_secs();
 
-        if let (Some(ref access_token), Some(expires_at)) =
-            (&cred.access_token, cred.expires_at)
-        {
+        if let (Some(ref access_token), Some(expires_at)) = (&cred.access_token, cred.expires_at) {
             if expires_at > now + 300 {
                 return Ok(access_token.clone());
             }
@@ -358,13 +348,10 @@ mod tests {
         // Simulate store_token / load_token using the raw store helpers
         // against a controlled path.
         let mut store = CredentialStore::new();
-        store
-            .entry(CONFLUENCE_KEY.to_string())
-            .or_default()
-            .insert(
-                normalize_server("https://confluence.example.com"),
-                "secret-token".to_string(),
-            );
+        store.entry(CONFLUENCE_KEY.to_string()).or_default().insert(
+            normalize_server("https://confluence.example.com"),
+            "secret-token".to_string(),
+        );
 
         let json = serde_json::to_string_pretty(&store).unwrap();
         fs::write(&path, json.as_bytes()).unwrap();
@@ -386,10 +373,10 @@ mod tests {
 
         // Pre-populate with a hypothetical "jira" service.
         let mut store = CredentialStore::new();
-        store
-            .entry("jira".to_string())
-            .or_default()
-            .insert("https://jira.example.com".to_string(), "jira-tok".to_string());
+        store.entry("jira".to_string()).or_default().insert(
+            "https://jira.example.com".to_string(),
+            "jira-tok".to_string(),
+        );
 
         let json = serde_json::to_string_pretty(&store).unwrap();
         fs::write(&path, json.as_bytes()).unwrap();
@@ -400,7 +387,10 @@ mod tests {
         loaded
             .entry(CONFLUENCE_KEY.to_string())
             .or_default()
-            .insert("https://conf.example.com".to_string(), "conf-tok".to_string());
+            .insert(
+                "https://conf.example.com".to_string(),
+                "conf-tok".to_string(),
+            );
 
         let json2 = serde_json::to_string_pretty(&loaded).unwrap();
         fs::write(&path, json2.as_bytes()).unwrap();
