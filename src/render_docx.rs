@@ -14,6 +14,7 @@
 //! Regular images are read from disk and embedded directly.
 
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::io::Cursor;
 use std::path::Path;
 
@@ -96,7 +97,8 @@ pub(crate) struct DocxRenderer<'a> {
     logo_asset: Option<(Vec<u8>, String)>,
     #[allow(dead_code)]
     diagram_counter: RefCell<u32>,
-    first_h1_rendered: RefCell<bool>,
+    toc_heading_keys: RefCell<VecDeque<String>>,
+    bookmark_counter: RefCell<usize>,
 }
 
 impl<'a> DocxRenderer<'a> {
@@ -114,7 +116,8 @@ impl<'a> DocxRenderer<'a> {
             base_dir,
             logo_asset,
             diagram_counter: RefCell::new(0),
-            first_h1_rendered: RefCell::new(false),
+            toc_heading_keys: RefCell::new(VecDeque::new()),
+            bookmark_counter: RefCell::new(0),
         }
     }
 
@@ -419,8 +422,16 @@ impl<'a> DocxRenderer<'a> {
             );
         }
 
+        let toc_entries = self.collect_toc_entries(graph);
+        *self.toc_heading_keys.borrow_mut() = toc_entries
+            .iter()
+            .map(|entry| entry.key.clone())
+            .collect::<VecDeque<_>>();
+        *self.bookmark_counter.borrow_mut() = 0;
+
         // ── Field-based table of contents ───────────────────────────────
-        // Google Docs updates this field and keeps links/page refs intact.
+        // Keep field instruction and cached entries so Google Docs and Word
+        // can display content without manual update.
         let mut toc = TableOfContents::new()
             .heading_styles_range(1, TOC_DEPTH)
             .hyperlink()
@@ -430,6 +441,15 @@ impl<'a> DocxRenderer<'a> {
             .clone()
             .hide_tab_and_page_numbers_in_webview()
             .use_applied_paragraph_line_level();
+        for entry in toc_entries {
+            toc = toc.add_item(
+                TableOfContentsItem::new()
+                    .level(entry.level)
+                    .text(entry.text)
+                    .toc_key(entry.key)
+                    .page_ref("1"),
+            );
+        }
         docx = docx.add_table_of_contents(toc);
 
         docx = docx.add_paragraph(
@@ -480,6 +500,44 @@ impl<'a> DocxRenderer<'a> {
             self.render_block(docx, arena, source, child, heading_shift, doc_id, graph)?;
         }
         Ok(())
+    }
+
+    fn collect_toc_entries(&self, graph: &DocumentGraph) -> Vec<TocEntry> {
+        let mut entries = Vec::new();
+        let mut idx = 0usize;
+
+        for (doc_id, node_ref, heading_shift) in graph.rendered_nodes_preorder() {
+            let doc = graph.document(doc_id);
+            let arena = &doc.arena;
+            let source = &doc.source;
+
+            if !matches!(arena[node_ref].kind_data(), KindData::Heading(_)) {
+                continue;
+            }
+            if crate::render_html_common::is_admonition_title_heading(arena, node_ref, source) {
+                continue;
+            }
+
+            let heading = as_kind_data!(arena[node_ref], Heading);
+            let level = (heading.level() as usize + heading_shift).min(6);
+            if level > TOC_DEPTH {
+                continue;
+            }
+
+            let text = self.collect_inline_text(arena, source, node_ref);
+            if text.is_empty() {
+                continue;
+            }
+
+            idx += 1;
+            entries.push(TocEntry {
+                key: format!("_Toc{idx:09}"),
+                text,
+                level,
+            });
+        }
+
+        entries
     }
 
     /// Generate a static table of contents from headings in the graph.
@@ -552,9 +610,10 @@ impl<'a> DocxRenderer<'a> {
                 let heading = as_kind_data!(arena[node_ref], Heading);
                 let level = (heading.level() as usize + heading_shift).min(6);
                 let style = format!("Heading{level}");
+                let heading_text = self.collect_inline_text(arena, source, node_ref);
 
                 let mut para = Paragraph::new().style(&style).keep_next(true);
-                if level == 1 && !*self.first_h1_rendered.borrow() {
+                if level == 1 {
                     let border = ParagraphBorders::with_empty().set(
                         ParagraphBorder::new(ParagraphBorderPosition::Bottom)
                             .val(BorderType::Single)
@@ -564,13 +623,37 @@ impl<'a> DocxRenderer<'a> {
                     );
                     para.property = para.property.set_borders(border);
                     para = para.color(ACCENT_ORANGE);
-                    *self.first_h1_rendered.borrow_mut() = true;
                 }
+
+                let mut has_bookmark = false;
+                let eligible_for_toc_bookmark = level <= TOC_DEPTH
+                    && !heading_text.is_empty()
+                    && !crate::render_html_common::is_admonition_title_heading(
+                        arena, node_ref, source,
+                    );
+                if eligible_for_toc_bookmark {
+                    let next_key = self.toc_heading_keys.borrow_mut().pop_front();
+                    if let Some(key) = next_key {
+                        let id = *self.bookmark_counter.borrow();
+                        *self.bookmark_counter.borrow_mut() = id + 1;
+                        para = para.add_bookmark_start(id, key);
+                        has_bookmark = true;
+                    }
+                }
+
                 for child in arena[node_ref].children(arena) {
                     let runs = self.render_inline_runs(arena, source, child, doc_id, graph);
                     for run in runs {
-                        para = para.add_run(run);
+                        if level == 1 {
+                            para = para.add_run(run.color(ACCENT_ORANGE));
+                        } else {
+                            para = para.add_run(run);
+                        }
                     }
+                }
+                if has_bookmark {
+                    let id = *self.bookmark_counter.borrow() - 1;
+                    para = para.add_bookmark_end(id);
                 }
                 *docx = std::mem::take(docx).add_paragraph(para);
             }
@@ -1609,6 +1692,12 @@ fn admonition_default_title(adm_type: &str) -> &'static str {
         "related" => "Related",
         _ => "Note",
     }
+}
+
+struct TocEntry {
+    key: String,
+    text: String,
+    level: usize,
 }
 
 /// Detect PNG image dimensions from the IHDR chunk.
