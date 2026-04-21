@@ -1,3 +1,9 @@
+docbake (0.1.8) unstable; urgency=medium
+
+  * fix: make PDF tables and code blocks breakable 
+
+ -- Alexey Naidyonov <alexey.naidyonov@gmail.com>  Tue, 21 Apr 2026 09:54:04 +0200
+
 docbake (0.1.7) unstable; urgency=medium
 
   * feat: split TOC for multi-page HTML
