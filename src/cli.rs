@@ -35,6 +35,9 @@ pub enum OutputFormat {
     Pdf,
     Typst,
     Markdown,
+    /// DOCX output using the same renderer as `publish gdoc`.
+    /// Useful for inspecting and debugging Google Docs rendering locally.
+    DocxGdoc,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -225,6 +228,21 @@ pub enum AuthTarget {
         /// input (with a prompt when stdin is a terminal).
         token: Option<String>,
     },
+
+    /// Authenticate with Google for Google Docs publishing.
+    ///
+    /// Without --service-account, opens a browser for OAuth2 consent
+    /// and stores the refresh token for future use.
+    ///
+    /// With --service-account, stores the service account key file
+    /// for JWT-based authentication (suitable for CI/CD).
+    Gdoc {
+        /// Path to a Google service account JSON key file.
+        /// When provided, stores the key for JWT-based auth
+        /// (no browser interaction).
+        #[arg(long)]
+        service_account: Option<std::path::PathBuf>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -254,5 +272,41 @@ pub enum PublishTarget {
         /// Repeatable.  Key may use dot-notation (e.g. "confluence.path").
         #[arg(long = "meta-drop", value_name = "KEY")]
         meta_drop: Vec<String>,
+    },
+
+    /// Publish to Google Docs.
+    ///
+    /// Renders the document as DOCX and uploads it to Google Drive with
+    /// automatic conversion to native Google Docs format.
+    ///
+    /// Use `google-docs.id` in front matter to update an existing document.
+    /// Use `google-docs.folder` in front matter to specify the target folder.
+    Gdoc {
+        /// Root markdown file.
+        #[arg(short = 'i', long)]
+        input: PathBuf,
+
+        /// Base directory for absolute path resolution.
+        /// Defaults to the parent directory of the input file.
+        #[arg(short = 'b', long)]
+        base: Option<PathBuf>,
+
+        /// How to handle broken links: "warn" prints diagnostics and
+        /// continues, "error" aborts.  Defaults to "error".
+        #[arg(long, default_value = "error")]
+        broken_links: BrokenLinkMode,
+
+        /// Override a front-matter value.  Repeatable.
+        #[arg(long = "meta", value_names = ["KEY", "VALUE"], num_args = 2)]
+        meta: Vec<String>,
+
+        /// Remove a front-matter key before applying --meta overrides.
+        #[arg(long = "meta-drop", value_name = "KEY")]
+        meta_drop: Vec<String>,
+
+        /// Write the new document ID back into the source file's front
+        /// matter after creating a new Google Doc.
+        #[arg(long)]
+        write_id: bool,
     },
 }

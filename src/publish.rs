@@ -1,6 +1,5 @@
-//! Orchestrator for `publish confluence` — resolves parameters, renders the
-//! document to Confluence Storage Format, diffs attachments, and uploads
-//! to Confluence Server via REST API.
+//! Orchestrator for `publish confluence` and `publish gdoc` — resolves
+//! parameters, renders the document, and uploads to the target platform.
 
 use std::path::Path;
 
@@ -375,4 +374,226 @@ fn diff_attachments<'a>(
         }
     }
     (to_upload, unchanged)
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Google Docs publishing
+// ════════════════════════════════════════════════════════════════════════
+
+/// Entry point called from `lib.rs` for the `publish gdoc` subcommand.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn publish_gdoc_command(
+    logger: &DebugDumper,
+    cache: &Cache,
+    theme: &Theme,
+    input: &Path,
+    base: Option<&Path>,
+    broken_links: BrokenLinkMode,
+    meta_drops: &[String],
+    meta_overrides: &[(String, String)],
+    write_id: bool,
+) -> Result<()> {
+    // ── resolve input / base ────────────────────────────────────────────
+    let (source, base_dir) = crate::resolve_input_and_base(input, base)?;
+    let doc_name = source
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+
+    logger.log(format!(
+        "preparing {} from {} for Google Docs",
+        doc_name,
+        source.display()
+    ));
+
+    // ── prepare document graph ──────────────────────────────────────────
+    let build = prepare_document(logger, &base_dir, &source, Some(&doc_name), broken_links)?;
+    let mut metadata = build.document_metadata();
+    crate::apply_meta_drops(&mut metadata, meta_drops);
+    crate::apply_meta_overrides(&mut metadata, meta_overrides)?;
+
+    // ── resolve publish parameters ──────────────────────────────────────
+    let (doc_id, folder_id, name) = resolve_gdoc_params(&metadata, &doc_name)?;
+
+    logger.log(format!(
+        "target: doc_id={}, folder_id={}, name={}",
+        doc_id.as_deref().unwrap_or("<new>"),
+        folder_id.as_deref().unwrap_or("<none>"),
+        name
+    ));
+
+    // ── diagram themes ──────────────────────────────────────────────────
+    let diagram_themes = crate::diagram::DiagramThemes {
+        plantuml: theme.plantuml_theme()?,
+        mermaid: theme.mermaid_theme()?,
+        d2: theme.d2_theme()?,
+    };
+
+    // ── render to DOCX ──────────────────────────────────────────────────
+    let renderer = crate::render_docx::DocxRenderer::new(cache, &diagram_themes, logger, &base_dir);
+    let docx_bytes = renderer.render(&build)?;
+
+    logger.log(format!("rendered: {} bytes DOCX", docx_bytes.len()));
+
+    // ── authenticate ────────────────────────────────────────────────────
+    let access_token = crate::credentials::resolve_gdoc_access_token()?;
+    let client = crate::gdoc::api::GoogleDriveClient::new(&access_token);
+
+    // ── upload ──────────────────────────────────────────────────────────
+    let result = if let Some(ref id) = doc_id {
+        // Update existing document.
+        let file = client
+            .update_doc(id, &docx_bytes)
+            .context("failed to update Google Doc")?;
+        eprintln!("Updated '{name}' in Google Docs");
+        file
+    } else {
+        // Create new document.
+        let file = client
+            .create_doc(&name, &docx_bytes, folder_id.as_deref())
+            .context("failed to create Google Doc")?;
+        eprintln!("Created '{name}' in Google Docs");
+        file
+    };
+
+    // ── print URL ───────────────────────────────────────────────────────
+    let url = result
+        .web_view_link
+        .unwrap_or_else(|| crate::gdoc::api::google_docs_url(&result.id));
+    eprintln!("{url}");
+
+    // ── write ID back to front matter ───────────────────────────────────
+    if write_id && doc_id.is_none() {
+        write_gdoc_id_to_source(input, &url)?;
+        eprintln!("Wrote google-docs.id to {}", input.display());
+    }
+
+    Ok(())
+}
+
+/// Resolve Google Docs publish parameters from document metadata.
+///
+/// The `google-docs` front-matter key may contain:
+///
+/// ```yaml
+/// google-docs:
+///   id: https://docs.google.com/document/d/1AbC.../edit
+///   folder: https://drive.google.com/drive/folders/1XyZ...
+/// ```
+///
+/// Returns `(doc_id, folder_id, name)`.
+fn resolve_gdoc_params(
+    metadata: &serde_json::Map<String, JsonValue>,
+    fallback_name: &str,
+) -> Result<(Option<String>, Option<String>, String)> {
+    let gdoc = metadata.get("google-docs").and_then(|v| v.as_object());
+
+    let doc_id = gdoc
+        .and_then(|g| g.get("id"))
+        .and_then(|v| v.as_str())
+        .map(|s| crate::gdoc::api::parse_doc_id(s).to_string());
+
+    let folder_id = gdoc
+        .and_then(|g| g.get("folder"))
+        .and_then(|v| v.as_str())
+        .map(|s| crate::gdoc::api::parse_folder_id(s).to_string());
+
+    // Document name: title from front matter, or input file stem.
+    let name = metadata
+        .get("title")
+        .and_then(|v| v.as_str())
+        .unwrap_or(fallback_name)
+        .to_string();
+
+    Ok((doc_id, folder_id, name))
+}
+
+/// Write a `google-docs.id` value back into the source file's YAML front
+/// matter.
+///
+/// If the file already has a `google-docs:` block, inserts `id:` into it.
+/// If not, appends a `google-docs:` block before the closing `---`.
+fn write_gdoc_id_to_source(path: &Path, url: &str) -> Result<()> {
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+
+    let new_content = if let Some((fm, rest)) = split_front_matter_for_edit(&content) {
+        if fm.contains("google-docs:") {
+            // There's already a google-docs block — insert/replace the id line.
+            let mut result = String::new();
+            let mut in_gdoc_block = false;
+            let mut id_written = false;
+            for line in fm.lines() {
+                if line.starts_with("google-docs:") {
+                    in_gdoc_block = true;
+                    result.push_str(line);
+                    result.push('\n');
+                    continue;
+                }
+                if in_gdoc_block {
+                    if line.starts_with("  ") || line.starts_with('\t') {
+                        if line.trim_start().starts_with("id:") {
+                            // Replace existing id line.
+                            result.push_str(&format!("  id: {url}\n"));
+                            id_written = true;
+                            continue;
+                        }
+                        result.push_str(line);
+                        result.push('\n');
+                        continue;
+                    } else {
+                        // Left the google-docs block.
+                        if !id_written {
+                            result.push_str(&format!("  id: {url}\n"));
+                            id_written = true;
+                        }
+                        in_gdoc_block = false;
+                    }
+                }
+                result.push_str(line);
+                result.push('\n');
+            }
+            if in_gdoc_block && !id_written {
+                result.push_str(&format!("  id: {url}\n"));
+            }
+            format!("{result}{rest}")
+        } else {
+            // No google-docs block — insert one before the closing ---.
+            let mut result = String::new();
+            let fm_trimmed = fm.trim_end_matches('\n');
+            result.push_str(fm_trimmed);
+            result.push_str(&format!("\ngoogle-docs:\n  id: {url}\n"));
+            result.push_str(rest);
+            result
+        }
+    } else {
+        // No front matter at all — prepend one.
+        format!("---\ngoogle-docs:\n  id: {url}\n---\n{content}")
+    };
+
+    std::fs::write(path, new_content)
+        .with_context(|| format!("failed to write {}", path.display()))?;
+    Ok(())
+}
+
+/// Split a document into front matter and remainder.
+///
+/// Returns `Some((front_matter_including_delimiters, rest))` or `None`
+/// if no front matter is present.
+fn split_front_matter_for_edit(content: &str) -> Option<(&str, &str)> {
+    if !content.starts_with("---") {
+        return None;
+    }
+    let after_first = &content[3..];
+    let after_first = after_first.strip_prefix('\n').unwrap_or(after_first);
+    let end = after_first.find("\n---")?;
+    let fm_end = 3 + (content.len() - after_first.len()) + end + 4; // include "\n---"
+    // Skip the newline after closing ---
+    let rest_start = if content.len() > fm_end && content.as_bytes()[fm_end] == b'\n' {
+        fm_end + 1
+    } else {
+        fm_end
+    };
+    Some((&content[..fm_end], &content[rest_start..]))
 }

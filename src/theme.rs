@@ -63,14 +63,16 @@ impl Theme {
             OutputFormat::Html => TEMPLATE_HTML,
             OutputFormat::HtmlMulti => TEMPLATE_MULTIPAGE_HTML,
             OutputFormat::Pdf | OutputFormat::Typst => TEMPLATE_TYP,
-            OutputFormat::Markdown => bail!("markdown output does not use a template"),
+            OutputFormat::Markdown | OutputFormat::DocxGdoc => {
+                bail!("{format:?} output does not use a template")
+            }
         };
         match self {
             Theme::Default => Ok(match format {
                 OutputFormat::Html => DEFAULT_TEMPLATE_HTML.to_string(),
                 OutputFormat::HtmlMulti => DEFAULT_TEMPLATE_MULTIPAGE.to_string(),
                 OutputFormat::Pdf | OutputFormat::Typst => DEFAULT_TEMPLATE_TYP.to_string(),
-                OutputFormat::Markdown => unreachable!(),
+                OutputFormat::Markdown | OutputFormat::DocxGdoc => unreachable!(),
             }),
             Theme::Custom(dir) => {
                 let path = dir.join(name);

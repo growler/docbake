@@ -38,6 +38,9 @@ const CREDENTIALS_FILE: &str = "credentials.json";
 /// Service namespace key inside the JSON file.
 const CONFLUENCE_KEY: &str = "confluence";
 
+/// Google Docs service namespace key.
+const GDOC_KEY: &str = "gdoc";
+
 /// Top-level credential file structure: `{ "confluence": { url: token } }`.
 type CredentialStore = BTreeMap<String, BTreeMap<String, String>>;
 
@@ -138,6 +141,133 @@ pub(crate) fn load_token(server: &str) -> Result<Option<String>> {
         .get(CONFLUENCE_KEY)
         .and_then(|m| m.get(&key))
         .cloned())
+}
+
+// ── Google Docs credential operations ────────────────────────────────────
+
+/// Store a Google Docs service account key (JSON string).
+pub(crate) fn store_gdoc_service_account(key_json: &str) -> Result<()> {
+    let mut store = read_store()?;
+    store
+        .entry(GDOC_KEY.to_string())
+        .or_default()
+        .insert("service_account".to_string(), key_json.to_string());
+    write_store(&store)
+}
+
+/// Load a stored Google Docs service account key (JSON string).
+pub(crate) fn load_gdoc_service_account() -> Result<Option<String>> {
+    let store = read_store()?;
+    Ok(store
+        .get(GDOC_KEY)
+        .and_then(|m| m.get("service_account"))
+        .cloned())
+}
+
+/// Store a Google Docs OAuth2 credential (serialised as JSON).
+pub(crate) fn store_gdoc_oauth(credential_json: &str) -> Result<()> {
+    let mut store = read_store()?;
+    store
+        .entry(GDOC_KEY.to_string())
+        .or_default()
+        .insert("oauth".to_string(), credential_json.to_string());
+    write_store(&store)
+}
+
+/// Load a stored Google Docs OAuth2 credential (JSON string).
+pub(crate) fn load_gdoc_oauth() -> Result<Option<String>> {
+    let store = read_store()?;
+    Ok(store
+        .get(GDOC_KEY)
+        .and_then(|m| m.get("oauth"))
+        .cloned())
+}
+
+/// Resolve a Google Docs access token.
+///
+/// Priority:
+/// 1. `GOOGLE_APPLICATION_CREDENTIALS` env var → service account key file
+/// 2. Stored service account key → JWT exchange
+/// 3. Stored OAuth2 refresh token → refresh exchange
+///
+/// Returns the access token string, or an error with a user-friendly message.
+pub(crate) fn resolve_gdoc_access_token() -> Result<String> {
+    use crate::gdoc::auth;
+
+    // 1. Environment variable pointing to a service account key file.
+    if let Ok(path) = std::env::var("GOOGLE_APPLICATION_CREDENTIALS") {
+        if !path.is_empty() {
+            let key_json = std::fs::read_to_string(&path)
+                .with_context(|| format!("failed to read service account key from {path}"))?;
+            let key: auth::ServiceAccountKey = serde_json::from_str(&key_json)
+                .with_context(|| format!("failed to parse service account key from {path}"))?;
+            let (token, _) = auth::service_account_access_token(&key)?;
+            return Ok(token);
+        }
+    }
+
+    // 2. Stored service account key.
+    if let Some(key_json) = load_gdoc_service_account()? {
+        let key: auth::ServiceAccountKey = serde_json::from_str(&key_json)
+            .context("failed to parse stored service account key")?;
+        let (token, _) = auth::service_account_access_token(&key)?;
+        return Ok(token);
+    }
+
+    // 3. Stored OAuth2 refresh token.
+    if let Some(cred_json) = load_gdoc_oauth()? {
+        let cred: auth::OAuthCredential = serde_json::from_str(&cred_json)
+            .context("failed to parse stored OAuth credential")?;
+
+        // Check if cached access token is still valid (with 5 min buffer).
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        if let (Some(ref access_token), Some(expires_at)) =
+            (&cred.access_token, cred.expires_at)
+        {
+            if expires_at > now + 300 {
+                return Ok(access_token.clone());
+            }
+        }
+
+        // Refresh the token.
+        let (new_token, new_expires_at) = auth::refresh_access_token(&cred.refresh_token)?;
+
+        // Update the stored credential with the new access token.
+        let updated = auth::OAuthCredential {
+            refresh_token: cred.refresh_token,
+            access_token: Some(new_token.clone()),
+            expires_at: Some(new_expires_at),
+        };
+        let updated_json = serde_json::to_string(&updated)
+            .context("failed to serialize updated OAuth credential")?;
+        store_gdoc_oauth(&updated_json)?;
+
+        return Ok(new_token);
+    }
+
+    let path = credentials_file_path().ok();
+    let path_hint = path
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "<config-dir>/docbake/credentials.json".to_string());
+
+    bail!(
+        "Google Docs credentials not found.\n\
+         \n\
+         Provide credentials in one of these ways:\n\
+         \n\
+         1. Set the GOOGLE_APPLICATION_CREDENTIALS environment variable\n\
+            to a service account key file path, or\n\
+         2. Run: docbake auth gdoc --service-account <key.json>\n\
+         3. Run: docbake auth gdoc\n\
+            (opens browser for OAuth2 consent)\n\
+         \n\
+         Stored credentials are read from {path_hint}",
+    );
 }
 
 /// Resolve a Confluence token.

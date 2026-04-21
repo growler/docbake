@@ -7,9 +7,11 @@ pub(crate) mod code_block_attribute;
 pub(crate) mod confluence;
 pub(crate) mod credentials;
 pub(crate) mod diagram;
+pub(crate) mod gdoc;
 pub(crate) mod graph;
 mod publish;
 mod render_confluence;
+mod render_docx;
 mod render_html;
 mod render_html_common;
 mod render_html_multi;
@@ -165,12 +167,36 @@ pub fn run(cli: Cli) -> Result<()> {
                     &meta_overrides,
                 )
             }
+            cli::PublishTarget::Gdoc {
+                ref input,
+                ref base,
+                broken_links,
+                ref meta,
+                ref meta_drop,
+                write_id,
+            } => {
+                let meta_overrides = parse_meta_pairs(meta)?;
+                publish::publish_gdoc_command(
+                    &logger,
+                    &cache,
+                    &theme,
+                    input,
+                    base.as_deref(),
+                    *broken_links,
+                    meta_drop,
+                    &meta_overrides,
+                    *write_id,
+                )
+            }
         },
         cli::Command::Auth { ref target } => match target {
             cli::AuthTarget::Confluence {
                 ref server,
                 ref token,
             } => auth_confluence(server, token.as_deref()),
+            cli::AuthTarget::Gdoc {
+                ref service_account,
+            } => auth_gdoc(service_account.as_deref()),
         },
     }
 }
@@ -202,6 +228,37 @@ fn auth_confluence(server: &str, token: Option<&str>) -> Result<()> {
     credentials::store_token(server, &token)?;
     let normalized = credentials::normalize_server(server);
     eprintln!("Token stored for {normalized}");
+    Ok(())
+}
+
+/// Handle `auth gdoc [--service-account <path>]`.
+///
+/// Without `--service-account`: runs the OAuth2 browser consent flow and
+/// stores the refresh token.
+///
+/// With `--service-account <path>`: reads the JSON key file and stores it
+/// in the credential store.
+fn auth_gdoc(service_account: Option<&Path>) -> Result<()> {
+    if let Some(path) = service_account {
+        let key_json = fs::read_to_string(path)
+            .with_context(|| format!("failed to read service account key: {}", path.display()))?;
+
+        // Validate that it parses as a service account key.
+        let _key: gdoc::auth::ServiceAccountKey = serde_json::from_str(&key_json)
+            .with_context(|| format!("invalid service account JSON in {}", path.display()))?;
+
+        credentials::store_gdoc_service_account(&key_json)?;
+        eprintln!(
+            "Service account key stored from {}",
+            path.display()
+        );
+    } else {
+        let cred = gdoc::auth::oauth2_authorization_flow()?;
+        let cred_json =
+            serde_json::to_string(&cred).context("failed to serialize OAuth credential")?;
+        credentials::store_gdoc_oauth(&cred_json)?;
+        eprintln!("Google OAuth2 credentials stored successfully");
+    }
     Ok(())
 }
 
@@ -408,12 +465,13 @@ fn resolve_output(output: &Path, input: &Path, format: OutputFormat) -> Result<(
                 OutputFormat::Html => "html",
                 OutputFormat::Pdf => "pdf",
                 OutputFormat::Markdown => "md",
+                OutputFormat::DocxGdoc => "docx",
                 OutputFormat::HtmlMulti | OutputFormat::Typst => unreachable!(),
             };
             // If -o has a recognised extension, treat as a file path.
             if let Some(given_ext) = output.extension() {
                 let given = given_ext.to_string_lossy();
-                if given == "html" || given == "pdf" || given == "md" {
+                if given == "html" || given == "pdf" || given == "md" || given == "docx" {
                     let dir = output
                         .parent()
                         .unwrap_or_else(|| Path::new("."))
@@ -465,6 +523,24 @@ pub(crate) fn build_command(
         let renderer = render_markdown::MarkdownRenderer::new(&base_dir, &output_dir);
         let markdown = renderer.render_document(&build)?;
         fs::write(&output_file, markdown)
+            .with_context(|| format!("failed to write {}", output_file.display()))?;
+        logger.log(format!("wrote {}", output_file.display()));
+        return Ok(());
+    }
+
+    // ── DOCX-for-Google-Docs format (no theme needed) ───────────────────
+    // Uses the same DocxRenderer as `publish gdoc` — diagrams are rendered
+    // to PNG and embedded, images are read from disk and embedded.
+    if matches!(format, OutputFormat::DocxGdoc) {
+        let diagram_themes = crate::diagram::DiagramThemes {
+            plantuml: theme.plantuml_theme()?,
+            mermaid: theme.mermaid_theme()?,
+            d2: theme.d2_theme()?,
+        };
+        let renderer =
+            render_docx::DocxRenderer::new(cache, &diagram_themes, logger, &base_dir);
+        let docx_bytes = renderer.render(&build)?;
+        fs::write(&output_file, docx_bytes)
             .with_context(|| format!("failed to write {}", output_file.display()))?;
         logger.log(format!("wrote {}", output_file.display()));
         return Ok(());
@@ -588,7 +664,7 @@ pub(crate) fn build_command(
                 .with_context(|| format!("failed to write {}", output_file.display()))?;
             logger.log(format!("wrote {}", output_file.display()));
         }
-        OutputFormat::Markdown => unreachable!(),
+        OutputFormat::Markdown | OutputFormat::DocxGdoc => unreachable!(),
     }
 
     Ok(())
