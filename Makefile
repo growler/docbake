@@ -1,4 +1,4 @@
-MANIFEST     := builder.toml
+MANIFEST     := server/builder.toml
 DEBOSTREE    := deb-ostree -m $(MANIFEST)
 
 CROSS_TARGETS := \
