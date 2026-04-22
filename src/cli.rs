@@ -198,6 +198,16 @@ pub enum Command {
         base: Option<PathBuf>,
     },
 
+    /// Format markdown files in place.
+    Fmt {
+        /// Print diffs instead of writing formatted files.
+        #[arg(long)]
+        check: bool,
+
+        /// Markdown file or directory containing markdown files.
+        path: PathBuf,
+    },
+
     /// Export the default theme to a directory for customisation.
     InitTheme {
         /// Target directory to create (must not already exist).

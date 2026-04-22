@@ -7,6 +7,7 @@ pub(crate) mod code_block_attribute;
 pub(crate) mod confluence;
 pub(crate) mod credentials;
 pub(crate) mod diagram;
+mod fmt;
 pub(crate) mod gdoc;
 pub(crate) mod graph;
 mod publish;
@@ -139,6 +140,7 @@ pub fn run(cli: Cli) -> Result<()> {
             ref input,
             ref base,
         } => check_command(&logger, &cache, &theme, input, base.as_deref()),
+        cli::Command::Fmt { check, ref path } => fmt::fmt_command(path, check),
         cli::Command::InitTheme { ref target } => {
             Theme::export_to(target)?;
             eprintln!("Default theme exported to {}", target.display());

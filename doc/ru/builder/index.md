@@ -27,6 +27,7 @@ Commands:
   serve       Serve a document with live-reload on file changes
   watch       Watch source files and rebuild on changes
   check       Validate the document: check all links and render all diagrams
+  fmt         Format markdown files in place
   init-theme  Export the default theme to a directory for customisation
   publish     Publish a document to an external platform
   help        Print this message or the help of the given subcommand(s)
@@ -234,6 +235,30 @@ Draw.io и Typst-диаграммы проходят через соответс
 
 Как и при сборке, флаги `--theme`, `--cache` и `--no-cache` позволяют
 управлять темой и кешированием артефактов.
+
+## Форматирование markdown {.unnumbered}
+
+Команда `fmt` форматирует markdown-файл или рекурсивно все `*.md` в каталоге.
+Текущие правила форматирования:
+
+- перенос обычных параграфов на ширину 100 символов;
+- выравнивание pipe-таблиц;
+- удаление хвостовых пробелов (кроме hard line break);
+- нормализация пустых строк (не более одной подряд);
+- финальный перевод строки в конце файла.
+
+~~~
+$ docbake fmt doc/ru
+~~~
+
+Для CI и pre-commit можно использовать режим проверки:
+
+~~~
+$ docbake fmt --check doc/ru
+~~~
+
+В режиме `--check` команда печатает diff для каждого файла, который требует
+форматирования, и завершается с ненулевым кодом возврата.
 
 ## Чтение метаданных {.unnumbered}
 

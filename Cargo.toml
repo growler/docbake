@@ -33,3 +33,4 @@ docx-rs = "0.4"
 resvg = "0.45"
 jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto", "use_pem"] }
 sha2 = "0.10"
+similar = { version = "3.1.0", features = ["inline"] }
