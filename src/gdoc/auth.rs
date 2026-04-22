@@ -18,8 +18,10 @@ use serde::{Deserialize, Serialize};
 const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const GOOGLE_AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 
-/// Scope required for creating / updating files via the Drive API.
-const DRIVE_FILE_SCOPE: &str = "https://www.googleapis.com/auth/drive.file";
+/// Scopes required for publishing and post-processing Google Docs.
+const GDOC_SCOPES: &str =
+    "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/documents";
+const GDOC_SCOPES_URLENC: &str = "https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fdrive.file%20https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fdocuments";
 
 /// Hardcoded OAuth2 client ID for the docbake desktop application.
 ///
@@ -93,7 +95,7 @@ pub(crate) fn service_account_access_token(key: &ServiceAccountKey) -> Result<(S
 
     let claims = JwtClaims {
         iss: key.client_email.clone(),
-        scope: DRIVE_FILE_SCOPE.to_string(),
+        scope: GDOC_SCOPES.to_string(),
         aud: GOOGLE_TOKEN_URL.to_string(),
         iat: now,
         exp: now + 3600,
@@ -164,7 +166,7 @@ pub(crate) fn oauth2_authorization_flow() -> Result<OAuthCredential> {
          client_id={OAUTH_CLIENT_ID}&\
          redirect_uri={redirect_uri}&\
          response_type=code&\
-         scope={DRIVE_FILE_SCOPE}&\
+         scope={GDOC_SCOPES_URLENC}&\
          code_challenge={code_challenge}&\
          code_challenge_method=S256&\
          access_type=offline&\

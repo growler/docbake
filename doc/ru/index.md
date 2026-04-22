@@ -4,10 +4,9 @@ lang:    ru-RU
 version: 0.1.0
 confluence: 
   server: https://confluence.example.com
-  space: SA
-  path:
-    - id:204837448 
-    - "Система публикации документации"
+  space: ~growler
+google-docs:
+  id: https://docs.google.com/document/d/GOOGLE_DOC_ID
 ---
 # Назначение
 
