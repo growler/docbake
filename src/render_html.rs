@@ -10,7 +10,7 @@ use crate::diagram::{diagram_html_renderer_extension, DiagramHtmlRendererOptions
 use anyhow::{bail, Context, Result};
 use rushdown::as_extension_data;
 use rushdown::as_kind_data;
-use rushdown::ast::{Arena, Heading, Image, KindData, Link, NodeRef, WalkStatus};
+use rushdown::ast::{Arena, Image, KindData, Link, NodeRef, WalkStatus};
 use rushdown::context::{ContextKey, ContextKeyRegistry, NodeRefValue, UsizeValue};
 use rushdown::renderer;
 use rushdown::renderer::html::{self, Renderer, RendererExtension, RendererExtensionFn};
@@ -18,15 +18,16 @@ use rushdown::renderer::{
     BoxRenderNode, NodeRenderer, NodeRendererRegistry, PostRender, PreRender, Render, RenderNode,
     TextWrite,
 };
-use rushdown::util::{escape_html, escape_url, EscapeUrlOptions};
 use rushdown_definition_list::definition_list_html_renderer_extension;
-use rushdown_fenced_div::{FencedDiv, FencedDivHtmlRendererOptions};
+use rushdown_fenced_div::FencedDivHtmlRendererOptions;
 use rushdown_footnote::FootnoteReference;
 
 use crate::graph::{DocumentGraph, NodeLocation, PreparedDocument};
 use crate::render_html_common::{
-    heading_text_html, html_escape, is_admonition_title_heading, render_image_attributes,
-    SuppressDocumentRenderer, SuppressFootnoteDefinitionRenderer,
+    heading_text_html, html_escape, is_admonition_title_heading, render_footnote_reference,
+    render_image_tag, render_link_open_tag, ImageRenderData, LinkRenderData,
+    SharedFormatFencedDivHtmlRenderer, SharedHeadingHtmlRenderer, SuppressDocumentRenderer,
+    SuppressFootnoteDefinitionRenderer,
 };
 
 const CURRENT_DOC_ID: &str = "docbake-html-current-doc-id";
@@ -317,9 +318,7 @@ impl<W: TextWrite> RenderNode<W> for GraphFootnoteReferenceHtmlRenderer<W> {
             .get(&NodeLocation::new(doc_id, node_ref))
             .copied()
             .ok_or_else(|| rushdown::Error::io("missing footnote render plan", None))?;
-        w.write_str(&format!(
-            "<sup id=\"fnref:{ref_index}\"><a href=\"#fn:{index}\" class=\"footnote-ref\" role=\"doc-noteref\">{index}</a></sup>"
-        ))?;
+        render_footnote_reference(w, index, ref_index)?;
         Ok(WalkStatus::SkipChildren)
     }
 }
@@ -397,73 +396,6 @@ impl<'a, W: TextWrite> PostRender<W> for GraphFootnotePostRenderHook<'a> {
     }
 }
 
-struct GraphHeadingHtmlRenderer<W: TextWrite> {
-    _phantom: std::marker::PhantomData<W>,
-    writer: html::Writer,
-    keys: GraphRenderKeys,
-    skip_heading_key: ContextKey<NodeRefValue>,
-}
-
-impl<W: TextWrite> GraphHeadingHtmlRenderer<W> {
-    fn new(
-        options: html::Options,
-        keys: GraphRenderKeys,
-        reg: Rc<RefCell<ContextKeyRegistry>>,
-    ) -> Self {
-        let skip_heading_key = reg
-            .borrow_mut()
-            .get_or_create::<NodeRefValue>(SKIP_ADMONITION_HEADING);
-        Self {
-            _phantom: std::marker::PhantomData,
-            writer: html::Writer::with_options(options),
-            keys,
-            skip_heading_key,
-        }
-    }
-}
-
-impl<W: TextWrite> RenderNode<W> for GraphHeadingHtmlRenderer<W> {
-    fn render_node<'a>(
-        &self,
-        w: &mut W,
-        source: &'a str,
-        arena: &'a Arena,
-        node_ref: NodeRef,
-        entering: bool,
-        ctx: &mut renderer::Context,
-    ) -> rushdown::Result<WalkStatus> {
-        let heading = as_kind_data!(arena, node_ref, Heading);
-        // Skip headings that were already rendered as admonition titles.
-        if let Some(&skip_ref) = ctx.get(self.skip_heading_key) {
-            if skip_ref == node_ref {
-                if !entering {
-                    ctx.remove(self.skip_heading_key);
-                }
-                return Ok(WalkStatus::SkipChildren);
-            }
-        }
-        let shift = ctx.get(self.keys.heading_shift).copied().unwrap_or(0);
-        let level = (heading.level() as usize + shift).min(6);
-        if entering {
-            w.write_str(&format!("<h{level}"))?;
-            html::render_attributes(w, source, arena[node_ref].attributes(), None)?;
-            self.writer.write_safe_str(w, ">")?;
-        } else {
-            w.write_str(&format!("</h{level}>\n"))?;
-        }
-        Ok(WalkStatus::Continue)
-    }
-}
-
-impl<'cb, W> NodeRenderer<'cb, W> for GraphHeadingHtmlRenderer<W>
-where
-    W: TextWrite + 'cb,
-{
-    fn register_node_renderer_fn(self, nrr: &mut impl NodeRendererRegistry<'cb, W>) {
-        nrr.register_node_renderer_fn(TypeId::of::<Heading>(), BoxRenderNode::new(self));
-    }
-}
-
 struct GraphLinkHtmlRenderer<'a, W: TextWrite> {
     prepared: &'a PreparedDocument,
     _phantom: std::marker::PhantomData<W>,
@@ -512,26 +444,18 @@ impl<'a, W: TextWrite> RenderNode<W> for GraphLinkHtmlRenderer<'a, W> {
                     )
                 })?
                 .to_string();
-            let mut dest = escape_url(
-                target.as_bytes(),
-                &EscapeUrlOptions {
-                    resolves_refs: !matches!(link.link_kind(), rushdown::ast::LinkKind::Auto(_)),
-                    ..EscapeUrlOptions::for_url()
+            render_link_open_tag(
+                w,
+                &self.writer,
+                &self.format_options,
+                &LinkRenderData {
+                    source,
+                    arena,
+                    node_ref,
+                    link,
+                    target: &target,
                 },
-            );
-            self.writer.write_safe_str(w, "<a href=\"")?;
-            if self.format_options.allows_unsafe || !html::is_dangerous_url(&dest) {
-                dest = escape_html(dest);
-                w.write_str(&String::from_utf8_lossy(&dest))?;
-            }
-            self.writer.write_safe_str(w, "\"")?;
-            if let Some(title) = link.title() {
-                self.writer.write_safe_str(w, " title=\"")?;
-                self.writer.write(w, &title.str(source))?;
-                self.writer.write_safe_str(w, "\"")?;
-            }
-            html::render_attributes(w, source, arena[node_ref].attributes(), None)?;
-            self.writer.write_safe_str(w, ">")?;
+            )?;
         } else {
             self.writer.write_safe_str(w, "</a>")?;
         }
@@ -567,24 +491,6 @@ impl<'a, W: TextWrite> GraphImageHtmlRenderer<'a, W> {
             format_options: options,
         }
     }
-
-    fn render_texts<'b>(
-        &self,
-        w: &mut W,
-        source: &'b str,
-        arena: &'b Arena,
-        node_ref: NodeRef,
-        _ctx: &mut renderer::Context,
-    ) -> rushdown::Result<()> {
-        for child in arena[node_ref].children(arena) {
-            match arena[child].kind_data() {
-                KindData::Text(text) => self.writer.write(w, text.str(source))?,
-                KindData::CodeSpan(cs) => self.writer.write(w, &cs.value_str(source))?,
-                _ => self.render_texts(w, source, arena, child, _ctx)?,
-            }
-        }
-        Ok(())
-    }
 }
 
 impl<'a, W: TextWrite> RenderNode<W> for GraphImageHtmlRenderer<'a, W> {
@@ -615,27 +521,18 @@ impl<'a, W: TextWrite> RenderNode<W> for GraphImageHtmlRenderer<'a, W> {
                     )
                 })?
                 .to_string();
-            let mut dest = escape_url(
-                target.as_bytes(),
-                &EscapeUrlOptions {
-                    resolves_refs: true,
-                    ..EscapeUrlOptions::for_url()
+            render_image_tag(
+                w,
+                &self.writer,
+                &self.format_options,
+                &ImageRenderData {
+                    source,
+                    arena,
+                    node_ref,
+                    image,
+                    target: &target,
                 },
-            );
-            self.writer.write_safe_str(w, "<img src=\"")?;
-            if self.format_options.allows_unsafe || !html::is_dangerous_url(&dest) {
-                dest = escape_html(dest);
-                w.write_str(&String::from_utf8_lossy(&dest))?;
-            }
-            self.writer.write_safe_str(w, "\" alt=\"")?;
-            self.render_texts(w, source, arena, node_ref, ctx)?;
-            self.writer.write_safe_str(w, "\"")?;
-            if let Some(title) = image.title() {
-                self.writer.write_safe_str(w, " title=\"")?;
-                self.writer.write(w, &title.str(source))?;
-                self.writer.write_safe_str(w, "\"")?;
-            }
-            render_image_attributes(w, source, arena, node_ref, &self.format_options)?;
+            )?;
         }
         Ok(WalkStatus::SkipChildren)
     }
@@ -651,107 +548,6 @@ where
     }
 }
 
-struct FormatAwareFencedDivHtmlRenderer<W: TextWrite> {
-    _phantom: std::marker::PhantomData<W>,
-    writer: html::Writer,
-    skip_heading_key: ContextKey<NodeRefValue>,
-}
-
-impl<W: TextWrite> FormatAwareFencedDivHtmlRenderer<W> {
-    fn with_options(options: html::Options, reg: Rc<RefCell<ContextKeyRegistry>>) -> Self {
-        let skip_heading_key = reg
-            .borrow_mut()
-            .get_or_create::<NodeRefValue>(SKIP_ADMONITION_HEADING);
-        Self {
-            _phantom: std::marker::PhantomData,
-            writer: html::Writer::with_options(options),
-            skip_heading_key,
-        }
-    }
-}
-
-impl<W: TextWrite> RenderNode<W> for FormatAwareFencedDivHtmlRenderer<W> {
-    fn render_node<'a>(
-        &self,
-        w: &mut W,
-        source: &'a str,
-        arena: &'a Arena,
-        node_ref: NodeRef,
-        entering: bool,
-        ctx: &mut renderer::Context,
-    ) -> rushdown::Result<WalkStatus> {
-        let _ = as_extension_data!(arena, node_ref, FencedDiv);
-        let classes = arena[node_ref]
-            .attributes()
-            .get("class")
-            .map(|value| value.str(source))
-            .unwrap_or_default();
-        let known_formats = crate::KNOWN_OUTPUT_FORMATS;
-        let present_formats = classes
-            .split_whitespace()
-            .filter(|class_name| known_formats.contains(class_name))
-            .collect::<Vec<_>>();
-        if !present_formats.is_empty() && !present_formats.contains(&"html") {
-            return Ok(WalkStatus::SkipChildren);
-        }
-
-        let is_admonition = crate::admonition_type(&classes).is_some();
-
-        if entering {
-            if is_admonition {
-                // Write <div class="admonition {original classes}" {other attrs}>
-                w.write_str("<div class=\"admonition ")?;
-                let esc = escape_html(classes.as_bytes());
-                w.write_str(std::str::from_utf8(&esc).unwrap_or_default())?;
-                w.write_str("\"")?;
-                // Write remaining attributes (skip class).
-                for (key, value) in arena[node_ref].attributes().iter() {
-                    if key == "class" {
-                        continue;
-                    }
-                    w.write_str(" ")?;
-                    w.write_str(key)?;
-                    w.write_str("=\"")?;
-                    let esc = escape_html(value.bytes(source));
-                    w.write_str(std::str::from_utf8(&esc).unwrap_or_default())?;
-                    w.write_str("\"")?;
-                }
-                w.write_str(">")?;
-
-                // If the first child is a heading, render it as a title
-                // element instead of a real heading (to keep it out of the
-                // TOC and avoid semantic heading pollution).
-                if let Some(first_child) = arena[node_ref].children(arena).next() {
-                    if matches!(arena[first_child].kind_data(), KindData::Heading(_)) {
-                        let title_html = heading_text_html(arena, first_child, source);
-                        w.write_str("<p class=\"admonition-title\">")?;
-                        w.write_str(&title_html)?;
-                        w.write_str("</p>\n")?;
-                        // Tell the heading renderer to skip this node.
-                        ctx.insert(self.skip_heading_key, first_child);
-                    }
-                }
-            } else {
-                self.writer.write_safe_str(w, "<div")?;
-                html::render_attributes(w, source, arena[node_ref].attributes(), None)?;
-                self.writer.write_safe_str(w, ">")?;
-            }
-        } else {
-            self.writer.write_safe_str(w, "</div>")?;
-        }
-        Ok(WalkStatus::Continue)
-    }
-}
-
-impl<'cb, W> NodeRenderer<'cb, W> for FormatAwareFencedDivHtmlRenderer<W>
-where
-    W: TextWrite + 'cb,
-{
-    fn register_node_renderer_fn(self, nrr: &mut impl NodeRendererRegistry<'cb, W>) {
-        nrr.register_node_renderer_fn(TypeId::of::<FencedDiv>(), BoxRenderNode::new(self));
-    }
-}
-
 fn format_specific_fenced_div_renderer<'cb, W>() -> impl RendererExtension<'cb, W>
 where
     W: TextWrite + 'cb,
@@ -759,7 +555,10 @@ where
     RendererExtensionFn::new(move |renderer: &mut Renderer<'cb, W>| {
         renderer.add_node_renderer(
             |options: html::Options, reg: Rc<RefCell<ContextKeyRegistry>>| {
-                FormatAwareFencedDivHtmlRenderer::with_options(options, reg)
+                let skip_heading_key = reg
+                    .borrow_mut()
+                    .get_or_create::<NodeRefValue>(SKIP_ADMONITION_HEADING);
+                SharedFormatFencedDivHtmlRenderer::with_options(options, skip_heading_key, false)
             },
             rushdown::renderer::NoRendererOptions,
         );
@@ -790,7 +589,11 @@ where
         );
         renderer.add_node_renderer(
             move |options: html::Options, reg: Rc<RefCell<ContextKeyRegistry>>| {
-                GraphHeadingHtmlRenderer::new(options, GraphRenderKeys::new(reg.clone()), reg)
+                let keys = GraphRenderKeys::new(reg.clone());
+                let skip_heading_key = reg
+                    .borrow_mut()
+                    .get_or_create::<NodeRefValue>(SKIP_ADMONITION_HEADING);
+                SharedHeadingHtmlRenderer::new(options, skip_heading_key, Some(keys.heading_shift))
             },
             rushdown::renderer::NoRendererOptions,
         );
@@ -833,4 +636,91 @@ where
             500,
         );
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::Path;
+
+    use anyhow::Result;
+    use tempfile::TempDir;
+
+    use super::{build_html_document, build_toc};
+    use crate::cache::Cache;
+    use crate::cli::BrokenLinkMode;
+    use crate::diagram::DiagramThemes;
+    use crate::graph::prepare_document;
+    use crate::DebugDumper;
+
+    fn write(path: &Path, text: &str) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, text).unwrap();
+    }
+
+    #[test]
+    fn toc_skips_admonition_titles_and_unlisted_headings() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        write(
+            &root.join("doc/index.md"),
+            concat!(
+                "# Root\n\n",
+                ":::note\n",
+                "## Hidden Admonition Heading\n",
+                "Some note.\n",
+                ":::\n\n",
+                "## Visible\n\n",
+                "### Hidden In Toc {.unlisted}\n",
+            ),
+        );
+
+        let prepared = prepare_document(
+            &DebugDumper::new(false),
+            root,
+            &root.join("doc/index.md"),
+            Some("test"),
+            BrokenLinkMode::Error,
+        )
+        .unwrap();
+
+        let toc = build_toc(prepared.graph());
+        assert!(toc.contains("Root"));
+        assert!(toc.contains("Visible"));
+        assert!(!toc.contains("Hidden Admonition Heading"));
+        assert!(!toc.contains("Hidden In Toc"));
+    }
+
+    #[test]
+    fn renders_endnotes_for_single_page_html() -> Result<()> {
+        let temp = TempDir::new()?;
+        let root = temp.path();
+        write(
+            &root.join("doc/index.md"),
+            "# Root\n\nText with note[^a].\n\n[^a]: Footnote body\n",
+        );
+
+        let prepared = prepare_document(
+            &DebugDumper::new(false),
+            root,
+            &root.join("doc/index.md"),
+            Some("test"),
+            BrokenLinkMode::Error,
+        )?;
+        let html = build_html_document(
+            "{{ body }}",
+            &tera::Context::new(),
+            &prepared,
+            "",
+            &Cache::new(None, true)?,
+            &DiagramThemes::default(),
+        )?;
+
+        assert!(html.contains("class=\"footnote-ref\""));
+        assert!(html.contains("<div class=\"footnotes\" role=\"doc-endnotes\">"));
+        assert!(html.contains("class=\"footnote-backref\""));
+        Ok(())
+    }
 }
