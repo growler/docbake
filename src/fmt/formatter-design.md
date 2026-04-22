@@ -16,7 +16,7 @@ not a document compiler.
 
 Rules are configured in `src/fmt/rules.rs` and currently enabled by default:
 
-- `PARAGRAPH_LINE_WIDTH = 100`
+- `PARAGRAPH_LINE_WIDTH = 80`
 - `ALIGN_TABLES = true`
 - `TRIM_TRAILING_WHITESPACE = true`
 - `ENSURE_FINAL_NEWLINE = true`

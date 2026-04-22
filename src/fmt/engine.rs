@@ -77,7 +77,9 @@ fn post_process(text: &str) -> String {
         out_lines.push(line);
     }
 
-    out_lines.join("\n")
+    out_lines
+        .join("\n")
+        .replace(crate::fmt::renderer::HARD_BREAK_SPACES_MARKER, "  ")
 }
 
 fn parse_fence_line(line: &str) -> Option<(char, usize)> {
@@ -116,7 +118,7 @@ mod tests {
     use anyhow::Result;
 
     #[test]
-    fn wraps_plain_paragraphs_to_100_columns() -> Result<()> {
+    fn wraps_plain_paragraphs_to_80_columns() -> Result<()> {
         let src = "word ".repeat(30);
         let formatted = super::format_markdown(&src)?;
         let longest = formatted
@@ -124,7 +126,7 @@ mod tests {
             .map(|line| line.chars().count())
             .max()
             .unwrap_or(0);
-        assert!(longest <= 100);
+        assert!(longest <= 80);
         Ok(())
     }
 
@@ -231,7 +233,7 @@ mod tests {
     }
 
     #[test]
-    fn normalizes_hard_break_to_backslash_marker() -> Result<()> {
+    fn preserves_backslash_hard_break_marker() -> Result<()> {
         let src = "\\*не курсив\\*\\\n\\# не заголовок\\\n\\[не ссылка\\]\n";
         let formatted = super::format_markdown(src)?;
         assert!(formatted.contains("\\*не курсив\\*\\\n\\# не заголовок\\\n\\[не ссылка\\]"));
@@ -241,12 +243,84 @@ mod tests {
     }
 
     #[test]
-    fn converts_two_space_hard_break_to_backslash_marker() -> Result<()> {
+    fn preserves_two_space_hard_break_marker() -> Result<()> {
         let src = "line one  \nline two  \nline three\n";
         let formatted = super::format_markdown(src)?;
-        assert!(formatted.contains("line one\\\nline two\\\nline three"));
-        assert!(!formatted.contains("line one  \n"));
-        assert!(!formatted.contains("line two  \n"));
+        assert!(formatted.contains("line one  \nline two  \nline three"));
+        assert!(!formatted.contains("line one\\\nline two\\\nline three"));
+        Ok(())
+    }
+
+    #[test]
+    fn preserves_reference_and_shortcut_links() -> Result<()> {
+        let src = "See [RFC 7763][rfc]. Also see [Сборщик].\n\n[rfc]: https://example.com\n[Сборщик]: builder/index.md\n";
+        let formatted = super::format_markdown(src)?;
+        assert!(formatted.contains("See [RFC 7763][rfc]. Also see [Сборщик]."));
+        assert!(!formatted.contains("[RFC 7763](https://example.com)"));
+        Ok(())
+    }
+
+    #[test]
+    fn preserves_autolink_text_without_mailto_rewrite() -> Result<()> {
+        let src = "<https://example.com>\n<someone@somewhere.net>\n";
+        let formatted = super::format_markdown(src)?;
+        assert!(formatted.contains("<https://example.com>"));
+        assert!(formatted.contains("<someone@somewhere.net>"));
+        assert!(!formatted.contains("mailto:"));
+        Ok(())
+    }
+
+    #[test]
+    fn preserves_fenced_div_opening_spacing() -> Result<()> {
+        let src = "::: important\nText\n:::\n";
+        let formatted = super::format_markdown(src)?;
+        assert!(formatted.starts_with("::: important\n"));
+        Ok(())
+    }
+
+    #[test]
+    fn preserves_lowercase_caption_prefix() -> Result<()> {
+        let src = "table: Example\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n";
+        let formatted = super::format_markdown(src)?;
+        assert!(formatted.starts_with("table: Example\n\n"));
+        Ok(())
+    }
+
+    #[test]
+    fn keeps_include_headings_compact() -> Result<()> {
+        let src = ":::include\n## [One](one.md)\n## [Two](two.md)\n:::\n";
+        let formatted = super::format_markdown(src)?;
+        assert!(formatted.contains(":::include\n## [One](one.md)\n## [Two](two.md)\n:::\n"));
+        Ok(())
+    }
+
+    #[test]
+    fn wraps_tight_list_items_without_inserting_blank_lines() -> Result<()> {
+        let src = concat!(
+            "- This is a very long tight list item that should still wrap according to the paragraph width ",
+            "without turning into a loose list item or collapsing into one overlong line.\n",
+            "- Second item\n"
+        );
+        let formatted = super::format_markdown(src)?;
+        assert!(formatted.contains(
+            "- This is a very long tight list item that should still wrap according to the\n"
+        ));
+        assert!(formatted.contains("  paragraph width without turning into a loose list item"));
+        assert!(!formatted.contains("\n\n- Second item"));
+        Ok(())
+    }
+
+    #[test]
+    fn wraps_definition_lines_without_turning_them_into_code_blocks() -> Result<()> {
+        let src = concat!(
+            "`lang`\n",
+            ":  Язык документа в формате RFC 5646 с достаточно длинным описанием, чтобы оно ",
+            "переносилось на следующую строку по правилу длины строки форматтера.\n"
+        );
+        let formatted = super::format_markdown(src)?;
+        assert!(formatted.contains(":  Язык документа"));
+        assert!(formatted.contains("\n   переносилось на следующую строку"));
+        assert!(!formatted.contains("\n    переносилось на следующую строку"));
         Ok(())
     }
 
@@ -256,6 +330,63 @@ mod tests {
         let formatted = super::format_markdown(src)?;
         assert!(formatted.contains("`` \\ ` * _ { } [ ] ( ) # + - . ! | ~ ``"));
         assert!(!formatted.contains("``\\ ` * _ { } [ ] ( ) # + - . ! | ~``"));
+        Ok(())
+    }
+
+    #[test]
+    fn preserves_tilde_fence_inside_list_item() -> Result<()> {
+        let src = "* Элемент 1\n\n* Элемент 2\n\n  ~~~\n  code\n  ~~~\n\n* Элемент 3\n";
+        let formatted = super::format_markdown(src)?;
+        assert_eq!(formatted, src);
+        Ok(())
+    }
+
+    #[test]
+    fn preserves_tilde_fence_on_definition_marker_line() -> Result<()> {
+        let src = concat!(
+            "`project/index.md`\n\n",
+            ":  ~~~markdown\n",
+            "   # Назначение системы\n\n",
+            "     :::include\n",
+            "   # [HLD](hld/index.md)\n",
+            "   :::\n",
+            "   ~~~\n",
+        );
+        let formatted = super::format_markdown(src)?;
+        assert_eq!(formatted, src);
+        Ok(())
+    }
+
+    #[test]
+    fn preserves_loose_list_block_indent() -> Result<()> {
+        let src = "- Пункт\n\n    ~~~\n  code\n    ~~~\n";
+        let formatted = super::format_markdown(src)?;
+        assert_eq!(formatted, src);
+        Ok(())
+    }
+
+    #[test]
+    fn preserves_definition_list_marker_spacing_and_wrap_indent() -> Result<()> {
+        let src = concat!(
+            "Апельсин\n",
+            ":   Плод вечнозеленых деревьев рода Citrus, который обычно имеет оранжевую кожуру и\n",
+            "    округлую форму.\n",
+        );
+        let formatted = super::format_markdown(src)?;
+        assert_eq!(formatted, src);
+        Ok(())
+    }
+
+    #[test]
+    fn preserves_block_style_footnote_definition() -> Result<()> {
+        let src = concat!(
+            "Текст со сноской[^fn2].\n\n",
+            "[^fn2]:\n",
+            "    А вот так выглядит сноска с несколькими параграфами.\n\n",
+            "    Параграфы должны выделяться четырьмя пробелами.\n",
+        );
+        let formatted = super::format_markdown(src)?;
+        assert_eq!(formatted, src);
         Ok(())
     }
 }

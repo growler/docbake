@@ -13,6 +13,8 @@ use rushdown_footnote::{FootnoteDefinition, FootnoteReference};
 
 type FootnoteLabels = Vec<(NodeRef, String)>;
 
+pub(crate) const HARD_BREAK_SPACES_MARKER: &str = "@@FMT_HARD_BREAK_SPACE@@";
+
 #[derive(Clone, Copy, Debug)]
 struct TableEdgeStyle {
     leading_pipe: bool,
@@ -126,6 +128,7 @@ impl MarkdownFmtRenderer {
                 for child in arena[node_ref].children(arena) {
                     self.render_block(&mut inner, arena, child, source, footnote_labels)?;
                 }
+                let inner = inner.trim_end_matches('\n');
                 for line in inner.lines() {
                     if line.is_empty() {
                         out.push_str(">\n");
@@ -156,39 +159,62 @@ impl MarkdownFmtRenderer {
                         }
                     };
                     let indent = " ".repeat(marker.len());
-                    let mut item_content = String::new();
-                    for child in arena[item].children(arena) {
-                        self.render_block(
-                            &mut item_content,
-                            arena,
-                            child,
-                            source,
-                            footnote_labels,
-                        )?;
-                    }
-                    if tight {
-                        while item_content.ends_with('\n') {
-                            item_content.pop();
-                        }
-                    }
-                    let mut first_line = true;
-                    for line in item_content.lines() {
-                        if first_line {
-                            out.push_str(&marker);
-                            out.push_str(line);
-                            out.push('\n');
-                            first_line = false;
-                        } else if line.is_empty() {
-                            out.push('\n');
+                    let children: Vec<NodeRef> = arena[item].children(arena).collect();
+                    let mut first_output_line = true;
+                    for (child_index, child) in children.iter().enumerate() {
+                        let mut rendered = if !tight {
+                            verbatim_fenced_code_block_from_source(arena, *child, source)
+                                .unwrap_or_default()
                         } else {
-                            out.push_str(&indent);
-                            out.push_str(line);
+                            String::new()
+                        };
+                        let verbatim = !rendered.is_empty();
+                        if !verbatim {
+                            if tight && matches!(arena[*child].kind_data(), KindData::Paragraph(_)) {
+                                self.render_inline_children(&mut rendered, arena, *child, source)?;
+                                rendered = self.wrap_paragraph(&rendered);
+                            } else {
+                                self.render_block(
+                                    &mut rendered,
+                                    arena,
+                                    *child,
+                                    source,
+                                    footnote_labels,
+                                )?;
+                            }
+                        }
+                        let rendered = rendered.trim_end_matches('\n');
+
+                        for line in rendered.lines() {
+                            if first_output_line {
+                                out.push_str(&marker);
+                                out.push_str(line);
+                                out.push('\n');
+                                first_output_line = false;
+                            } else if line.is_empty() {
+                                out.push('\n');
+                            } else if verbatim {
+                                out.push_str(line);
+                                out.push('\n');
+                            } else {
+                                out.push_str(&indent);
+                                out.push_str(line);
+                                out.push('\n');
+                            }
+                        }
+
+                        if !tight && child_index + 1 < children.len() {
                             out.push('\n');
                         }
+                    }
+                    if !tight {
+                        out.push('\n');
                     }
                     index += 1;
                 }
-                out.push('\n');
+                if tight {
+                    out.push('\n');
+                }
             }
             KindData::Table(_) => {
                 if self.align_tables {
@@ -305,11 +331,26 @@ impl MarkdownFmtRenderer {
             .iter()
             .find_map(|(nr, label)| (*nr == node_ref).then_some(label.as_str()))
             .unwrap_or("footnote");
+        let inline_first_line = footnote_has_inline_body(arena, node_ref, source).unwrap_or(true);
         let mut body = String::new();
         for child in arena[node_ref].children(arena) {
             self.render_block(&mut body, arena, child, source, footnote_labels)?;
         }
         let trimmed = body.trim_end();
+
+        if !inline_first_line {
+            writeln!(out, "[^{label}]:")?;
+            for line in trimmed.lines() {
+                if line.is_empty() {
+                    out.push('\n');
+                } else {
+                    writeln!(out, "    {line}")?;
+                }
+            }
+            out.push('\n');
+            return Ok(());
+        }
+
         let mut first_line = true;
         for line in trimmed.lines() {
             if first_line {
@@ -337,11 +378,6 @@ impl MarkdownFmtRenderer {
         footnote_labels: &FootnoteLabels,
     ) -> Result<()> {
         let caption = as_extension_data!(arena, node_ref, crate::caption::Caption);
-        let prefix = match caption.kind() {
-            crate::caption::CaptionKind::Table => "Table: ",
-            crate::caption::CaptionKind::Figure => "Figure: ",
-            crate::caption::CaptionKind::Listing => "Listing: ",
-        };
 
         let mut block_child = None;
         let mut caption_text_child = None;
@@ -353,10 +389,23 @@ impl MarkdownFmtRenderer {
             }
         }
 
+        let prefix = caption_prefix_from_source(arena, node_ref, block_child, source)
+            .unwrap_or_else(|| match caption.kind() {
+                crate::caption::CaptionKind::Table => "Table:".to_string(),
+                crate::caption::CaptionKind::Figure => "Figure:".to_string(),
+                crate::caption::CaptionKind::Listing => "Listing:".to_string(),
+            });
+
         let mut caption_line = String::new();
-        caption_line.push_str(prefix);
+        caption_line.push_str(&prefix);
         if let Some(ct) = caption_text_child {
-            self.render_inline_children(&mut caption_line, arena, ct, source)?;
+            let mut caption_text = String::new();
+            self.render_inline_children(&mut caption_text, arena, ct, source)?;
+            let caption_text = caption_text.trim_start();
+            if !caption_text.is_empty() {
+                caption_line.push(' ');
+                caption_line.push_str(caption_text);
+            }
         }
         if let Some(attrs) = render_node_attrs(arena, node_ref, source) {
             if !caption_line.ends_with(' ') {
@@ -395,8 +444,25 @@ impl MarkdownFmtRenderer {
         out.push_str(&fenced_div_opening(arena, node_ref, source));
         out.push('\n');
 
-        for child in arena[node_ref].children(arena) {
-            self.render_block(out, arena, child, source, footnote_labels)?;
+        let children: Vec<NodeRef> = arena[node_ref].children(arena).collect();
+        for (index, child) in children.iter().enumerate() {
+            let mut rendered = String::new();
+            self.render_block(&mut rendered, arena, *child, source, footnote_labels)?;
+            out.push_str(rendered.trim_end_matches('\n'));
+
+            if index + 1 < children.len() {
+                let next = children[index + 1];
+                let separator = if matches!(arena[*child].kind_data(), KindData::Heading(_))
+                    && matches!(arena[next].kind_data(), KindData::Heading(_))
+                {
+                    "\n"
+                } else {
+                    "\n\n"
+                };
+                out.push_str(separator);
+            } else {
+                out.push('\n');
+            }
         }
 
         out.push_str(":::\n\n");
@@ -439,28 +505,61 @@ impl MarkdownFmtRenderer {
             }
 
             for def_ref in definitions {
-                let mut inner = String::new();
-                for child in arena[def_ref].children(arena) {
-                    self.render_block(&mut inner, arena, child, source, footnote_labels)?;
-                }
-                let trimmed = inner.trim_end();
+                let definition_prefix =
+                    definition_prefix_from_source(arena, def_ref, source).unwrap_or_else(|| ":  ".to_string());
+                let wrapped_indent = " ".repeat(definition_prefix.chars().count());
+                let children: Vec<NodeRef> = arena[def_ref].children(arena).collect();
+                let Some((first_child, rest)) = children.split_first() else {
+                    out.push_str(":\n");
+                    continue;
+                };
+
+                let mut first_rendered = String::new();
+                self.render_block(
+                    &mut first_rendered,
+                    arena,
+                    *first_child,
+                    source,
+                    footnote_labels,
+                )?;
+                let first_rendered = first_rendered.trim_end_matches('\n');
                 let mut first_line = true;
-                for line in trimmed.lines() {
+                for line in first_rendered.lines() {
                     if first_line {
-                        out.push_str(":  ");
+                        out.push_str(&definition_prefix);
                         out.push_str(line);
                         out.push('\n');
                         first_line = false;
                     } else if line.is_empty() {
                         out.push('\n');
                     } else {
-                        out.push_str("    ");
+                        out.push_str(&wrapped_indent);
                         out.push_str(line);
                         out.push('\n');
                     }
                 }
-                if first_line {
-                    out.push_str(":\n");
+
+                for child in rest {
+                    out.push('\n');
+                    let mut rendered = String::new();
+                    self.render_block(&mut rendered, arena, *child, source, footnote_labels)?;
+                    let rendered = rendered.trim_end_matches('\n');
+                    let child_indent = definition_child_indent_from_source(
+                        arena,
+                        def_ref,
+                        *child,
+                        source,
+                    )
+                    .unwrap_or_else(|| wrapped_indent.clone());
+                    for line in rendered.lines() {
+                        if line.is_empty() {
+                            out.push('\n');
+                        } else {
+                            out.push_str(&child_indent);
+                            out.push_str(line);
+                            out.push('\n');
+                        }
+                    }
                 }
             }
             out.push('\n');
@@ -661,7 +760,7 @@ impl MarkdownFmtRenderer {
             KindData::Text(text) => {
                 out.push_str(text.str(source));
                 if text.has_qualifiers(TextQualifier::HARD_LINE_BREAK) {
-                    out.push_str("\\\n");
+                    out.push_str(hard_line_break_marker(arena, node_ref, source));
                 } else if text.has_qualifiers(TextQualifier::SOFT_LINE_BREAK) {
                     out.push(' ');
                 }
@@ -677,14 +776,16 @@ impl MarkdownFmtRenderer {
                 }
             }
             KindData::Emphasis(emphasis) if emphasis.level() == 1 => {
-                out.push('*');
+                let marker = emphasis_marker_from_source(arena, node_ref, source);
+                out.push(marker);
                 self.render_inline_children(out, arena, node_ref, source)?;
-                out.push('*');
+                out.push(marker);
             }
             KindData::Emphasis(_) => {
-                out.push_str("**");
+                let marker = emphasis_marker_from_source(arena, node_ref, source);
+                out.push_str(&marker.to_string().repeat(2));
                 self.render_inline_children(out, arena, node_ref, source)?;
-                out.push_str("**");
+                out.push_str(&marker.to_string().repeat(2));
             }
             KindData::Strikethrough(_) => {
                 out.push_str("~~");
@@ -692,7 +793,16 @@ impl MarkdownFmtRenderer {
                 out.push_str("~~");
             }
             KindData::Link(link) => match link.link_kind() {
-                LinkKind::Auto(_) => write!(out, "<{}>", link.destination_str(source))?,
+                LinkKind::Auto(auto) => out.push_str(auto.text_str(source)),
+                LinkKind::Reference(_) => {
+                    if let Some(raw) = original_reference_link(arena, node_ref, source) {
+                        out.push_str(&raw);
+                    } else {
+                        out.push('[');
+                        self.render_inline_children(out, arena, node_ref, source)?;
+                        out.push(']');
+                    }
+                }
                 _ => {
                     out.push('[');
                     self.render_inline_children(out, arena, node_ref, source)?;
@@ -1021,6 +1131,10 @@ fn render_node_attrs(arena: &Arena, node_ref: NodeRef, source: &str) -> Option<S
 }
 
 fn fenced_div_opening(arena: &Arena, node_ref: NodeRef, source: &str) -> String {
+    if let Some(opening) = fenced_div_opening_from_source(arena, node_ref, source) {
+        return opening;
+    }
+
     let attrs = arena[node_ref].attributes();
     if attrs.is_empty() {
         return ":::".to_string();
@@ -1042,10 +1156,58 @@ fn fenced_div_opening(arena: &Arena, node_ref: NodeRef, source: &str) -> String 
     format!(":::{attrs_text}")
 }
 
-fn opening_fence_from_source(arena: &Arena, node_ref: NodeRef, source: &str) -> Option<String> {
+fn fenced_div_opening_from_source(
+    arena: &Arena,
+    node_ref: NodeRef,
+    source: &str,
+) -> Option<String> {
     let pos = arena[node_ref].pos()?;
     let line = source_line_at_pos(source, pos)?;
+    let trimmed = line.trim_start();
+    trimmed.starts_with(":::").then(|| line.to_string())
+}
+
+fn opening_fence_from_source(arena: &Arena, node_ref: NodeRef, source: &str) -> Option<String> {
+    let pos = arena[node_ref].pos()?;
+    let line = source_tail_at_pos(source, pos)?;
     parse_opening_fence(line).map(|_| line.to_string())
+}
+
+fn verbatim_fenced_code_block_from_source(
+    arena: &Arena,
+    node_ref: NodeRef,
+    source: &str,
+) -> Option<String> {
+    let KindData::CodeBlock(code) = arena[node_ref].kind_data() else {
+        return None;
+    };
+    if !matches!(code.code_block_kind(), CodeBlockKind::Fenced) {
+        return None;
+    }
+
+    let pos = arena[node_ref].pos()?;
+    let start = source[..pos].rfind('\n').map(|idx| idx + 1).unwrap_or(0);
+    let opening = source_line_at_pos(source, pos)?;
+    let (_, marker, run) = parse_opening_fence_any_indent(opening)?;
+
+    let mut line_start = start;
+    while line_start < source.len() {
+        let line_end = source[line_start..]
+            .find('\n')
+            .map(|idx| line_start + idx)
+            .unwrap_or(source.len());
+        let line = source[line_start..line_end].trim_end_matches('\r');
+        if line_start > start && is_fence_close_any_indent(line, marker, run) {
+            let block_end = if line_end < source.len() { line_end + 1 } else { line_end };
+            return Some(source[start..block_end].to_string());
+        }
+        if line_end == source.len() {
+            break;
+        }
+        line_start = line_end + 1;
+    }
+
+    None
 }
 
 fn closing_fence_from_opening(opening: &str) -> Option<String> {
@@ -1069,6 +1231,112 @@ fn source_line_at_pos(source: &str, pos: usize) -> Option<&str> {
     Some(source[start..end].trim_end_matches('\r'))
 }
 
+fn source_tail_at_pos(source: &str, pos: usize) -> Option<&str> {
+    if pos > source.len() {
+        return None;
+    }
+    let end = source[pos..]
+        .find('\n')
+        .map(|idx| pos + idx)
+        .unwrap_or(source.len());
+    Some(source[pos..end].trim_end_matches('\r'))
+}
+
+fn caption_prefix_from_source(
+    arena: &Arena,
+    node_ref: NodeRef,
+    block_child: Option<NodeRef>,
+    source: &str,
+) -> Option<String> {
+    let pos = block_child
+        .and_then(|child| arena[child].pos())
+        .or_else(|| arena[node_ref].pos())?;
+
+    let start = source[..pos].rfind('\n').map(|idx| idx + 1).unwrap_or(0);
+    let preceding = source[..start].trim_end_matches(['\n', '\r']);
+    let line_start = preceding.rfind('\n').map(|idx| idx + 1).unwrap_or(0);
+    let line = preceding.get(line_start..)?;
+    let trimmed = line.trim_start();
+    let colon = trimmed.find(':')?;
+    let prefix = &trimmed[..=colon];
+    match prefix.to_ascii_lowercase().as_str() {
+        "table:" | "figure:" | "listing:" => Some(prefix.to_string()),
+        _ => None,
+    }
+}
+
+fn emphasis_marker_from_source(arena: &Arena, node_ref: NodeRef, source: &str) -> char {
+    let Some(pos) = arena[node_ref].pos() else {
+        return '*';
+    };
+    match source.as_bytes().get(pos).copied() {
+        Some(b'_') => '_',
+        Some(b'*') => '*',
+        _ => '*',
+    }
+}
+
+fn hard_line_break_marker(arena: &Arena, node_ref: NodeRef, source: &str) -> &'static str {
+    let Some(pos) = arena[node_ref].pos() else {
+        return "\\\n";
+    };
+    let Some(line) = source_line_at_pos(source, pos) else {
+        return "\\\n";
+    };
+    if line.ends_with('\\') {
+        "\\\n"
+    } else if line.ends_with("  ") {
+        "@@FMT_HARD_BREAK_SPACE@@\n"
+    } else {
+        "\\\n"
+    }
+}
+
+fn original_reference_link(arena: &Arena, node_ref: NodeRef, source: &str) -> Option<String> {
+    let start = arena[node_ref].pos()?;
+    let first_end = parse_link_bracket(source, start)?;
+    let rest = source.get(first_end..)?;
+
+    if rest.starts_with('(') {
+        return None;
+    }
+
+    if rest.starts_with('[') {
+        let second_end = parse_link_bracket(source, first_end)?;
+        return source.get(start..second_end).map(ToString::to_string);
+    }
+
+    source.get(start..first_end).map(ToString::to_string)
+}
+
+fn parse_link_bracket(source: &str, start: usize) -> Option<usize> {
+    let bytes = source.as_bytes();
+    if bytes.get(start) != Some(&b'[') {
+        return None;
+    }
+
+    let mut depth = 0usize;
+    let mut index = start;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' => {
+                index = (index + 2).min(bytes.len());
+                continue;
+            }
+            b'[' => depth += 1,
+            b']' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Some(index + 1);
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    None
+}
+
 fn parse_opening_fence(line: &str) -> Option<(usize, char, usize)> {
     let indent = line.chars().take_while(|c| *c == ' ').count();
     if indent > 3 {
@@ -1081,6 +1349,70 @@ fn parse_opening_fence(line: &str) -> Option<(usize, char, usize)> {
     }
     let run = trimmed.chars().take_while(|c| *c == marker).count();
     (run >= 3).then_some((indent, marker, run))
+}
+
+fn parse_opening_fence_any_indent(line: &str) -> Option<(usize, char, usize)> {
+    let indent = line.chars().take_while(|c| *c == ' ').count();
+    let trimmed = &line[indent..];
+    let marker = trimmed.chars().next()?;
+    if marker != '`' && marker != '~' {
+        return None;
+    }
+    let run = trimmed.chars().take_while(|c| *c == marker).count();
+    (run >= 3).then_some((indent, marker, run))
+}
+
+fn is_fence_close_any_indent(line: &str, marker: char, open_len: usize) -> bool {
+    let indent = line.chars().take_while(|c| *c == ' ').count();
+    let trimmed = &line[indent..];
+    let run = trimmed.chars().take_while(|c| *c == marker).count();
+    if run < open_len {
+        return false;
+    }
+    trimmed[run..].chars().all(|c| c == ' ' || c == '\t')
+}
+
+fn definition_prefix_from_source(arena: &Arena, node_ref: NodeRef, source: &str) -> Option<String> {
+    let pos = arena[node_ref].pos()?;
+    let tail = source_tail_at_pos(source, pos)?;
+    let colon = tail.find(':')?;
+    if colon > 3 {
+        return None;
+    }
+
+    let whitespace_len = tail[colon + 1..]
+        .chars()
+        .take_while(|c| *c == ' ' || *c == '\t')
+        .count();
+    if whitespace_len == 0 {
+        return Some(tail[..=colon].to_string());
+    }
+
+    Some(tail[..colon + 1 + whitespace_len].to_string())
+}
+
+fn definition_child_indent_from_source(
+    arena: &Arena,
+    def_ref: NodeRef,
+    child_ref: NodeRef,
+    source: &str,
+) -> Option<String> {
+    let def_pos = arena[def_ref].pos()?;
+    let def_line_start = source[..def_pos].rfind('\n').map(|idx| idx + 1).unwrap_or(0);
+    let def_indent = source[def_line_start..def_pos].chars().count();
+
+    let child_pos = arena[child_ref].pos()?;
+    let child_line = source_line_at_pos(source, child_pos)?;
+    let child_indent = child_line.chars().take_while(|c| *c == ' ').count();
+
+    Some(" ".repeat(child_indent.saturating_sub(def_indent)))
+}
+
+fn footnote_has_inline_body(arena: &Arena, node_ref: NodeRef, source: &str) -> Option<bool> {
+    let pos = arena[node_ref].pos()?;
+    let tail = source_tail_at_pos(source, pos)?;
+    let colon = tail.find(':')?;
+    Some(!tail[colon + 1..].trim().is_empty())
 }
 
 static FOOTNOTE_RE: LazyLock<Regex> =
