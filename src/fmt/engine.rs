@@ -199,6 +199,20 @@ mod tests {
     }
 
     #[test]
+    fn preserves_ordered_list_marker_character_while_renumbering() -> Result<()> {
+        let src = "1) Элемент 1\n   1) Элемент 1.1\n   1) Элемент 1.2\n1) Элемент 2\n";
+        let formatted = super::format_markdown(src)?;
+
+        assert!(formatted.contains("1) Элемент 1"));
+        assert!(formatted.contains("   1) Элемент 1.1"));
+        assert!(formatted.contains("   2) Элемент 1.2"));
+        assert!(formatted.contains("2) Элемент 2"));
+        assert!(!formatted.contains("1. Элемент 1"));
+
+        Ok(())
+    }
+
+    #[test]
     fn keeps_definition_list_structure() -> Result<()> {
         let src = "Термин\n:  Определение\n\nТермин\n:  Определение\n";
         let formatted = super::format_markdown(src)?;

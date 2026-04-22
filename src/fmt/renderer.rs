@@ -141,11 +141,13 @@ impl MarkdownFmtRenderer {
             KindData::List(list) => {
                 let tight = list.is_tight();
                 let ordered = list.is_ordered();
-                let unordered_marker = if ordered { b'-' } else { list.marker() } as char;
+                let list_marker = list.marker() as char;
+                let unordered_marker = if ordered { '-' } else { list_marker };
+                let ordered_marker = list_marker;
                 let mut index = list.start().max(1) as usize;
                 for item in arena[node_ref].children(arena) {
                     let marker = if ordered {
-                        format!("{}. ", index)
+                        format!("{index}{ordered_marker} ")
                     } else {
                         match arena[item].kind_data() {
                             KindData::ListItem(li) => match li.task() {
