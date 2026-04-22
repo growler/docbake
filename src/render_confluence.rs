@@ -24,7 +24,7 @@ use rushdown_footnote::{FootnoteDefinition, FootnoteReference};
 use crate::cache::Cache;
 use crate::diagram::DiagramThemes;
 use crate::graph::PreparedDocument;
-use crate::render_html_common::is_inline_image;
+use crate::html::is_inline_image;
 
 use crate::DebugDumper;
 

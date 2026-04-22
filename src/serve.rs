@@ -14,8 +14,8 @@ use crate::cache::Cache;
 use crate::cli::{BrokenLinkMode, OutputFormat};
 use crate::diagram::DiagramThemes;
 use crate::graph::prepare_document;
-use crate::render_html::{build_html_document, build_toc};
-use crate::render_html_multi::build_multi_page_html;
+use crate::html_page::{build_html_document, build_toc};
+use crate::html_site::build_multi_page_html;
 use crate::theme::Theme;
 use crate::DebugDumper;
 
@@ -278,8 +278,7 @@ fn rebuild(
                 .path
                 .parent()
                 .ok_or_else(|| anyhow::anyhow!("root document has no parent directory"))?;
-            let plan =
-                crate::render_html_multi::build_multi_page_plan(&build, root_source_dir, base_dir)?;
+            let plan = crate::html_site::build_multi_page_plan(&build, root_source_dir, base_dir)?;
             let search_json = crate::search_index::build_search_index_multi(&build, &plan);
             template_context.insert("search_index", &search_json);
             let pages = build_multi_page_html(

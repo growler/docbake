@@ -194,7 +194,7 @@ impl<W: TextWrite> RenderNode<W> for DiagramHtmlRenderer<W> {
                 if key == "width" || key == "height" || key == "style" {
                     continue;
                 }
-                let v = crate::render_html_common::html_escape(&value.str(source));
+                let v = crate::html::html_escape(&value.str(source));
                 let _ = write!(tag, " {key}=\"{v}\"");
             }
             tag.push('>');

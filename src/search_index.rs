@@ -21,7 +21,7 @@ use rushdown::ast::{self, Arena, CodeBlock, CodeBlockKind, KindData, NodeRef, Wa
 use serde::Serialize;
 
 use crate::graph::{DocumentGraph, PreparedDocument};
-use crate::render_html_multi::MultiPagePlan;
+use crate::html_site::MultiPagePlan;
 
 /// Maximum length (in chars) of the display snippet.
 const SNIPPET_MAX_CHARS: usize = 200;

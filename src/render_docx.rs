@@ -528,7 +528,7 @@ impl<'a> DocxRenderer<'a> {
             if !matches!(arena[node_ref].kind_data(), KindData::Heading(_)) {
                 continue;
             }
-            if crate::render_html_common::is_admonition_title_heading(arena, node_ref, source) {
+            if crate::html::is_admonition_title_heading(arena, node_ref, source) {
                 continue;
             }
 
@@ -572,7 +572,7 @@ impl<'a> DocxRenderer<'a> {
 
             if let KindData::Heading(_) = arena[node_ref].kind_data() {
                 // Skip admonition title headings.
-                if crate::render_html_common::is_admonition_title_heading(arena, node_ref, source) {
+                if crate::html::is_admonition_title_heading(arena, node_ref, source) {
                     continue;
                 }
 
@@ -639,9 +639,7 @@ impl<'a> DocxRenderer<'a> {
                 let mut has_bookmark = false;
                 let eligible_for_toc_bookmark = level <= TOC_DEPTH
                     && !heading_text.is_empty()
-                    && !crate::render_html_common::is_admonition_title_heading(
-                        arena, node_ref, source,
-                    );
+                    && !crate::html::is_admonition_title_heading(arena, node_ref, source);
                 if eligible_for_toc_bookmark {
                     let next_key = self.toc_heading_keys.borrow_mut().pop_front();
                     if let Some(key) = next_key {

@@ -838,8 +838,7 @@ impl TypstRenderer {
                     .map(|v| v.str(source))
                     .unwrap_or_default();
                 let has_inline_class = classes.split_whitespace().any(|c| c == "inline-image");
-                let is_inline =
-                    has_inline_class || crate::render_html_common::is_inline_image(arena, node_ref);
+                let is_inline = has_inline_class || crate::html::is_inline_image(arena, node_ref);
                 let width_attr = attrs.get("width").map(|v| v.str(source).to_string());
                 let height_attr = attrs.get("height").map(|v| v.str(source).to_string());
 

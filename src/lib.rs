@@ -10,6 +10,9 @@ pub(crate) mod diagram;
 mod fmt;
 pub(crate) mod gdoc;
 pub(crate) mod graph;
+mod html;
+mod html_page;
+mod html_site;
 mod publish;
 mod render_confluence;
 mod render_docx;
@@ -30,8 +33,8 @@ use crate::build::{build_template_context, compile_typst, copy_assets, render_pd
 use crate::cache::Cache;
 use crate::cli::{BrokenLinkMode, Cli, OutputFormat};
 use crate::graph::prepare_document;
-use crate::render_html::{build_html_document, build_toc};
-use crate::render_html_multi::build_multi_page_html;
+use crate::html_page::{build_html_document, build_toc};
+use crate::html_site::build_multi_page_html;
 use crate::render_typst::TypstRenderer;
 use crate::theme::Theme;
 use anyhow::{anyhow, bail, Context, Result};
@@ -616,11 +619,7 @@ pub(crate) fn build_command(
                 .path
                 .parent()
                 .ok_or_else(|| anyhow!("root document has no parent directory"))?;
-            let plan = crate::render_html_multi::build_multi_page_plan(
-                &build,
-                root_source_dir,
-                &base_dir,
-            )?;
+            let plan = crate::html_site::build_multi_page_plan(&build, root_source_dir, &base_dir)?;
             let search_json = search_index::build_search_index_multi(&build, &plan);
             template_context.insert("search_index", &search_json);
             let pages = build_multi_page_html(
@@ -840,7 +839,7 @@ mod tests {
     use rushdown::parser::{self, ParserExtension};
     use rushdown::text::BasicReader;
 
-    use crate::render_html_common::is_inline_image;
+    use crate::html::is_inline_image;
 
     fn parse(source: &str) -> (Arena, NodeRef) {
         let parser = parser::Parser::with_extensions(
