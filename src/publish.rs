@@ -536,57 +536,11 @@ fn write_gdoc_id_to_source(path: &Path, url: &str) -> Result<()> {
         .with_context(|| format!("failed to read {}", path.display()))?;
 
     let new_content = if let Some((fm, rest)) = split_front_matter_for_edit(&content) {
-        if fm.contains("google-docs:") {
-            // There's already a google-docs block — insert/replace the id line.
-            let mut result = String::new();
-            let mut in_gdoc_block = false;
-            let mut id_written = false;
-            for line in fm.lines() {
-                if line.starts_with("google-docs:") {
-                    in_gdoc_block = true;
-                    result.push_str(line);
-                    result.push('\n');
-                    continue;
-                }
-                if in_gdoc_block {
-                    if line.starts_with("  ") || line.starts_with('\t') {
-                        if line.trim_start().starts_with("id:") {
-                            // Replace existing id line.
-                            result.push_str(&format!("  id: {url}\n"));
-                            id_written = true;
-                            continue;
-                        }
-                        result.push_str(line);
-                        result.push('\n');
-                        continue;
-                    } else {
-                        // Left the google-docs block.
-                        if !id_written {
-                            result.push_str(&format!("  id: {url}\n"));
-                            id_written = true;
-                        }
-                        in_gdoc_block = false;
-                    }
-                }
-                result.push_str(line);
-                result.push('\n');
-            }
-            if in_gdoc_block && !id_written {
-                result.push_str(&format!("  id: {url}\n"));
-            }
-            format!("{result}{rest}")
-        } else {
-            // No google-docs block — insert one before the closing ---.
-            let mut result = String::new();
-            let fm_trimmed = fm.trim_end_matches('\n');
-            result.push_str(fm_trimmed);
-            result.push_str(&format!("\ngoogle-docs:\n  id: {url}\n"));
-            result.push_str(rest);
-            result
-        }
+        let updated_front_matter = upsert_google_docs_id_in_front_matter(fm, url);
+        format!("{updated_front_matter}{rest}")
     } else {
-        // No front matter at all — prepend one.
-        format!("---\ngoogle-docs:\n  id: {url}\n---\n{content}")
+        let newline = preferred_newline(&content);
+        format!("---{newline}google-docs:{newline}  id: {url}{newline}---{newline}{content}")
     };
 
     std::fs::write(path, new_content)
@@ -599,18 +553,184 @@ fn write_gdoc_id_to_source(path: &Path, url: &str) -> Result<()> {
 /// Returns `Some((front_matter_including_delimiters, rest))` or `None`
 /// if no front matter is present.
 fn split_front_matter_for_edit(content: &str) -> Option<(&str, &str)> {
-    if !content.starts_with("---") {
-        return None;
+    let (front_matter, rest) = crate::graph::build::split_front_matter(content);
+    let front_matter = front_matter?;
+    Some((&content[..front_matter.len()], rest))
+}
+
+fn upsert_google_docs_id_in_front_matter(front_matter: &str, url: &str) -> String {
+    let newline = preferred_newline(front_matter);
+    let had_trailing_newline = front_matter.ends_with('\n');
+    let mut lines: Vec<String> = front_matter.lines().map(str::to_string).collect();
+
+    if lines.len() < 2 {
+        return front_matter.to_string();
     }
-    let after_first = &content[3..];
-    let after_first = after_first.strip_prefix('\n').unwrap_or(after_first);
-    let end = after_first.find("\n---")?;
-    let fm_end = 3 + (content.len() - after_first.len()) + end + 4; // include "\n---"
-                                                                    // Skip the newline after closing ---
-    let rest_start = if content.len() > fm_end && content.as_bytes()[fm_end] == b'\n' {
-        fm_end + 1
+
+    let closing_idx = lines.len() - 1;
+    let google_docs_idx = (1..closing_idx).find(|&idx| is_google_docs_key_line(&lines[idx]));
+
+    if let Some(gdoc_idx) = google_docs_idx {
+        let gdoc_indent = indentation_width(&lines[gdoc_idx]);
+        let mut block_end = closing_idx;
+        let mut id_replaced = false;
+
+        for (idx, line) in lines
+            .iter_mut()
+            .enumerate()
+            .take(closing_idx)
+            .skip(gdoc_idx + 1)
+        {
+            if line.trim().is_empty() {
+                continue;
+            }
+            if indentation_width(line) <= gdoc_indent {
+                block_end = idx;
+                break;
+            }
+
+            if is_id_key_line(line) {
+                let prefix_len = line
+                    .chars()
+                    .take_while(|ch| *ch == ' ' || *ch == '\t')
+                    .map(char::len_utf8)
+                    .sum();
+                let indent = &line[..prefix_len];
+                *line = format!("{indent}id: {url}");
+                id_replaced = true;
+                break;
+            }
+        }
+
+        if !id_replaced {
+            let block_indent = child_block_indent(&lines, gdoc_idx, block_end)
+                .unwrap_or_else(|| format!("{}  ", leading_indent(&lines[gdoc_idx])));
+            lines.insert(block_end, format!("{block_indent}id: {url}"));
+        }
     } else {
-        fm_end
+        lines.insert(closing_idx, "google-docs:".to_string());
+        lines.insert(closing_idx + 1, format!("  id: {url}"));
+    }
+
+    let mut out = lines.join(newline);
+    if had_trailing_newline {
+        out.push_str(newline);
+    }
+    out
+}
+
+fn preferred_newline(text: &str) -> &'static str {
+    if text.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    }
+}
+
+fn indentation_width(line: &str) -> usize {
+    line.chars()
+        .take_while(|ch| *ch == ' ' || *ch == '\t')
+        .count()
+}
+
+fn leading_indent(line: &str) -> &str {
+    let end = line
+        .char_indices()
+        .find_map(|(idx, ch)| (ch != ' ' && ch != '\t').then_some(idx))
+        .unwrap_or(line.len());
+    &line[..end]
+}
+
+fn child_block_indent(lines: &[String], start: usize, end: usize) -> Option<String> {
+    for line in lines.iter().take(end).skip(start + 1) {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if indentation_width(line) > indentation_width(&lines[start]) {
+            return Some(leading_indent(line).to_string());
+        }
+    }
+    None
+}
+
+fn is_google_docs_key_line(line: &str) -> bool {
+    let trimmed = line.trim_start_matches([' ', '\t']);
+    let Some(after_key) = trimmed.strip_prefix("google-docs:") else {
+        return false;
     };
-    Some((&content[..fm_end], &content[rest_start..]))
+    after_key.trim().is_empty() || after_key.trim_start().starts_with('#')
+}
+
+fn is_id_key_line(line: &str) -> bool {
+    let trimmed = line.trim_start_matches([' ', '\t']);
+    let Some((key, _value)) = trimmed.split_once(':') else {
+        return false;
+    };
+    key.trim() == "id"
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use anyhow::Result;
+
+    use super::write_gdoc_id_to_source;
+
+    fn write_and_update(content: &str, url: &str) -> Result<String> {
+        let temp = tempfile::tempdir()?;
+        let path = temp.path().join("doc.md");
+        std::fs::write(&path, content)?;
+        write_gdoc_id_to_source(Path::new(&path), url)?;
+        Ok(std::fs::read_to_string(path)?)
+    }
+
+    #[test]
+    fn replaces_existing_google_docs_id() -> Result<()> {
+        let input = "---\ntitle: Test\ngoogle-docs:\n  id: old\n  folder: abc\n---\nBody\n";
+        let updated = write_and_update(input, "https://docs.google.com/document/d/new/edit")?;
+        assert!(updated.contains("  id: https://docs.google.com/document/d/new/edit\n"));
+        assert!(!updated.contains("  id: old\n"));
+        assert!(updated.contains("  folder: abc\n"));
+        Ok(())
+    }
+
+    #[test]
+    fn inserts_id_into_existing_google_docs_block() -> Result<()> {
+        let input = "---\ntitle: Test\ngoogle-docs:\n  folder: abc\nmeta: 1\n---\nBody\n";
+        let updated = write_and_update(input, "https://docs.google.com/document/d/new/edit")?;
+        let expected = "---\ntitle: Test\ngoogle-docs:\n  folder: abc\n  id: https://docs.google.com/document/d/new/edit\nmeta: 1\n---\nBody\n";
+        assert_eq!(updated, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn prepends_front_matter_when_absent() -> Result<()> {
+        let input = "# Title\n\nBody\n";
+        let updated = write_and_update(input, "https://docs.google.com/document/d/new/edit")?;
+        assert!(updated.starts_with(
+            "---\ngoogle-docs:\n  id: https://docs.google.com/document/d/new/edit\n---\n"
+        ));
+        assert!(updated.ends_with("# Title\n\nBody\n"));
+        Ok(())
+    }
+
+    #[test]
+    fn preserves_crlf_line_endings() -> Result<()> {
+        let input = "---\r\ntitle: Test\r\ngoogle-docs:\r\n  folder: abc\r\n---\r\nBody\r\n";
+        let updated = write_and_update(input, "https://docs.google.com/document/d/new/edit")?;
+        let expected = "---\r\ntitle: Test\r\ngoogle-docs:\r\n  folder: abc\r\n  id: https://docs.google.com/document/d/new/edit\r\n---\r\nBody\r\n";
+        assert_eq!(updated, expected);
+        assert!(updated
+            .as_bytes()
+            .windows(2)
+            .any(|window| window == b"\r\n"));
+        assert!(!updated
+            .as_bytes()
+            .windows(1)
+            .enumerate()
+            .any(|(idx, window)| window == b"\n"
+                && (idx == 0 || updated.as_bytes()[idx - 1] != b'\r')));
+        Ok(())
+    }
 }
