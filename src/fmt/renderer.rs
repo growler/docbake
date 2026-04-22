@@ -1,8 +1,6 @@
 use std::fmt::Write as _;
-use std::sync::LazyLock;
 
 use anyhow::{bail, Result};
-use regex::Regex;
 use rushdown::ast::{
     Arena, CodeBlockKind, KindData, LinkKind, NodeRef, TableCellAlignment, Task, TextQualifier,
 };
@@ -170,7 +168,8 @@ impl MarkdownFmtRenderer {
                         };
                         let verbatim = !rendered.is_empty();
                         if !verbatim {
-                            if tight && matches!(arena[*child].kind_data(), KindData::Paragraph(_)) {
+                            if tight && matches!(arena[*child].kind_data(), KindData::Paragraph(_))
+                            {
                                 self.render_inline_children(&mut rendered, arena, *child, source)?;
                                 rendered = self.wrap_paragraph(&rendered);
                             } else {
@@ -505,8 +504,8 @@ impl MarkdownFmtRenderer {
             }
 
             for def_ref in definitions {
-                let definition_prefix =
-                    definition_prefix_from_source(arena, def_ref, source).unwrap_or_else(|| ":  ".to_string());
+                let definition_prefix = definition_prefix_from_source(arena, def_ref, source)
+                    .unwrap_or_else(|| ":  ".to_string());
                 let wrapped_indent = " ".repeat(definition_prefix.chars().count());
                 let children: Vec<NodeRef> = arena[def_ref].children(arena).collect();
                 let Some((first_child, rest)) = children.split_first() else {
@@ -544,13 +543,9 @@ impl MarkdownFmtRenderer {
                     let mut rendered = String::new();
                     self.render_block(&mut rendered, arena, *child, source, footnote_labels)?;
                     let rendered = rendered.trim_end_matches('\n');
-                    let child_indent = definition_child_indent_from_source(
-                        arena,
-                        def_ref,
-                        *child,
-                        source,
-                    )
-                    .unwrap_or_else(|| wrapped_indent.clone());
+                    let child_indent =
+                        definition_child_indent_from_source(arena, def_ref, *child, source)
+                            .unwrap_or_else(|| wrapped_indent.clone());
                     for line in rendered.lines() {
                         if line.is_empty() {
                             out.push('\n');
@@ -1198,7 +1193,11 @@ fn verbatim_fenced_code_block_from_source(
             .unwrap_or(source.len());
         let line = source[line_start..line_end].trim_end_matches('\r');
         if line_start > start && is_fence_close_any_indent(line, marker, run) {
-            let block_end = if line_end < source.len() { line_end + 1 } else { line_end };
+            let block_end = if line_end < source.len() {
+                line_end + 1
+            } else {
+                line_end
+            };
             return Some(source[start..block_end].to_string());
         }
         if line_end == source.len() {
@@ -1398,7 +1397,10 @@ fn definition_child_indent_from_source(
     source: &str,
 ) -> Option<String> {
     let def_pos = arena[def_ref].pos()?;
-    let def_line_start = source[..def_pos].rfind('\n').map(|idx| idx + 1).unwrap_or(0);
+    let def_line_start = source[..def_pos]
+        .rfind('\n')
+        .map(|idx| idx + 1)
+        .unwrap_or(0);
     let def_indent = source[def_line_start..def_pos].chars().count();
 
     let child_pos = arena[child_ref].pos()?;
@@ -1415,9 +1417,6 @@ fn footnote_has_inline_body(arena: &Arena, node_ref: NodeRef, source: &str) -> O
     Some(!tail[colon + 1..].trim().is_empty())
 }
 
-static FOOTNOTE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?m)^\[\^([^\]]+)\]:").expect("valid footnote regex"));
-
 fn collect_footnote_labels(
     arena: &Arena,
     doc_ref: NodeRef,
@@ -1426,24 +1425,40 @@ fn collect_footnote_labels(
     let mut nodes = Vec::new();
     collect_footnote_nodes(arena, doc_ref, &mut nodes);
 
-    let labels: Vec<String> = FOOTNOTE_RE
-        .captures_iter(source)
-        .filter_map(|caps| caps.get(1).map(|m| m.as_str().to_string()))
-        .collect();
-
-    if nodes.len() != labels.len() {
-        bail!(
-            "failed to align footnote definitions: parsed {} nodes but found {} labels",
-            nodes.len(),
-            labels.len()
-        );
-    }
-
     let mut map = FootnoteLabels::new();
-    for (node_ref, label) in nodes.into_iter().zip(labels) {
+    for node_ref in nodes {
+        let Some(label) = footnote_label_from_source_at_node(arena, node_ref, source) else {
+            let pos = arena[node_ref].pos().unwrap_or_default();
+            bail!("failed to read footnote label from source at byte offset {pos}");
+        };
         map.push((node_ref, label));
     }
     Ok(map)
+}
+
+fn footnote_label_from_source_at_node(
+    arena: &Arena,
+    node_ref: NodeRef,
+    source: &str,
+) -> Option<String> {
+    let pos = arena[node_ref].pos()?;
+    let tail = source_tail_at_pos(source, pos)?;
+    parse_footnote_label_from_line(tail)
+}
+
+fn parse_footnote_label_from_line(line: &str) -> Option<String> {
+    let line = line.trim_start_matches([' ', '\t']);
+    let rest = line.strip_prefix("[^")?;
+    let end = rest.find(']')?;
+    if end == 0 {
+        return None;
+    }
+    let label = &rest[..end];
+    let tail = rest[end + 1..].trim_start_matches([' ', '\t']);
+    if !tail.starts_with(':') {
+        return None;
+    }
+    Some(label.to_string())
 }
 
 fn collect_footnote_nodes(arena: &Arena, node_ref: NodeRef, out: &mut Vec<NodeRef>) {

@@ -389,4 +389,12 @@ mod tests {
         assert_eq!(formatted, src);
         Ok(())
     }
+
+    #[test]
+    fn ignores_footnote_like_text_inside_fenced_code() -> Result<()> {
+        let src = "```markdown\n[^fake]: not a footnote definition\n```\n";
+        let formatted = super::format_markdown(src)?;
+        assert_eq!(formatted, src);
+        Ok(())
+    }
 }

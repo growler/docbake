@@ -1,10 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
 
 use anyhow::{anyhow, bail, Context, Result};
-use regex::Regex;
 use rushdown::ast::{self, Arena, KindData, NodeRef, WalkStatus};
 use rushdown::parser::AstTransformer as _;
 use rushdown::text::BasicReader;
@@ -348,29 +346,53 @@ fn collect_footnote_definitions(
         Ok(WalkStatus::Continue)
     });
 
-    let labels = parse_footnote_definition_labels(markdown);
-    if definition_nodes.len() != labels.len() {
-        bail!(
-            "failed to align footnote definitions in {}: parsed {} nodes but found {} labels",
-            path.display(),
-            definition_nodes.len(),
-            labels.len()
-        );
-    }
-
     let mut map = HashMap::new();
-    for (label, node_ref) in labels.into_iter().zip(definition_nodes) {
+    for node_ref in definition_nodes {
+        let Some(label) = footnote_definition_label_from_source(arena, node_ref, markdown) else {
+            let pos = arena[node_ref].pos().unwrap_or_default();
+            bail!(
+                "failed to read footnote definition label in {} at byte offset {}",
+                path.display(),
+                pos
+            );
+        };
         map.insert(label, FootnoteDefinitionEntry { node_ref });
     }
     Ok(map)
 }
 
-static FOOTNOTE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?m)^\[\^([^\]]+)\]:").expect("valid footnote label regex"));
+fn footnote_definition_label_from_source(
+    arena: &Arena,
+    node_ref: NodeRef,
+    markdown: &str,
+) -> Option<String> {
+    let pos = arena[node_ref].pos()?;
+    let tail = source_tail_at_pos(markdown, pos)?;
+    parse_footnote_label(tail)
+}
 
-fn parse_footnote_definition_labels(markdown: &str) -> Vec<String> {
-    FOOTNOTE_RE
-        .captures_iter(markdown)
-        .filter_map(|caps| caps.get(1).map(|m| m.as_str().to_string()))
-        .collect()
+fn source_tail_at_pos(source: &str, pos: usize) -> Option<&str> {
+    if pos > source.len() {
+        return None;
+    }
+    let end = source[pos..]
+        .find('\n')
+        .map(|idx| pos + idx)
+        .unwrap_or(source.len());
+    Some(source[pos..end].trim_end_matches('\r'))
+}
+
+fn parse_footnote_label(line: &str) -> Option<String> {
+    let line = line.trim_start_matches([' ', '\t']);
+    let rest = line.strip_prefix("[^")?;
+    let end = rest.find(']')?;
+    if end == 0 {
+        return None;
+    }
+    let label = &rest[..end];
+    let tail = rest[end + 1..].trim_start_matches([' ', '\t']);
+    if !tail.starts_with(':') {
+        return None;
+    }
+    Some(label.to_string())
 }

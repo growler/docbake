@@ -624,6 +624,36 @@ mod tests {
     }
 
     #[test]
+    fn ignores_footnote_like_text_inside_fenced_code_blocks() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        write(
+            &root.join("doc/index.md"),
+            concat!(
+                "# Root\n\n",
+                "Text[^real].\n\n",
+                "```markdown\n",
+                "[^fake]: this text is inside a fence\n",
+                "```\n\n",
+                "[^real]: Real footnote\n",
+            ),
+        );
+
+        let prepared = prepare_document(
+            &DebugDumper::new(false),
+            root,
+            &root.join("doc/index.md"),
+            None,
+            BrokenLinkMode::Error,
+        )
+        .unwrap();
+        let root_doc = prepared.graph().root_document();
+
+        assert!(root_doc.footnote_definition("real").is_some());
+        assert!(root_doc.footnote_definition("fake").is_none());
+    }
+
+    #[test]
     fn prepare_document_preserves_definition_lists() {
         let temp = TempDir::new().unwrap();
         let root = temp.path();
