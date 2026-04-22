@@ -271,6 +271,17 @@ mod tests {
     }
 
     #[test]
+    fn preserves_angle_brackets_for_destinations_with_spaces() -> Result<()> {
+        let src = concat!(
+            "[Архитектура](<../../assets/Docbake High Level.drawio>)\n\n",
+            "![Архитектура](<../../assets/Docbake High Level.drawio>)\n",
+        );
+        let formatted = super::format_markdown(src)?;
+        assert!(formatted.contains("](<../../assets/Docbake High Level.drawio>)"));
+        Ok(())
+    }
+
+    #[test]
     fn preserves_fenced_div_opening_spacing() -> Result<()> {
         let src = "::: important\nText\n:::\n";
         let formatted = super::format_markdown(src)?;

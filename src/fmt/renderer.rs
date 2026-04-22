@@ -803,7 +803,7 @@ impl MarkdownFmtRenderer {
                     self.render_inline_children(out, arena, node_ref, source)?;
                     out.push(']');
                     out.push('(');
-                    out.push_str(link.destination_str(source));
+                    out.push_str(&format_inline_destination(link.destination_str(source)));
                     if let Some(title) = link.title() {
                         write!(out, " \"{}\"", escape_md_title(&title.str(source)))?;
                     }
@@ -815,7 +815,7 @@ impl MarkdownFmtRenderer {
                 self.render_image_alt_text(out, arena, node_ref, source)?;
                 out.push(']');
                 out.push('(');
-                out.push_str(image.destination_str(source));
+                out.push_str(&format_inline_destination(image.destination_str(source)));
                 if let Some(title) = image.title() {
                     write!(out, " \"{}\"", escape_md_title(&title.str(source)))?;
                 }
@@ -1014,6 +1014,14 @@ fn render_separator_cell(alignment: TableCellAlignment, width: usize) -> String 
 
 fn escape_md_title(title: &str) -> String {
     title.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn format_inline_destination(destination: &str) -> String {
+    if destination.chars().any(char::is_whitespace) {
+        format!("<{destination}>")
+    } else {
+        destination.to_string()
+    }
 }
 
 fn backtick_fence(content: &str) -> String {
