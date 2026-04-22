@@ -10,6 +10,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::Write as _;
+use std::io::ErrorKind;
 use std::path::Path;
 
 use anyhow::{anyhow, Result};
@@ -586,7 +587,7 @@ impl<'a> ConfluenceRenderer<'a> {
                     )?;
                 } else {
                     // Local image → attachment.
-                    let filename = self.resolve_image_attachment(&dest, scope.doc_id, prepared)?;
+                    let filename = self.resolve_image_attachment(&dest, prepared)?;
                     let is_svg = filename.ends_with(".svg");
                     // For local SVGs, look up the attachment data so we can
                     // extract the intrinsic width from the SVG root element.
@@ -721,19 +722,14 @@ impl<'a> ConfluenceRenderer<'a> {
 
     /// Register a local image as an attachment.  Returns the filename
     /// to reference via `<ri:attachment>`.
-    fn resolve_image_attachment(
-        &self,
-        dest: &str,
-        _doc_id: usize,
-        prepared: &PreparedDocument,
-    ) -> Result<String> {
+    fn resolve_image_attachment(&self, dest: &str, prepared: &PreparedDocument) -> Result<String> {
         // `dest` is in the form `static/relative/path.png` after graph
         // resolution.  Strip the `static/` prefix to get the relative
         // path, then resolve against base_dir.
         let relative = dest.strip_prefix("static/").unwrap_or(dest);
-        let abs_path = self.base_dir.join(relative);
-
-        let key = abs_path.to_string_lossy().to_string();
+        let full_path = self.base_dir.join(relative);
+        let source_path = self.resolve_attachment_source_path(dest, &full_path, prepared);
+        let key = source_path.to_string_lossy().to_string();
 
         // Check if already registered.
         if let Some(existing) = self.attachment_names.borrow().get(&key) {
@@ -742,7 +738,7 @@ impl<'a> ConfluenceRenderer<'a> {
 
         // Derive a unique filename (use the file's own name; disambiguate
         // if multiple files from different directories share a name).
-        let original_name = abs_path
+        let original_name = source_path
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| format!("attachment-{}", self.attachments.borrow().len()));
@@ -751,11 +747,11 @@ impl<'a> ConfluenceRenderer<'a> {
             let mut candidate = original_name.clone();
             let mut counter = 1u32;
             while names.values().any(|v| v == &candidate) {
-                let stem = abs_path
+                let stem = source_path
                     .file_stem()
                     .map(|s| s.to_string_lossy().to_string())
                     .unwrap_or_default();
-                let ext = abs_path
+                let ext = source_path
                     .extension()
                     .map(|e| e.to_string_lossy().to_string())
                     .unwrap_or_default();
@@ -770,25 +766,25 @@ impl<'a> ConfluenceRenderer<'a> {
         };
 
         // Read file data.
-        // The file might not exist if the asset_targets set was populated
-        // but the file was removed.  Check graph asset_targets for the
-        // canonical path.
-        let data = if abs_path.exists() {
-            std::fs::read(&abs_path)
-                .map_err(|e| anyhow!("failed to read image {}: {e}", abs_path.display()))?
-        } else {
-            // Try finding it in asset_targets via different resolution.
-            let found = prepared
-                .asset_targets()
-                .iter()
-                .find(|p| p.file_name() == abs_path.file_name());
-            if let Some(canonical) = found {
-                std::fs::read(canonical)
-                    .map_err(|e| anyhow!("failed to read image {}: {e}", canonical.display()))?
-            } else {
-                self.logger
-                    .log(format!("warning: image not found: {}", abs_path.display()));
+        let data = match std::fs::read(&source_path) {
+            Ok(data) => data,
+            Err(err) if err.kind() == ErrorKind::NotFound => {
+                self.logger.log(format!(
+                    "warning: image not found: {}",
+                    source_path.display()
+                ));
+                // Reserve filename for this exact source identity so another
+                // file with the same basename does not reuse it.
+                self.attachment_names
+                    .borrow_mut()
+                    .insert(key, filename.clone());
                 return Ok(filename);
+            }
+            Err(err) => {
+                return Err(anyhow!(
+                    "failed to read image {}: {err}",
+                    source_path.display()
+                ));
             }
         };
 
@@ -803,6 +799,34 @@ impl<'a> ConfluenceRenderer<'a> {
         });
 
         Ok(filename)
+    }
+
+    /// Resolve source identity for a local attachment.
+    ///
+    /// Preference order:
+    /// 1) canonicalized filesystem path when available;
+    /// 2) exact match in `asset_targets` by full `static/...` target;
+    /// 3) full joined path under `base_dir`.
+    fn resolve_attachment_source_path(
+        &self,
+        dest: &str,
+        full_path: &Path,
+        prepared: &PreparedDocument,
+    ) -> std::path::PathBuf {
+        if let Ok(canonical) = full_path.canonicalize() {
+            return canonical;
+        }
+
+        let dest_path = Path::new(dest);
+        if let Some(exact) = prepared.asset_targets().iter().find(|candidate| {
+            crate::graph::resolve::static_asset_path(self.base_dir, candidate)
+                .map(|p| p == dest_path)
+                .unwrap_or(false)
+        }) {
+            return exact.clone();
+        }
+
+        full_path.to_path_buf()
     }
 
     // ── diagram rendering ───────────────────────────────────────────────
@@ -1358,6 +1382,138 @@ fn svg_width_to_pixels(width: Option<&str>, intrinsic_width: Option<u32>) -> u32
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::path::Path;
+
+    use tempfile::TempDir;
+
+    use crate::cache::Cache;
+    use crate::cli::BrokenLinkMode;
+    use crate::diagram::DiagramThemes;
+    use crate::graph::prepare_document;
+    use crate::DebugDumper;
+
+    fn write_text(path: &Path, text: &str) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, text).unwrap();
+    }
+
+    fn write_bytes(path: &Path, data: &[u8]) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, data).unwrap();
+    }
+
+    fn attachment_refs_from_body(body: &str) -> Vec<String> {
+        let mut refs = Vec::new();
+        let mut rest = body;
+        let needle = "ri:attachment ri:filename=\"";
+        while let Some(start) = rest.find(needle) {
+            let after = &rest[start + needle.len()..];
+            if let Some(end) = after.find('"') {
+                refs.push(after[..end].to_string());
+                rest = &after[end + 1..];
+            } else {
+                break;
+            }
+        }
+        refs
+    }
+
+    fn build_prepared(base_dir: &Path, source: &Path) -> crate::graph::PreparedDocument {
+        prepare_document(
+            &DebugDumper::new(false),
+            base_dir,
+            source,
+            Some("test"),
+            BrokenLinkMode::Error,
+        )
+        .unwrap()
+    }
+
+    fn render_document(
+        prepared: &crate::graph::PreparedDocument,
+        base_dir: &Path,
+    ) -> ConfluenceDocument {
+        let cache = Cache::new(None, true).unwrap();
+        let themes = DiagramThemes::default();
+        let logger = DebugDumper::new(false);
+        ConfluenceRenderer::new(&cache, &themes, &logger, base_dir)
+            .render(prepared)
+            .unwrap()
+    }
+
+    #[test]
+    fn duplicate_basenames_keep_distinct_attachment_identity() {
+        let tmp = TempDir::new().unwrap();
+        let base_dir = tmp.path().to_path_buf();
+        let source = base_dir.join("index.md");
+        let image_a = base_dir.join("a/logo.png");
+        let image_b = base_dir.join("b/logo.png");
+
+        write_text(
+            &source,
+            "![A](a/logo.png)\n\n![A again](a/logo.png)\n\n![B](b/logo.png)\n",
+        );
+        write_bytes(&image_a, b"image-a");
+        write_bytes(&image_b, b"image-b");
+
+        let prepared = build_prepared(&base_dir, &source);
+        let rendered = render_document(&prepared, &base_dir);
+
+        assert_eq!(rendered.attachments.len(), 2);
+
+        let refs = attachment_refs_from_body(&rendered.body);
+        assert_eq!(refs.len(), 3);
+        assert_eq!(refs[0], refs[1]);
+        assert_ne!(refs[0], refs[2]);
+
+        let first_data = rendered
+            .attachments
+            .iter()
+            .find(|att| att.filename == refs[0])
+            .map(|att| att.data.as_slice())
+            .unwrap();
+        let second_data = rendered
+            .attachments
+            .iter()
+            .find(|att| att.filename == refs[2])
+            .map(|att| att.data.as_slice())
+            .unwrap();
+        assert_eq!(first_data, b"image-a");
+        assert_eq!(second_data, b"image-b");
+    }
+
+    #[test]
+    fn missing_asset_never_falls_back_to_same_filename_elsewhere() {
+        let tmp = TempDir::new().unwrap();
+        let base_dir = tmp.path().to_path_buf();
+        let source = base_dir.join("index.md");
+        let missing = base_dir.join("first/logo.png");
+        let existing = base_dir.join("second/logo.png");
+
+        write_text(
+            &source,
+            "![Missing](first/logo.png)\n\n![Existing](second/logo.png)\n",
+        );
+        write_bytes(&missing, b"missing-before-build");
+        write_bytes(&existing, b"existing");
+
+        let prepared = build_prepared(&base_dir, &source);
+        fs::remove_file(&missing).unwrap();
+
+        let rendered = render_document(&prepared, &base_dir);
+        assert_eq!(rendered.attachments.len(), 1);
+        assert_eq!(rendered.attachments[0].data, b"existing");
+
+        let refs = attachment_refs_from_body(&rendered.body);
+        assert_eq!(refs.len(), 2);
+        assert_ne!(refs[0], refs[1]);
+        assert_eq!(rendered.attachments[0].filename, refs[1]);
+    }
 
     // ── parse_svg_intrinsic_width ────────────────────────────────────
 

@@ -153,6 +153,10 @@ pub(crate) fn serve_command(
         debouncer // keep alive; dropped on function exit
     };
 
+    let output_root = output_dir
+        .canonicalize()
+        .with_context(|| format!("failed to canonicalize {}", output_dir.display()))?;
+
     // --- HTTP server loop -----------------------------------------------
     for request in server.incoming_requests() {
         let url = request.url().to_string();
@@ -167,26 +171,25 @@ pub(crate) fn serve_command(
             continue;
         }
 
-        let file_path = resolve_request_path(&url, &output_dir);
+        let file_path = resolve_request_path(&url, &output_dir)
+            .and_then(|path| canonical_request_path(&path, &output_root));
 
         match file_path {
-            Some(ref path) if path.exists() && path.starts_with(&output_dir) => {
-                match fs::read(path) {
-                    Ok(data) => {
-                        let mime = mime_for_path(path);
-                        let resp = Response::from_data(data)
-                            .with_header(header("Content-Type", mime))
-                            .with_header(header("Cache-Control", "no-cache"));
-                        let _ = request.respond(resp);
-                    }
-                    Err(_) => {
-                        let _ = request.respond(
-                            Response::from_string("Internal Server Error")
-                                .with_status_code(StatusCode(500)),
-                        );
-                    }
+            Some(ref path) => match fs::read(path) {
+                Ok(data) => {
+                    let mime = mime_for_path(path);
+                    let resp = Response::from_data(data)
+                        .with_header(header("Content-Type", mime))
+                        .with_header(header("Cache-Control", "no-cache"));
+                    let _ = request.respond(resp);
                 }
-            }
+                Err(_) => {
+                    let _ = request.respond(
+                        Response::from_string("Internal Server Error")
+                            .with_status_code(StatusCode(500)),
+                    );
+                }
+            },
             _ => {
                 let _ = request
                     .respond(Response::from_string("Not Found").with_status_code(StatusCode(404)));
@@ -275,13 +278,15 @@ fn rebuild(
                 .path
                 .parent()
                 .ok_or_else(|| anyhow::anyhow!("root document has no parent directory"))?;
-            let plan = crate::render_html_multi::build_multi_page_plan(&build, root_source_dir);
+            let plan =
+                crate::render_html_multi::build_multi_page_plan(&build, root_source_dir, base_dir)?;
             let search_json = crate::search_index::build_search_index_multi(&build, &plan);
             template_context.insert("search_index", &search_json);
             let pages = build_multi_page_html(
                 &template,
                 &template_context,
                 &build,
+                base_dir,
                 cache,
                 &diagram_themes,
             )?;
@@ -309,26 +314,80 @@ fn rebuild(
 /// Map a request URL to a filesystem path inside `output_dir`.
 /// Returns `None` for suspicious paths (traversal attempts).
 fn resolve_request_path(url: &str, output_dir: &Path) -> Option<PathBuf> {
-    // Strip query string if any.
-    let path_part = url.split('?').next().unwrap_or(url);
+    // Strip query and fragment if any.
+    let path_part = url.split(['?', '#']).next().unwrap_or(url);
+    let has_trailing_slash = path_part.ends_with('/');
     let clean = path_part.trim_start_matches('/');
 
-    if clean.contains("..") {
-        return None;
+    let mut relative = PathBuf::new();
+    for segment in clean.split('/') {
+        if segment.is_empty() {
+            continue;
+        }
+
+        let decoded = decode_percent_segment(segment)?;
+        if decoded.contains('/') || decoded.contains('\\') {
+            return None;
+        }
+
+        let mut components = Path::new(&decoded).components();
+        match (components.next(), components.next()) {
+            (Some(std::path::Component::Normal(part)), None) => relative.push(part),
+            _ => return None,
+        }
     }
 
-    let path = if clean.is_empty() {
+    let candidate = if relative.as_os_str().is_empty() {
         output_dir.join("index.html")
     } else {
-        let candidate = output_dir.join(clean);
-        if candidate.is_dir() {
-            candidate.join("index.html")
+        let base = output_dir.join(relative);
+        if has_trailing_slash || base.is_dir() {
+            base.join("index.html")
         } else {
-            candidate
+            base
         }
     };
 
-    Some(path)
+    Some(candidate)
+}
+
+fn canonical_request_path(path: &Path, output_root: &Path) -> Option<PathBuf> {
+    let canonical = path.canonicalize().ok()?;
+    if canonical.starts_with(output_root) {
+        Some(canonical)
+    } else {
+        None
+    }
+}
+
+fn decode_percent_segment(segment: &str) -> Option<String> {
+    let bytes = segment.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            if i + 2 >= bytes.len() {
+                return None;
+            }
+            let hi = hex_value(bytes[i + 1])?;
+            let lo = hex_value(bytes[i + 2])?;
+            out.push((hi << 4) | lo);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(10 + (byte - b'a')),
+        b'A'..=b'F' => Some(10 + (byte - b'A')),
+        _ => None,
+    }
 }
 
 fn header(name: &str, value: &str) -> Header {
@@ -354,5 +413,104 @@ fn mime_for_path(path: &Path) -> &'static str {
         Some("xml") => "application/xml",
         Some("txt") => "text/plain; charset=utf-8",
         _ => "application/octet-stream",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use tempfile::tempdir;
+
+    use super::{canonical_request_path, resolve_request_path};
+
+    #[test]
+    fn resolves_root_and_query_to_index() {
+        let out = tempdir().unwrap();
+        let out_path = out.path();
+
+        assert_eq!(
+            resolve_request_path("/", out_path).unwrap(),
+            out_path.join("index.html")
+        );
+        assert_eq!(
+            resolve_request_path("/?v=1", out_path).unwrap(),
+            out_path.join("index.html")
+        );
+    }
+
+    #[test]
+    fn preserves_valid_nested_routes() {
+        let out = tempdir().unwrap();
+        let out_path = out.path();
+
+        fs::create_dir_all(out_path.join("guide")).unwrap();
+        fs::write(out_path.join("guide/index.html"), "ok").unwrap();
+
+        assert_eq!(
+            resolve_request_path("/guide", out_path).unwrap(),
+            out_path.join("guide/index.html")
+        );
+        assert_eq!(
+            resolve_request_path("/guide/", out_path).unwrap(),
+            out_path.join("guide/index.html")
+        );
+        assert_eq!(
+            resolve_request_path("/guide/page.html", out_path).unwrap(),
+            out_path.join("guide/page.html")
+        );
+    }
+
+    #[test]
+    fn rejects_traversal_and_absolute_payloads() {
+        let out = tempdir().unwrap();
+        let out_path = out.path();
+
+        let malicious = [
+            "/../secret.txt",
+            "/%2e%2e/secret.txt",
+            "/%2E%2E/secret.txt",
+            "/..%2fsecret.txt",
+            "/%2e%2e%2fsecret.txt",
+            "/%2Fetc%2Fpasswd",
+            "/%5Cwindows%5Csystem32",
+            "/guide/%2e%2e/secret.txt",
+            "/%2",
+        ];
+
+        for path in malicious {
+            assert!(
+                resolve_request_path(path, out_path).is_none(),
+                "expected {path} to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn canonical_path_must_stay_under_output_root() {
+        let out = tempdir().unwrap();
+        let out_path = out.path();
+        fs::write(out_path.join("index.html"), "ok").unwrap();
+
+        let output_root = out_path.canonicalize().unwrap();
+        let inside = out_path.join("index.html");
+        assert_eq!(
+            canonical_request_path(&inside, &output_root),
+            Some(output_root.join("index.html"))
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+
+            let outside = tempdir().unwrap();
+            let outside_file = outside.path().join("secret.txt");
+            fs::write(&outside_file, "secret").unwrap();
+
+            let link = out_path.join("link.txt");
+            symlink(&outside_file, &link).unwrap();
+
+            assert!(canonical_request_path(&link, &output_root).is_none());
+        }
     }
 }

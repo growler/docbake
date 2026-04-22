@@ -8,7 +8,7 @@ use crate::code_block_attribute::{
     code_block_attribute_html_renderer_extension, CodeBlockAttributeHtmlRendererOptions,
 };
 use crate::diagram::{diagram_html_renderer_extension, DiagramHtmlRendererOptions, DiagramThemes};
-use crate::graph::resolve::heading_text;
+use crate::graph::resolve::{heading_text, resolve_base_path};
 use crate::graph::{DocumentGraph, NodeLocation, PreparedDocument};
 use crate::render_html_common::{
     heading_text_html, html_escape, is_admonition_title_heading, render_image_attributes,
@@ -80,7 +80,8 @@ impl MultiPagePlan {
 pub(crate) fn build_multi_page_plan(
     prepared: &PreparedDocument,
     root_source_dir: &Path,
-) -> MultiPagePlan {
+    base_dir: &Path,
+) -> Result<MultiPagePlan> {
     let graph = prepared.graph();
     let dfs_order = graph.page_order_with_shift();
 
@@ -88,9 +89,9 @@ pub(crate) fn build_multi_page_plan(
     let mut pages: Vec<PageInfo> = dfs_order
         .iter()
         .enumerate()
-        .map(|(i, &(doc_id, _shift))| {
+        .map(|(i, &(doc_id, _shift))| -> Result<PageInfo> {
             let doc = graph.document(doc_id);
-            let output_path = compute_output_path(&doc.path, root_source_dir);
+            let output_path = compute_output_path(&doc.path, root_source_dir, base_dir)?;
             let title = graph
                 .first_heading_id(doc_id)
                 .and_then(|_| first_heading_text(graph, doc_id))
@@ -107,7 +108,7 @@ pub(crate) fn build_multi_page_plan(
                 None
             };
 
-            PageInfo {
+            Ok(PageInfo {
                 doc_id,
                 output_path,
                 title,
@@ -115,9 +116,9 @@ pub(crate) fn build_multi_page_plan(
                 children_indices: Vec::new(),
                 prev_index,
                 next_index,
-            }
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
 
     // Build the tree using a stack of (page_index, effective_level).
     // A page at shift N nests under the most recent page at shift < N,
@@ -142,19 +143,32 @@ pub(crate) fn build_multi_page_plan(
         doc_id_to_page.insert(page.doc_id, i);
     }
 
-    MultiPagePlan {
+    Ok(MultiPagePlan {
         pages,
         doc_id_to_page,
-    }
+    })
 }
 
 /// Compute the output `.html` path for a document relative to the root
 /// source directory.
-fn compute_output_path(doc_path: &Path, root_source_dir: &Path) -> PathBuf {
-    let relative = doc_path
-        .strip_prefix(root_source_dir)
-        .expect("document path must be under the root source directory");
-    relative.with_extension("html")
+fn compute_output_path(
+    doc_path: &Path,
+    root_source_dir: &Path,
+    base_dir: &Path,
+) -> Result<PathBuf> {
+    if let Ok(relative) = doc_path.strip_prefix(root_source_dir) {
+        return Ok(relative.with_extension("html"));
+    }
+
+    let relative = doc_path.strip_prefix(base_dir).with_context(|| {
+        format!(
+            "document {} is outside both root source directory {} and base directory {}",
+            doc_path.display(),
+            root_source_dir.display(),
+            base_dir.display()
+        )
+    })?;
+    Ok(relative.with_extension("html"))
 }
 
 /// Get the plain-text title of a document's first heading.
@@ -699,7 +713,7 @@ struct MultiLinkHtmlRenderer<'a, W: TextWrite> {
     graph: &'a DocumentGraph,
     plan: &'a MultiPagePlan,
     current_page: usize,
-    root_source_dir: &'a Path,
+    base_dir: &'a Path,
     _phantom: std::marker::PhantomData<W>,
     writer: html::Writer,
     format_options: html::Options,
@@ -719,7 +733,7 @@ impl<'a, W: TextWrite> RenderNode<W> for MultiLinkHtmlRenderer<'a, W> {
             let link = as_kind_data!(arena, node_ref, Link);
             let raw_dest = link.destination_str(source);
             let target = self
-                .rewrite_link(raw_dest)
+                .rewrite_link(node_ref, raw_dest)
                 .map_err(|e| rushdown::Error::io(format!("link rewrite error: {e}"), None))?;
             let mut dest = escape_url(
                 target.as_bytes(),
@@ -749,10 +763,15 @@ impl<'a, W: TextWrite> RenderNode<W> for MultiLinkHtmlRenderer<'a, W> {
 }
 
 impl<'a, W: TextWrite> MultiLinkHtmlRenderer<'a, W> {
-    fn rewrite_link(&self, raw_target: &str) -> Result<String> {
+    fn rewrite_link(&self, source_node_ref: NodeRef, raw_target: &str) -> Result<String> {
         let target = raw_target.trim();
         let wrapped = target.starts_with('<') && target.ends_with('>');
         let target = target.trim_matches(['<', '>']);
+        let source_doc_id = self.plan.pages[self.current_page].doc_id;
+        let graph_target = self
+            .graph
+            .link_target(source_doc_id, source_node_ref)
+            .unwrap_or(raw_target);
 
         // Pass through fragment-only, empty, URL, and mailto links.
         if target.is_empty()
@@ -760,7 +779,7 @@ impl<'a, W: TextWrite> MultiLinkHtmlRenderer<'a, W> {
             || target.contains("://")
             || target.starts_with("mailto:")
         {
-            return Ok(raw_target.to_string());
+            return Ok(graph_target.to_string());
         }
 
         let (path_part, fragment) = match target.split_once('#') {
@@ -768,63 +787,53 @@ impl<'a, W: TextWrite> MultiLinkHtmlRenderer<'a, W> {
             None => (target, None),
         };
 
+        if Path::new(path_part).extension().and_then(|e| e.to_str()) != Some("md") {
+            return Ok(graph_target.to_string());
+        }
+
+        if graph_target == raw_target {
+            return Ok(raw_target.to_string());
+        }
+
         // Check if this is a markdown file link.
         let source_doc = self
             .graph
             .document(self.plan.pages[self.current_page].doc_id);
-        let source_dir = source_doc.path.parent().unwrap_or(self.root_source_dir);
+        let source_dir = source_doc.path.parent().unwrap_or(self.base_dir);
 
-        let resolved = if path_part.starts_with('/') {
-            // Absolute paths are resolved relative to the root source
-            // directory (same as the graph resolver).
-            let candidate = self.root_source_dir.join(path_part.trim_start_matches('/'));
-            candidate.canonicalize().ok()
-        } else {
-            let candidate = source_dir.join(path_part);
-            candidate.canonicalize().ok()
+        let resolved = match resolve_base_path(self.base_dir, source_dir, path_part) {
+            Ok(path) => path,
+            Err(_) => return Ok(graph_target.to_string()),
         };
 
         // Check if it resolves to a markdown file in the graph.
-        if let Some(ref resolved_path) = resolved {
-            if resolved_path.extension().and_then(|e| e.to_str()) == Some("md") {
-                // Find the target page.
-                if let Some(target_page_idx) = self.find_page_for_path(resolved_path) {
-                    let target_page = &self.plan.pages[target_page_idx];
-                    let current_page = &self.plan.pages[self.current_page];
-                    let relative =
-                        compute_relative_href(&current_page.output_path, &target_page.output_path);
-                    let result = if let Some(frag) = fragment {
-                        // Resolve the fragment to the final anchor ID.
-                        let target_doc_id = target_page.doc_id;
-                        let final_id = self
-                            .graph
-                            .anchor_target(target_doc_id, frag)
-                            .unwrap_or(frag);
-                        format!("{relative}#{final_id}")
-                    } else {
-                        relative
-                    };
-                    return Ok(if wrapped {
-                        format!("<{result}>")
-                    } else {
-                        result
-                    });
-                }
-            }
-        }
+        let target_doc_id = match self.graph.resolve_markdown_target(source_doc_id, &resolved) {
+            Ok(doc_id) => doc_id,
+            Err(_) => return Ok(graph_target.to_string()),
+        };
+        let target_page = self.plan.page_for_doc(target_doc_id).ok_or_else(|| {
+            anyhow::anyhow!(
+                "target document {} has no page entry in multipage plan",
+                resolved.display()
+            )
+        })?;
+        let current_page = &self.plan.pages[self.current_page];
+        let relative = compute_relative_href(&current_page.output_path, &target_page.output_path);
+        let result = if let Some(frag) = fragment {
+            let final_id = match self.graph.anchor_target(target_doc_id, frag) {
+                Some(id) => id,
+                None => return Ok(graph_target.to_string()),
+            };
+            format!("{relative}#{final_id}")
+        } else {
+            relative
+        };
 
-        // Return the raw target for external/non-md links.
-        Ok(raw_target.to_string())
-    }
-
-    fn find_page_for_path(&self, path: &Path) -> Option<usize> {
-        for (i, page) in self.plan.pages.iter().enumerate() {
-            let doc = self.graph.document(page.doc_id);
-            if doc.path == *path {
-                return Some(i);
-            }
-        }
-        None
+        Ok(if wrapped {
+            format!("<{result}>")
+        } else {
+            result
+        })
     }
 }
 
@@ -1151,7 +1160,7 @@ fn multi_page_renderer_extension<'cb, W>(
     graph: &'cb DocumentGraph,
     plan: &'cb MultiPagePlan,
     current_page: usize,
-    root_source_dir: &'cb Path,
+    base_dir: &'cb Path,
     asset_prefix: &'cb str,
     footnotes: FootnotePlan,
 ) -> impl RendererExtension<'cb, W>
@@ -1187,7 +1196,7 @@ where
                 graph,
                 plan,
                 current_page,
-                root_source_dir,
+                base_dir,
                 _phantom: std::marker::PhantomData,
                 writer: html::Writer::with_options(options.clone()),
                 format_options: options,
@@ -1255,6 +1264,7 @@ pub(crate) fn build_multi_page_html(
     template: &str,
     context: &tera::Context,
     prepared: &PreparedDocument,
+    base_dir: &Path,
     cache: &crate::cache::Cache,
     diagram_themes: &DiagramThemes,
 ) -> Result<Vec<RenderedPage>> {
@@ -1265,7 +1275,7 @@ pub(crate) fn build_multi_page_html(
         .parent()
         .ok_or_else(|| anyhow::anyhow!("root document has no parent directory"))?;
 
-    let plan = build_multi_page_plan(prepared, root_source_dir);
+    let plan = build_multi_page_plan(prepared, root_source_dir, base_dir)?;
 
     let mut pages = Vec::new();
 
@@ -1301,7 +1311,7 @@ pub(crate) fn build_multi_page_html(
                     graph,
                     &plan,
                     page_idx,
-                    root_source_dir,
+                    base_dir,
                     &asset_prefix,
                     footnotes,
                 )),
@@ -1450,6 +1460,52 @@ fn compute_relative_href(from: &Path, to: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    use crate::cache::Cache;
+    use crate::cli::BrokenLinkMode;
+    use crate::diagram::DiagramThemes;
+    use crate::graph::prepare_document;
+    use crate::DebugDumper;
+
+    fn write(path: &Path, text: &str) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, text).unwrap();
+    }
+
+    fn write_custom_base_fixture(root: &TempDir) -> (PathBuf, PathBuf, PathBuf) {
+        let base_dir = root.path().to_path_buf();
+        let root_doc = base_dir.join("docs/index.md");
+        let part_doc = base_dir.join("docs/nested/part.md");
+        let guide_doc = base_dir.join("shared/guide.md");
+
+        write(
+            &root_doc,
+            "# Root\n\n[Guide](/shared/guide.md#sec)\n\n:::include\n# [Part](nested/part.md)\n:::\n",
+        );
+        write(
+            &part_doc,
+            "# Part\n\n[Guide From Part](/shared/guide.md#sec)\n\n:::include\n# [Guide](/shared/guide.md)\n:::\n",
+        );
+        write(&guide_doc, "# Guide\n\n## Section {#sec}\n");
+
+        let canonical_base_dir = base_dir.canonicalize().unwrap();
+        let canonical_root_doc = root_doc.canonicalize().unwrap();
+        let root_source_dir = canonical_root_doc.parent().unwrap().to_path_buf();
+        (canonical_base_dir, canonical_root_doc, root_source_dir)
+    }
+
+    fn page_html<'a>(pages: &'a [RenderedPage], path: &str) -> &'a str {
+        let path = Path::new(path);
+        pages
+            .iter()
+            .find(|page| page.path == path)
+            .map(|page| page.html.as_str())
+            .unwrap()
+    }
 
     #[test]
     fn relative_href_same_dir() {
@@ -1492,5 +1548,58 @@ mod tests {
             compute_relative_href(Path::new("builder/config.html"), Path::new("document.html")),
             "../document.html"
         );
+    }
+
+    #[test]
+    fn plan_handles_docs_outside_root_source_with_custom_base() {
+        let temp = TempDir::new().unwrap();
+        let (base_dir, root_doc, root_source_dir) = write_custom_base_fixture(&temp);
+        let prepared = prepare_document(
+            &DebugDumper::new(false),
+            &base_dir,
+            &root_doc,
+            Some("test"),
+            BrokenLinkMode::Error,
+        )
+        .unwrap();
+
+        let plan = build_multi_page_plan(&prepared, &root_source_dir, &base_dir).unwrap();
+        let paths: Vec<PathBuf> = plan.pages.iter().map(|p| p.output_path.clone()).collect();
+
+        assert!(paths.contains(&PathBuf::from("index.html")));
+        assert!(paths.contains(&PathBuf::from("nested/part.html")));
+        assert!(paths.contains(&PathBuf::from("shared/guide.html")));
+    }
+
+    #[test]
+    fn rewrites_absolute_markdown_links_with_custom_base() {
+        let temp = TempDir::new().unwrap();
+        let (base_dir, root_doc, _root_source_dir) = write_custom_base_fixture(&temp);
+        let prepared = prepare_document(
+            &DebugDumper::new(false),
+            &base_dir,
+            &root_doc,
+            Some("test"),
+            BrokenLinkMode::Error,
+        )
+        .unwrap();
+
+        let context = tera::Context::new();
+        let cache = Cache::new(None, true).unwrap();
+        let pages = build_multi_page_html(
+            "{{ body }}",
+            &context,
+            &prepared,
+            &base_dir,
+            &cache,
+            &DiagramThemes::default(),
+        )
+        .unwrap();
+
+        let root_html = page_html(&pages, "index.html");
+        let part_html = page_html(&pages, "nested/part.html");
+
+        assert!(root_html.contains("href=\"shared/guide.html#sec\""));
+        assert!(part_html.contains("href=\"../shared/guide.html#sec\""));
     }
 }

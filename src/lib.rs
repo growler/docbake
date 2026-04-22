@@ -602,13 +602,18 @@ pub(crate) fn build_command(
                 .path
                 .parent()
                 .ok_or_else(|| anyhow!("root document has no parent directory"))?;
-            let plan = crate::render_html_multi::build_multi_page_plan(&build, root_source_dir);
+            let plan = crate::render_html_multi::build_multi_page_plan(
+                &build,
+                root_source_dir,
+                &base_dir,
+            )?;
             let search_json = search_index::build_search_index_multi(&build, &plan);
             template_context.insert("search_index", &search_json);
             let pages = build_multi_page_html(
                 &template,
                 &template_context,
                 &build,
+                &base_dir,
                 cache,
                 &diagram_themes,
             )?;
