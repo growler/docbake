@@ -380,11 +380,12 @@ mod tests {
         let first = generate_oauth_state().expect("first state generation must succeed");
         let second = generate_oauth_state().expect("second state generation must succeed");
         assert!(!first.is_empty());
-        assert!(
-            first
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        assert!(first
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+        assert_ne!(
+            first, second,
+            "two generated state values unexpectedly match"
         );
-        assert_ne!(first, second, "two generated state values unexpectedly match");
     }
 }
