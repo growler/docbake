@@ -101,6 +101,15 @@ pub(crate) struct DocxRenderer<'a> {
     bookmark_counter: RefCell<usize>,
 }
 
+#[derive(Clone, Copy)]
+struct RenderContext<'a> {
+    arena: &'a Arena,
+    source: &'a str,
+    doc_id: usize,
+    heading_shift: usize,
+    graph: &'a DocumentGraph,
+}
+
 impl<'a> DocxRenderer<'a> {
     pub fn new(
         cache: &'a Cache,
@@ -495,9 +504,14 @@ impl<'a> DocxRenderer<'a> {
                 }
                 continue;
             }
-            let arena = &doc.arena;
-            let source = &doc.source;
-            self.render_block(docx, arena, source, child, heading_shift, doc_id, graph)?;
+            let context = RenderContext {
+                arena: &doc.arena,
+                source: &doc.source,
+                doc_id,
+                heading_shift,
+                graph,
+            };
+            self.render_block(docx, &context, child)?;
         }
         Ok(())
     }
@@ -524,7 +538,7 @@ impl<'a> DocxRenderer<'a> {
                 continue;
             }
 
-            let text = self.collect_inline_text(arena, source, node_ref);
+            let text = Self::collect_inline_text(arena, source, node_ref);
             if text.is_empty() {
                 continue;
             }
@@ -569,7 +583,7 @@ impl<'a> DocxRenderer<'a> {
                     continue;
                 }
 
-                let text = self.collect_inline_text(arena, source, node_ref);
+                let text = Self::collect_inline_text(arena, source, node_ref);
                 if text.is_empty() {
                     continue;
                 }
@@ -594,23 +608,20 @@ impl<'a> DocxRenderer<'a> {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn render_block(
         &self,
         docx: &mut Docx,
-        arena: &Arena,
-        source: &str,
+        context: &RenderContext<'_>,
         node_ref: NodeRef,
-        heading_shift: usize,
-        doc_id: usize,
-        graph: &crate::graph::DocumentGraph,
     ) -> Result<()> {
+        let arena = context.arena;
+        let source = context.source;
         match arena[node_ref].kind_data() {
             KindData::Heading(_) => {
                 let heading = as_kind_data!(arena[node_ref], Heading);
-                let level = (heading.level() as usize + heading_shift).min(6);
+                let level = (heading.level() as usize + context.heading_shift).min(6);
                 let style = format!("Heading{level}");
-                let heading_text = self.collect_inline_text(arena, source, node_ref);
+                let heading_text = Self::collect_inline_text(arena, source, node_ref);
 
                 let mut para = Paragraph::new().style(&style).keep_next(true);
                 if level == 1 {
@@ -642,7 +653,7 @@ impl<'a> DocxRenderer<'a> {
                 }
 
                 for child in arena[node_ref].children(arena) {
-                    let runs = self.render_inline_runs(arena, source, child, doc_id, graph);
+                    let runs = self.render_inline_runs(context, child);
                     for run in runs {
                         if level == 1 {
                             para = para.add_run(run.color(ACCENT_ORANGE));
@@ -662,12 +673,12 @@ impl<'a> DocxRenderer<'a> {
                 for child in arena[node_ref].children(arena) {
                     match arena[child].kind_data() {
                         KindData::Image(_) => {
-                            if let Some(pic) = self.resolve_graph_image(graph, doc_id, child) {
+                            if let Some(pic) = self.resolve_graph_image(context, child) {
                                 para = para.add_run(Run::new().add_image(pic));
                             }
                         }
                         _ => {
-                            let runs = self.render_inline_runs(arena, source, child, doc_id, graph);
+                            let runs = self.render_inline_runs(context, child);
                             for run in runs {
                                 para = para.add_run(run);
                             }
@@ -685,7 +696,7 @@ impl<'a> DocxRenderer<'a> {
             }
             KindData::Blockquote(_) => {
                 for child in arena[node_ref].children(arena) {
-                    self.render_block(docx, arena, source, child, heading_shift, doc_id, graph)?;
+                    self.render_block(docx, context, child)?;
                 }
             }
             KindData::List(list) => {
@@ -696,20 +707,10 @@ impl<'a> DocxRenderer<'a> {
                     BULLET_NUMBERING_ID
                 };
 
-                self.render_list_items(
-                    docx,
-                    arena,
-                    source,
-                    node_ref,
-                    numbering_id,
-                    0,
-                    heading_shift,
-                    doc_id,
-                    graph,
-                )?;
+                self.render_list_items(docx, context, node_ref, numbering_id, 0)?;
             }
             KindData::Table(_) => {
-                self.render_table(docx, arena, source, node_ref, doc_id, graph)?;
+                self.render_table(docx, context, node_ref)?;
             }
             KindData::ThematicBreak(_) => {
                 let para = Paragraph::new().add_run(Run::new().add_text(""));
@@ -718,15 +719,7 @@ impl<'a> DocxRenderer<'a> {
             _ => {
                 // Handle extension nodes (diagrams, fenced divs, captions, etc.)
                 if rushdown::matches_extension_kind!(arena, node_ref, Caption) {
-                    self.render_caption(
-                        docx,
-                        arena,
-                        source,
-                        node_ref,
-                        heading_shift,
-                        doc_id,
-                        graph,
-                    )?;
+                    self.render_caption(docx, context, node_ref)?;
                 } else if rushdown::matches_extension_kind!(
                     arena,
                     node_ref,
@@ -734,17 +727,9 @@ impl<'a> DocxRenderer<'a> {
                 ) {
                     self.render_diagram(docx, arena, source, node_ref)?;
                 } else if rushdown::matches_extension_kind!(arena, node_ref, FencedDiv) {
-                    self.render_fenced_div(
-                        docx,
-                        arena,
-                        source,
-                        node_ref,
-                        heading_shift,
-                        doc_id,
-                        graph,
-                    )?;
+                    self.render_fenced_div(docx, context, node_ref)?;
                 } else if rushdown::matches_extension_kind!(arena, node_ref, DefinitionList) {
-                    self.render_definition_list(docx, arena, source, node_ref, doc_id, graph)?;
+                    self.render_definition_list(docx, context, node_ref)?;
                 }
                 // FootnoteDefinition nodes are rendered inline at reference sites — skip here.
             }
@@ -757,17 +742,14 @@ impl<'a> DocxRenderer<'a> {
     /// For admonition types (`note`, `warning`, `tip`, etc.) the first
     /// child heading is rendered as bold text (not a real heading) to
     /// avoid polluting the document outline / TOC.
-    #[allow(clippy::too_many_arguments)]
     fn render_fenced_div(
         &self,
         docx: &mut Docx,
-        arena: &Arena,
-        source: &str,
+        context: &RenderContext<'_>,
         node_ref: NodeRef,
-        heading_shift: usize,
-        doc_id: usize,
-        graph: &crate::graph::DocumentGraph,
     ) -> Result<()> {
+        let arena = context.arena;
+        let source = context.source;
         let classes = arena[node_ref]
             .attributes()
             .get("class")
@@ -777,20 +759,11 @@ impl<'a> DocxRenderer<'a> {
         let adm_type = crate::admonition_type(&classes);
 
         if let Some(adm_type) = adm_type {
-            self.render_admonition(
-                docx,
-                arena,
-                source,
-                node_ref,
-                heading_shift,
-                doc_id,
-                graph,
-                adm_type,
-            )?;
+            self.render_admonition(docx, context, node_ref, adm_type)?;
         } else {
             // Non-admonition fenced div: render children as normal blocks.
             for child in arena[node_ref].children(arena) {
-                self.render_block(docx, arena, source, child, heading_shift, doc_id, graph)?;
+                self.render_block(docx, context, child)?;
             }
         }
         Ok(())
@@ -802,23 +775,20 @@ impl<'a> DocxRenderer<'a> {
     /// - Body paragraphs: lighter background, same coloured border.
     /// - Adjacent paragraphs with identical borders merge into a
     ///   continuous box in Word and Google Docs.
-    #[allow(clippy::too_many_arguments)]
     fn render_admonition(
         &self,
         docx: &mut Docx,
-        arena: &Arena,
-        source: &str,
+        context: &RenderContext<'_>,
         node_ref: NodeRef,
-        heading_shift: usize,
-        doc_id: usize,
-        graph: &crate::graph::DocumentGraph,
         adm_type: &str,
     ) -> Result<()> {
+        let arena = context.arena;
+        let source = context.source;
         let children: Vec<_> = arena[node_ref].children(arena).collect();
 
         let (title, skip_first) = if let Some(&first) = children.first() {
             if matches!(arena[first].kind_data(), KindData::Heading(_)) {
-                let title = self.collect_inline_text(arena, source, first);
+                let title = Self::collect_inline_text(arena, source, first);
                 (title, true)
             } else {
                 (admonition_default_title(adm_type).to_string(), false)
@@ -893,13 +863,12 @@ impl<'a> DocxRenderer<'a> {
                     for inline in arena[child].children(arena) {
                         match arena[inline].kind_data() {
                             KindData::Image(_) => {
-                                if let Some(pic) = self.resolve_graph_image(graph, doc_id, inline) {
+                                if let Some(pic) = self.resolve_graph_image(context, inline) {
                                     para = para.add_run(Run::new().add_image(pic));
                                 }
                             }
                             _ => {
-                                let runs =
-                                    self.render_inline_runs(arena, source, inline, doc_id, graph);
+                                let runs = self.render_inline_runs(context, inline);
                                 for run in runs {
                                     para = para.add_run(run);
                                 }
@@ -915,7 +884,7 @@ impl<'a> DocxRenderer<'a> {
                 _ => {
                     // Complex blocks (lists, tables, code, nested divs):
                     // render normally without the admonition box styling.
-                    self.render_block(docx, arena, source, child, heading_shift, doc_id, graph)?;
+                    self.render_block(docx, context, child)?;
                 }
             }
         }
@@ -924,14 +893,9 @@ impl<'a> DocxRenderer<'a> {
     }
 
     /// Render an inline node to one or more `Run`s.
-    fn render_inline_runs(
-        &self,
-        arena: &Arena,
-        source: &str,
-        node_ref: NodeRef,
-        doc_id: usize,
-        graph: &crate::graph::DocumentGraph,
-    ) -> Vec<Run> {
+    fn render_inline_runs(&self, context: &RenderContext<'_>, node_ref: NodeRef) -> Vec<Run> {
+        let arena = context.arena;
+        let source = context.source;
         match arena[node_ref].kind_data() {
             KindData::Text(text) => {
                 let content = text.str(source);
@@ -956,21 +920,22 @@ impl<'a> DocxRenderer<'a> {
                     .shading(Shading::new().fill(CODE_BG))]
             }
             KindData::Emphasis(emphasis) if emphasis.level() == 1 => {
-                let children_runs = self.collect_child_runs(arena, source, node_ref, doc_id, graph);
+                let children_runs = self.collect_child_runs(context, node_ref);
                 children_runs.into_iter().map(|r| r.italic()).collect()
             }
             KindData::Emphasis(_) => {
-                let children_runs = self.collect_child_runs(arena, source, node_ref, doc_id, graph);
+                let children_runs = self.collect_child_runs(context, node_ref);
                 children_runs.into_iter().map(|r| r.bold()).collect()
             }
             KindData::Strikethrough(_) => {
-                let children_runs = self.collect_child_runs(arena, source, node_ref, doc_id, graph);
+                let children_runs = self.collect_child_runs(context, node_ref);
                 children_runs.into_iter().map(|r| r.strike()).collect()
             }
             KindData::Link(link) => {
-                let text = self.collect_inline_text(arena, source, node_ref);
-                let _dest = graph
-                    .link_target(doc_id, node_ref)
+                let text = Self::collect_inline_text(arena, source, node_ref);
+                let _dest = context
+                    .graph
+                    .link_target(context.doc_id, node_ref)
                     .unwrap_or(link.destination_str(source));
                 vec![Run::new()
                     .add_text(&text)
@@ -978,10 +943,10 @@ impl<'a> DocxRenderer<'a> {
                     .underline("single")]
             }
             KindData::Image(_) => {
-                if let Some(pic) = self.resolve_graph_image(graph, doc_id, node_ref) {
+                if let Some(pic) = self.resolve_graph_image(context, node_ref) {
                     vec![Run::new().add_image(pic)]
                 } else {
-                    let alt = self.collect_inline_text(arena, source, node_ref);
+                    let alt = Self::collect_inline_text(arena, source, node_ref);
                     if alt.is_empty() {
                         vec![]
                     } else {
@@ -989,28 +954,22 @@ impl<'a> DocxRenderer<'a> {
                     }
                 }
             }
-            _ => self.collect_child_runs(arena, source, node_ref, doc_id, graph),
+            _ => self.collect_child_runs(context, node_ref),
         }
     }
 
     /// Collect `Run`s from all children of a node.
-    fn collect_child_runs(
-        &self,
-        arena: &Arena,
-        source: &str,
-        node_ref: NodeRef,
-        doc_id: usize,
-        graph: &crate::graph::DocumentGraph,
-    ) -> Vec<Run> {
+    fn collect_child_runs(&self, context: &RenderContext<'_>, node_ref: NodeRef) -> Vec<Run> {
+        let arena = context.arena;
         let mut runs = Vec::new();
         for child in arena[node_ref].children(arena) {
-            runs.extend(self.render_inline_runs(arena, source, child, doc_id, graph));
+            runs.extend(self.render_inline_runs(context, child));
         }
         runs
     }
 
     /// Recursively collect plain text from an inline subtree.
-    fn collect_inline_text(&self, arena: &Arena, source: &str, node_ref: NodeRef) -> String {
+    fn collect_inline_text(arena: &Arena, source: &str, node_ref: NodeRef) -> String {
         let mut buf = String::new();
         for child in arena[node_ref].children(arena) {
             match arena[child].kind_data() {
@@ -1026,7 +985,7 @@ impl<'a> DocxRenderer<'a> {
                     buf.push_str(&cs.value_str(source));
                 }
                 _ => {
-                    buf.push_str(&self.collect_inline_text(arena, source, child));
+                    buf.push_str(&Self::collect_inline_text(arena, source, child));
                 }
             }
         }
@@ -1034,19 +993,15 @@ impl<'a> DocxRenderer<'a> {
     }
 
     /// Render list items recursively, handling nested lists.
-    #[allow(clippy::too_many_arguments)]
     fn render_list_items(
         &self,
         docx: &mut Docx,
-        arena: &Arena,
-        source: &str,
+        context: &RenderContext<'_>,
         list_ref: NodeRef,
         numbering_id: usize,
         indent_level: usize,
-        heading_shift: usize,
-        doc_id: usize,
-        graph: &crate::graph::DocumentGraph,
     ) -> Result<()> {
+        let arena = context.arena;
         for item_ref in arena[list_ref].children(arena) {
             if !matches!(arena[item_ref].kind_data(), KindData::ListItem(_)) {
                 continue;
@@ -1060,8 +1015,7 @@ impl<'a> DocxRenderer<'a> {
                             IndentLevel::new(indent_level),
                         );
                         for inline in arena[child].children(arena) {
-                            let runs =
-                                self.render_inline_runs(arena, source, inline, doc_id, graph);
+                            let runs = self.render_inline_runs(context, inline);
                             for run in runs {
                                 para = para.add_run(run);
                             }
@@ -1074,28 +1028,10 @@ impl<'a> DocxRenderer<'a> {
                         } else {
                             BULLET_NUMBERING_ID
                         };
-                        self.render_list_items(
-                            docx,
-                            arena,
-                            source,
-                            child,
-                            nested_id,
-                            indent_level + 1,
-                            heading_shift,
-                            doc_id,
-                            graph,
-                        )?;
+                        self.render_list_items(docx, context, child, nested_id, indent_level + 1)?;
                     }
                     _ => {
-                        self.render_block(
-                            docx,
-                            arena,
-                            source,
-                            child,
-                            heading_shift,
-                            doc_id,
-                            graph,
-                        )?;
+                        self.render_block(docx, context, child)?;
                     }
                 }
             }
@@ -1107,12 +1043,10 @@ impl<'a> DocxRenderer<'a> {
     fn render_table(
         &self,
         docx: &mut Docx,
-        arena: &Arena,
-        source: &str,
+        context: &RenderContext<'_>,
         table_ref: NodeRef,
-        doc_id: usize,
-        graph: &crate::graph::DocumentGraph,
     ) -> Result<()> {
+        let arena = context.arena;
         let mut header_rows = Vec::new();
         let mut body_rows = Vec::new();
 
@@ -1134,13 +1068,11 @@ impl<'a> DocxRenderer<'a> {
 
         let mut rows = Vec::new();
         for row_ref in &header_rows {
-            let cells =
-                self.render_table_row(docx, arena, source, *row_ref, doc_id, graph, true)?;
+            let cells = self.render_table_row(docx, context, *row_ref, true)?;
             rows.push(TableRow::new(cells));
         }
         for row_ref in &body_rows {
-            let cells =
-                self.render_table_row(docx, arena, source, *row_ref, doc_id, graph, false)?;
+            let cells = self.render_table_row(docx, context, *row_ref, false)?;
             rows.push(TableRow::new(cells));
         }
 
@@ -1157,13 +1089,11 @@ impl<'a> DocxRenderer<'a> {
     fn render_table_row(
         &self,
         _docx: &mut Docx,
-        arena: &Arena,
-        source: &str,
+        context: &RenderContext<'_>,
         row_ref: NodeRef,
-        doc_id: usize,
-        graph: &crate::graph::DocumentGraph,
         is_header: bool,
     ) -> Result<Vec<TableCell>> {
+        let arena = context.arena;
         let mut cells = Vec::new();
         for cell_ref in arena[row_ref].children(arena) {
             if !matches!(arena[cell_ref].kind_data(), KindData::TableCell(_)) {
@@ -1171,7 +1101,7 @@ impl<'a> DocxRenderer<'a> {
             }
             let mut para = Paragraph::new();
             for child in arena[cell_ref].children(arena) {
-                let mut runs = self.render_inline_runs(arena, source, child, doc_id, graph);
+                let mut runs = self.render_inline_runs(context, child);
                 if is_header {
                     runs = runs.into_iter().map(|r| r.bold()).collect();
                 }
@@ -1188,17 +1118,15 @@ impl<'a> DocxRenderer<'a> {
     fn render_definition_list(
         &self,
         docx: &mut Docx,
-        arena: &Arena,
-        source: &str,
+        context: &RenderContext<'_>,
         node_ref: NodeRef,
-        doc_id: usize,
-        graph: &crate::graph::DocumentGraph,
     ) -> Result<()> {
+        let arena = context.arena;
         for child in arena[node_ref].children(arena) {
             if rushdown::matches_extension_kind!(arena, child, Term) {
                 let mut para = Paragraph::new();
                 for inline in arena[child].children(arena) {
-                    let runs = self.render_inline_runs(arena, source, inline, doc_id, graph);
+                    let runs = self.render_inline_runs(context, inline);
                     for run in runs {
                         para = para.add_run(run.bold());
                     }
@@ -1209,8 +1137,7 @@ impl<'a> DocxRenderer<'a> {
                     if matches!(arena[def_child].kind_data(), KindData::Paragraph(_)) {
                         let mut para = Paragraph::new().indent(Some(720), None, None, None);
                         for inline in arena[def_child].children(arena) {
-                            let runs =
-                                self.render_inline_runs(arena, source, inline, doc_id, graph);
+                            let runs = self.render_inline_runs(context, inline);
                             for run in runs {
                                 para = para.add_run(run);
                             }
@@ -1224,17 +1151,13 @@ impl<'a> DocxRenderer<'a> {
     }
 
     /// Render a Caption extension node.
-    #[allow(clippy::too_many_arguments)]
     fn render_caption(
         &self,
         docx: &mut Docx,
-        arena: &Arena,
-        source: &str,
+        context: &RenderContext<'_>,
         node_ref: NodeRef,
-        heading_shift: usize,
-        doc_id: usize,
-        graph: &crate::graph::DocumentGraph,
     ) -> Result<()> {
+        let arena = context.arena;
         let mut caption_text_ref = None;
         let mut block_ref = None;
 
@@ -1249,7 +1172,7 @@ impl<'a> DocxRenderer<'a> {
         if let Some(ct_ref) = caption_text_ref {
             let mut para = Paragraph::new().line_spacing(LineSpacing::new().after(60).line(240));
             for child in arena[ct_ref].children(arena) {
-                let runs = self.render_inline_runs(arena, source, child, doc_id, graph);
+                let runs = self.render_inline_runs(context, child);
                 for run in runs {
                     para = para.add_run(run.italic().color("444444"));
                 }
@@ -1258,7 +1181,7 @@ impl<'a> DocxRenderer<'a> {
         }
 
         if let Some(br) = block_ref {
-            self.render_block(docx, arena, source, br, heading_shift, doc_id, graph)?;
+            self.render_block(docx, context, br)?;
         }
 
         Ok(())
@@ -1565,13 +1488,8 @@ impl<'a> DocxRenderer<'a> {
 
     /// Look up the graph-resolved image target for an `Image` node and
     /// load the file as a `Pic`.
-    fn resolve_graph_image(
-        &self,
-        graph: &DocumentGraph,
-        doc_id: usize,
-        node_ref: NodeRef,
-    ) -> Option<Pic> {
-        let target = graph.image_target(doc_id, node_ref)?;
+    fn resolve_graph_image(&self, context: &RenderContext<'_>, node_ref: NodeRef) -> Option<Pic> {
+        let target = context.graph.image_target(context.doc_id, node_ref)?;
         self.resolve_image(target)
     }
 

@@ -32,13 +32,15 @@ pub(crate) fn watch_command(
         logger,
         cache,
         theme,
-        format,
-        input,
-        output,
-        base,
-        broken_links,
-        meta_drops,
-        meta_overrides,
+        crate::BuildCommandOptions {
+            format,
+            input,
+            output,
+            base,
+            broken_links,
+            meta_drops,
+            meta_overrides,
+        },
     )?;
 
     // Clone everything the watcher callback needs.
@@ -61,13 +63,15 @@ pub(crate) fn watch_command(
                     &logger_w,
                     &cache_w,
                     &theme_w,
-                    format,
-                    &input_w,
-                    &output_w,
-                    base_w.as_deref(),
-                    broken_links,
-                    &meta_drops_w,
-                    &meta_w,
+                    crate::BuildCommandOptions {
+                        format,
+                        input: &input_w,
+                        output: &output_w,
+                        base: base_w.as_deref(),
+                        broken_links,
+                        meta_drops: &meta_drops_w,
+                        meta_overrides: &meta_w,
+                    },
                 ) {
                     Ok(()) => {
                         eprintln!("Rebuild complete.");

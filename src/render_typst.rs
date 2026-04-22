@@ -32,8 +32,20 @@ pub struct TypstRenderer {
     d2_theme: Option<String>,
 }
 
+#[derive(Clone, Copy)]
 struct RenderScope {
     doc_id: usize,
+}
+
+#[derive(Clone, Copy)]
+struct RenderContext<'a> {
+    prepared: &'a PreparedDocument,
+    scope: RenderScope,
+    arena: &'a Arena,
+    source: &'a str,
+    heading_shift: usize,
+    known_labels: &'a HashSet<String>,
+    logger: &'a DebugDumper,
 }
 
 impl TypstRenderer {
@@ -96,62 +108,39 @@ impl TypstRenderer {
                 }
                 continue;
             }
-            self.render_block(
-                out,
+            let context = RenderContext {
                 prepared,
-                &RenderScope { doc_id },
-                &doc.arena,
-                child,
-                &doc.source,
+                scope: RenderScope { doc_id },
+                arena: &doc.arena,
+                source: &doc.source,
                 heading_shift,
                 known_labels,
                 logger,
-            )?;
+            };
+            self.render_block(out, &context, child)?;
         }
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn render_block(
         &self,
         out: &mut String,
-        prepared: &PreparedDocument,
-        scope: &RenderScope,
-        arena: &Arena,
+        context: &RenderContext<'_>,
         node_ref: NodeRef,
-        source: &str,
-        heading_shift: usize,
-        known_labels: &HashSet<String>,
-        logger: &DebugDumper,
     ) -> Result<()> {
+        let arena = context.arena;
+        let source = context.source;
+        let logger = context.logger;
         match arena[node_ref].kind_data() {
             KindData::Paragraph(_) => {
-                self.render_inline_children(
-                    out,
-                    prepared,
-                    scope,
-                    arena,
-                    node_ref,
-                    source,
-                    known_labels,
-                    logger,
-                )?;
+                self.render_inline_children(out, context, node_ref)?;
                 out.push_str("\n\n");
             }
             KindData::Heading(heading) => {
-                let level = (heading.level() as usize + heading_shift).min(6);
+                let level = (heading.level() as usize + context.heading_shift).min(6);
                 out.push_str(&"=".repeat(level));
                 out.push(' ');
-                self.render_inline_children(
-                    out,
-                    prepared,
-                    scope,
-                    arena,
-                    node_ref,
-                    source,
-                    known_labels,
-                    logger,
-                )?;
+                self.render_inline_children(out, context, node_ref)?;
                 if let Some(id) = arena[node_ref].attributes().get("id") {
                     write!(out, " <{}>", id.str(source))?;
                 }
@@ -192,17 +181,7 @@ impl TypstRenderer {
             KindData::Blockquote(_) => {
                 out.push_str("#quote(block: true)[");
                 for child in arena[node_ref].children(arena) {
-                    self.render_block(
-                        out,
-                        prepared,
-                        scope,
-                        arena,
-                        child,
-                        source,
-                        heading_shift,
-                        known_labels,
-                        logger,
-                    )?;
+                    self.render_block(out, context, child)?;
                 }
                 out.push_str("]\n\n");
             }
@@ -246,17 +225,7 @@ impl TypstRenderer {
                     }
                     let item_children: Vec<_> = arena[item].children(arena).collect();
                     for (ci, &child) in item_children.iter().enumerate() {
-                        self.render_block(
-                            out,
-                            prepared,
-                            scope,
-                            arena,
-                            child,
-                            source,
-                            heading_shift,
-                            known_labels,
-                            logger,
-                        )?;
+                        self.render_block(out, context, child)?;
                         // In tight lists, collapse the paragraph break between
                         // a paragraph and a following nested list so they don't
                         // get extra vertical spacing inside the item.
@@ -276,17 +245,7 @@ impl TypstRenderer {
                 out.push_str(")\n\n");
             }
             KindData::Table(_) => {
-                self.render_table(
-                    out,
-                    prepared,
-                    scope,
-                    arena,
-                    node_ref,
-                    source,
-                    heading_shift,
-                    known_labels,
-                    logger,
-                )?;
+                self.render_table(out, context, node_ref)?;
             }
             KindData::HtmlBlock(_) | KindData::RawHtml(_) => {
                 logger.log("skipping raw HTML for Typst output");
@@ -295,17 +254,7 @@ impl TypstRenderer {
             KindData::Extension(_)
                 if rushdown::matches_extension_kind!(arena, node_ref, DefinitionList) =>
             {
-                self.render_definition_list(
-                    out,
-                    prepared,
-                    scope,
-                    arena,
-                    node_ref,
-                    source,
-                    heading_shift,
-                    known_labels,
-                    logger,
-                )?;
+                self.render_definition_list(out, context, node_ref)?;
             }
             KindData::Extension(_)
                 if rushdown::matches_extension_kind!(arena, node_ref, FencedDiv) =>
@@ -324,48 +273,17 @@ impl TypstRenderer {
                     return Ok(());
                 }
                 if let Some(adm_type) = crate::admonition_type(&classes) {
-                    self.render_admonition(
-                        out,
-                        prepared,
-                        scope,
-                        arena,
-                        node_ref,
-                        source,
-                        heading_shift,
-                        known_labels,
-                        adm_type,
-                        logger,
-                    )?;
+                    self.render_admonition(out, context, node_ref, adm_type)?;
                 } else {
                     for child in arena[node_ref].children(arena) {
-                        self.render_block(
-                            out,
-                            prepared,
-                            scope,
-                            arena,
-                            child,
-                            source,
-                            heading_shift,
-                            known_labels,
-                            logger,
-                        )?;
+                        self.render_block(out, context, child)?;
                     }
                 }
             }
             KindData::Extension(_)
                 if rushdown::matches_extension_kind!(arena, node_ref, crate::caption::Caption) =>
             {
-                self.render_caption(
-                    out,
-                    prepared,
-                    scope,
-                    arena,
-                    node_ref,
-                    source,
-                    heading_shift,
-                    known_labels,
-                    logger,
-                )?;
+                self.render_caption(out, context, node_ref)?;
             }
             KindData::Extension(_)
                 if rushdown::matches_extension_kind!(
@@ -376,16 +294,7 @@ impl TypstRenderer {
             {
                 // CaptionText is rendered as part of Caption; if encountered
                 // standalone, just render inline children.
-                self.render_inline_children(
-                    out,
-                    prepared,
-                    scope,
-                    arena,
-                    node_ref,
-                    source,
-                    known_labels,
-                    logger,
-                )?;
+                self.render_inline_children(out, context, node_ref)?;
             }
             KindData::Extension(_)
                 if rushdown::matches_extension_kind!(arena, node_ref, crate::diagram::Diagram) =>
@@ -582,36 +491,22 @@ impl TypstRenderer {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn render_admonition(
         &self,
         out: &mut String,
-        prepared: &PreparedDocument,
-        scope: &RenderScope,
-        arena: &Arena,
+        context: &RenderContext<'_>,
         node_ref: NodeRef,
-        source: &str,
-        heading_shift: usize,
-        known_labels: &HashSet<String>,
         adm_type: &str,
-        logger: &DebugDumper,
     ) -> Result<()> {
+        let arena = context.arena;
+        let source = context.source;
         // Collect children; check if the first is a heading (used as title).
         let children: Vec<_> = arena[node_ref].children(arena).collect();
         let (title, skip_first) = if let Some(&first) = children.first() {
             if matches!(arena[first].kind_data(), KindData::Heading(_)) {
                 // Render heading inline content as the title string.
                 let mut title_buf = String::new();
-                self.render_inline_children(
-                    &mut title_buf,
-                    prepared,
-                    scope,
-                    arena,
-                    first,
-                    source,
-                    known_labels,
-                    logger,
-                )?;
+                self.render_inline_children(&mut title_buf, context, first)?;
                 (title_buf, true)
             } else {
                 (Self::admonition_default_title(adm_type).to_string(), false)
@@ -633,19 +528,9 @@ impl TypstRenderer {
             &children[..]
         };
         for &child in body_children {
-            self.render_block(
-                out,
-                prepared,
-                scope,
-                arena,
-                child,
-                source,
-                heading_shift,
-                known_labels,
-                logger,
-            )?;
+            self.render_block(out, context, child)?;
         }
-        out.push_str("]");
+        out.push(']');
         // Emit Typst label if the fenced div has an id attribute.
         if let Some(id) = arena[node_ref].attributes().get("id") {
             write!(out, " <{}>", id.str(source))?;
@@ -654,19 +539,13 @@ impl TypstRenderer {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn render_definition_list(
         &self,
         out: &mut String,
-        prepared: &PreparedDocument,
-        scope: &RenderScope,
-        arena: &Arena,
+        context: &RenderContext<'_>,
         node_ref: NodeRef,
-        source: &str,
-        heading_shift: usize,
-        known_labels: &HashSet<String>,
-        logger: &DebugDumper,
     ) -> Result<()> {
+        let arena = context.arena;
         let tight = as_extension_data!(arena, node_ref, DefinitionList).is_tight();
         write!(out, "#terms(tight: {tight}")?;
 
@@ -697,30 +576,11 @@ impl TypstRenderer {
 
             for term_ref in terms {
                 out.push_str(", terms.item([");
-                self.render_term(
-                    out,
-                    prepared,
-                    scope,
-                    arena,
-                    term_ref,
-                    source,
-                    known_labels,
-                    logger,
-                )?;
+                self.render_term(out, context, term_ref)?;
                 out.push_str("], [");
                 for definition_ref in &definitions {
                     for child in arena[*definition_ref].children(arena) {
-                        self.render_block(
-                            out,
-                            prepared,
-                            scope,
-                            arena,
-                            child,
-                            source,
-                            heading_shift,
-                            known_labels,
-                            logger,
-                        )?;
+                        self.render_block(out, context, child)?;
                     }
                 }
                 out.push_str("])");
@@ -731,29 +591,16 @@ impl TypstRenderer {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn render_term(
         &self,
         out: &mut String,
-        prepared: &PreparedDocument,
-        scope: &RenderScope,
-        arena: &Arena,
+        context: &RenderContext<'_>,
         node_ref: NodeRef,
-        source: &str,
-        known_labels: &HashSet<String>,
-        logger: &DebugDumper,
     ) -> Result<()> {
+        let arena = context.arena;
+        let source = context.source;
         if arena[node_ref].children(arena).next().is_some() {
-            return self.render_inline_children(
-                out,
-                prepared,
-                scope,
-                arena,
-                node_ref,
-                source,
-                known_labels,
-                logger,
-            );
+            return self.render_inline_children(out, context, node_ref);
         }
 
         let block = as_type_data!(arena, node_ref, Block);
@@ -766,19 +613,13 @@ impl TypstRenderer {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn render_table(
         &self,
         out: &mut String,
-        prepared: &PreparedDocument,
-        scope: &RenderScope,
-        arena: &Arena,
+        context: &RenderContext<'_>,
         node_ref: NodeRef,
-        source: &str,
-        _heading_shift: usize,
-        known_labels: &HashSet<String>,
-        logger: &DebugDumper,
     ) -> Result<()> {
+        let arena = context.arena;
         let mut column_count = 0usize;
         let mut aligns = Vec::new();
         let mut header_rows = Vec::new();
@@ -835,16 +676,7 @@ impl TypstRenderer {
                     }
                     first = false;
                     out.push('[');
-                    self.render_inline_children(
-                        out,
-                        prepared,
-                        scope,
-                        arena,
-                        cell,
-                        source,
-                        known_labels,
-                        logger,
-                    )?;
+                    self.render_inline_children(out, context, cell)?;
                     out.push(']');
                 }
             }
@@ -853,16 +685,7 @@ impl TypstRenderer {
         for row in body_rows {
             for cell in arena[row].children(arena) {
                 out.push_str("  [");
-                self.render_inline_children(
-                    out,
-                    prepared,
-                    scope,
-                    arena,
-                    cell,
-                    source,
-                    known_labels,
-                    logger,
-                )?;
+                self.render_inline_children(out, context, cell)?;
                 out.push_str("],\n");
             }
         }
@@ -870,19 +693,14 @@ impl TypstRenderer {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn render_caption(
         &self,
         out: &mut String,
-        prepared: &PreparedDocument,
-        scope: &RenderScope,
-        arena: &Arena,
+        context: &RenderContext<'_>,
         node_ref: NodeRef,
-        source: &str,
-        heading_shift: usize,
-        known_labels: &HashSet<String>,
-        logger: &DebugDumper,
     ) -> Result<()> {
+        let arena = context.arena;
+        let source = context.source;
         // Find the CaptionText child and the captioned block child.
         let mut block_child = None;
         let mut caption_text_child = None;
@@ -903,30 +721,11 @@ impl TypstRenderer {
             out.push_str("#figure(caption: [");
         }
         if let Some(ct) = caption_text_child {
-            self.render_inline_children(
-                out,
-                prepared,
-                scope,
-                arena,
-                ct,
-                source,
-                known_labels,
-                logger,
-            )?;
+            self.render_inline_children(out, context, ct)?;
         }
         out.push_str("])[\n");
         if let Some(block) = block_child {
-            self.render_block(
-                out,
-                prepared,
-                scope,
-                arena,
-                block,
-                source,
-                heading_shift,
-                known_labels,
-                logger,
-            )?;
+            self.render_block(out, context, block)?;
         }
         out.push(']');
         if let Some(id) = arena[node_ref].attributes().get("id") {
@@ -936,45 +735,31 @@ impl TypstRenderer {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn render_inline_children(
         &self,
         out: &mut String,
-        prepared: &PreparedDocument,
-        scope: &RenderScope,
-        arena: &Arena,
+        context: &RenderContext<'_>,
         node_ref: NodeRef,
-        source: &str,
-        known_labels: &HashSet<String>,
-        logger: &DebugDumper,
     ) -> Result<()> {
+        let arena = context.arena;
         for child in arena[node_ref].children(arena) {
-            self.render_inline(
-                out,
-                prepared,
-                scope,
-                arena,
-                child,
-                source,
-                known_labels,
-                logger,
-            )?;
+            self.render_inline(out, context, child)?;
         }
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn render_inline(
         &self,
         out: &mut String,
-        prepared: &PreparedDocument,
-        scope: &RenderScope,
-        arena: &Arena,
+        context: &RenderContext<'_>,
         node_ref: NodeRef,
-        source: &str,
-        known_labels: &HashSet<String>,
-        logger: &DebugDumper,
     ) -> Result<()> {
+        let prepared = context.prepared;
+        let scope = context.scope;
+        let arena = context.arena;
+        let source = context.source;
+        let known_labels = context.known_labels;
+        let logger = context.logger;
         match arena[node_ref].kind_data() {
             KindData::Text(text) => {
                 out.push_str(&escape_typst_markup(text.str(source)));
@@ -991,39 +776,11 @@ impl TypstRenderer {
                     escape_typst_string(&cs.value_str(source))
                 )?;
             }
-            KindData::Emphasis(emphasis) if emphasis.level() == 1 => self.wrap_inline(
-                out,
-                "emph",
-                prepared,
-                scope,
-                arena,
-                node_ref,
-                source,
-                known_labels,
-                logger,
-            )?,
-            KindData::Emphasis(_) => self.wrap_inline(
-                out,
-                "strong",
-                prepared,
-                scope,
-                arena,
-                node_ref,
-                source,
-                known_labels,
-                logger,
-            )?,
-            KindData::Strikethrough(_) => self.wrap_inline(
-                out,
-                "strike",
-                prepared,
-                scope,
-                arena,
-                node_ref,
-                source,
-                known_labels,
-                logger,
-            )?,
+            KindData::Emphasis(emphasis) if emphasis.level() == 1 => {
+                self.wrap_inline(out, "emph", context, node_ref)?
+            }
+            KindData::Emphasis(_) => self.wrap_inline(out, "strong", context, node_ref)?,
+            KindData::Strikethrough(_) => self.wrap_inline(out, "strike", context, node_ref)?,
             KindData::Link(link) => {
                 let dest = prepared
                     .graph()
@@ -1041,16 +798,7 @@ impl TypstRenderer {
                         if dest.starts_with('#') {
                             let label = dest.trim_start_matches('#');
                             if !known_labels.contains(label) {
-                                self.render_inline_children(
-                                    out,
-                                    prepared,
-                                    scope,
-                                    arena,
-                                    node_ref,
-                                    source,
-                                    known_labels,
-                                    logger,
-                                )?;
+                                self.render_inline_children(out, context, node_ref)?;
                                 return Ok(());
                             }
                             write!(out, "#link(<{}>)[", label)?;
@@ -1068,16 +816,7 @@ impl TypstRenderer {
                         write!(out, "#link(\"{}\")[", escape_typst_string(&dest))?;
                     }
                 }
-                self.render_inline_children(
-                    out,
-                    prepared,
-                    scope,
-                    arena,
-                    node_ref,
-                    source,
-                    known_labels,
-                    logger,
-                )?;
+                self.render_inline_children(out, context, node_ref)?;
                 out.push(']');
             }
             KindData::Image(image) => {
@@ -1153,16 +892,7 @@ impl TypstRenderer {
                     crate::bracketed_span::BracketedSpan
                 ) =>
             {
-                self.render_inline_children(
-                    out,
-                    prepared,
-                    scope,
-                    arena,
-                    node_ref,
-                    source,
-                    known_labels,
-                    logger,
-                )?;
+                self.render_inline_children(out, context, node_ref)?;
                 if let Some(id) = arena[node_ref].attributes().get("id") {
                     write!(out, " <{}>", id.str(source))?;
                 }
@@ -1173,30 +903,15 @@ impl TypstRenderer {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn wrap_inline(
         &self,
         out: &mut String,
         name: &str,
-        prepared: &PreparedDocument,
-        scope: &RenderScope,
-        arena: &Arena,
+        context: &RenderContext<'_>,
         node_ref: NodeRef,
-        source: &str,
-        known_labels: &HashSet<String>,
-        logger: &DebugDumper,
     ) -> Result<()> {
         write!(out, "#{name}[")?;
-        self.render_inline_children(
-            out,
-            prepared,
-            scope,
-            arena,
-            node_ref,
-            source,
-            known_labels,
-            logger,
-        )?;
+        self.render_inline_children(out, context, node_ref)?;
         out.push(']');
         Ok(())
     }
@@ -1211,18 +926,17 @@ impl TypstRenderer {
     ) -> Result<String> {
         let doc = prepared.graph().document(doc_id);
         let mut out = String::new();
+        let context = RenderContext {
+            prepared,
+            scope: RenderScope { doc_id },
+            arena: &doc.arena,
+            source: &doc.source,
+            heading_shift: 0,
+            known_labels,
+            logger,
+        };
         for child in doc.arena[definition_ref].children(&doc.arena) {
-            self.render_block(
-                &mut out,
-                prepared,
-                &RenderScope { doc_id },
-                &doc.arena,
-                child,
-                &doc.source,
-                0,
-                known_labels,
-                logger,
-            )?;
+            self.render_block(&mut out, &context, child)?;
         }
         Ok(out)
     }

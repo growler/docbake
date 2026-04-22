@@ -57,8 +57,19 @@ pub(crate) struct ConfluenceDocument {
 
 // ── renderer state ──────────────────────────────────────────────────────
 
+#[derive(Clone, Copy)]
 struct Scope {
     doc_id: usize,
+}
+
+#[derive(Clone, Copy)]
+struct RenderContext<'a> {
+    prepared: &'a PreparedDocument,
+    scope: Scope,
+    arena: &'a Arena,
+    source: &'a str,
+    heading_shift: usize,
+    footnotes: &'a [FootnoteEntry],
 }
 
 struct FootnoteEntry {
@@ -142,44 +153,37 @@ impl<'a> ConfluenceRenderer<'a> {
                 }
                 continue;
             }
-            self.render_block(
-                out,
+            let context = RenderContext {
                 prepared,
-                &Scope { doc_id },
-                &doc.arena,
-                child,
-                &doc.source,
+                scope: Scope { doc_id },
+                arena: &doc.arena,
+                source: &doc.source,
                 heading_shift,
                 footnotes,
-            )?;
+            };
+            self.render_block(out, &context, child)?;
         }
         Ok(())
     }
 
     // ── block rendering ─────────────────────────────────────────────────
 
-    #[allow(clippy::too_many_arguments)]
     fn render_block(
         &self,
         out: &mut String,
-        prepared: &PreparedDocument,
-        scope: &Scope,
-        arena: &Arena,
+        context: &RenderContext<'_>,
         node_ref: NodeRef,
-        source: &str,
-        heading_shift: usize,
-        footnotes: &[FootnoteEntry],
     ) -> Result<()> {
+        let arena = context.arena;
+        let source = context.source;
         match arena[node_ref].kind_data() {
             KindData::Paragraph(_) => {
                 out.push_str("<p>");
-                self.render_inline_children(
-                    out, prepared, scope, arena, node_ref, source, footnotes,
-                )?;
+                self.render_inline_children(out, context, node_ref)?;
                 out.push_str("</p>\n");
             }
             KindData::Heading(heading) => {
-                let level = (heading.level() as usize + heading_shift).min(6);
+                let level = (heading.level() as usize + context.heading_shift).min(6);
                 let id = arena[node_ref]
                     .attributes()
                     .get("id")
@@ -195,10 +199,8 @@ impl<'a> ConfluenceRenderer<'a> {
                         xml_escape(id)
                     )?;
                 }
-                self.render_inline_children(
-                    out, prepared, scope, arena, node_ref, source, footnotes,
-                )?;
-                write!(out, "</h{level}>\n")?;
+                self.render_inline_children(out, context, node_ref)?;
+                writeln!(out, "</h{level}>")?;
             }
             KindData::ThematicBreak(_) => {
                 out.push_str("<hr />\n");
@@ -230,16 +232,7 @@ impl<'a> ConfluenceRenderer<'a> {
             KindData::Blockquote(_) => {
                 out.push_str("<blockquote>");
                 for child in arena[node_ref].children(arena) {
-                    self.render_block(
-                        out,
-                        prepared,
-                        scope,
-                        arena,
-                        child,
-                        source,
-                        heading_shift,
-                        footnotes,
-                    )?;
+                    self.render_block(out, context, child)?;
                 }
                 out.push_str("</blockquote>\n");
             }
@@ -261,16 +254,7 @@ impl<'a> ConfluenceRenderer<'a> {
                                 Some(Task::Checked) => {
                                     out.push_str("<ac:task-list><ac:task><ac:task-status>complete</ac:task-status><ac:task-body>");
                                     for child in arena[item].children(arena) {
-                                        self.render_block(
-                                            out,
-                                            prepared,
-                                            scope,
-                                            arena,
-                                            child,
-                                            source,
-                                            heading_shift,
-                                            footnotes,
-                                        )?;
+                                        self.render_block(out, context, child)?;
                                     }
                                     out.push_str("</ac:task-body></ac:task></ac:task-list>");
                                     out.push_str("</li>\n");
@@ -279,16 +263,7 @@ impl<'a> ConfluenceRenderer<'a> {
                                 Some(Task::Unchecked) => {
                                     out.push_str("<ac:task-list><ac:task><ac:task-status>incomplete</ac:task-status><ac:task-body>");
                                     for child in arena[item].children(arena) {
-                                        self.render_block(
-                                            out,
-                                            prepared,
-                                            scope,
-                                            arena,
-                                            child,
-                                            source,
-                                            heading_shift,
-                                            footnotes,
-                                        )?;
+                                        self.render_block(out, context, child)?;
                                     }
                                     out.push_str("</ac:task-body></ac:task></ac:task-list>");
                                     out.push_str("</li>\n");
@@ -299,16 +274,7 @@ impl<'a> ConfluenceRenderer<'a> {
                         }
                     }
                     for child in arena[item].children(arena) {
-                        self.render_block(
-                            out,
-                            prepared,
-                            scope,
-                            arena,
-                            child,
-                            source,
-                            heading_shift,
-                            footnotes,
-                        )?;
+                        self.render_block(out, context, child)?;
                     }
                     out.push_str("</li>\n");
                 }
@@ -319,7 +285,7 @@ impl<'a> ConfluenceRenderer<'a> {
                 }
             }
             KindData::Table(_) => {
-                self.render_table(out, prepared, scope, arena, node_ref, source, footnotes)?;
+                self.render_table(out, context, node_ref)?;
             }
             KindData::HtmlBlock(html) => {
                 // Pass through raw HTML as-is — Confluence may or may not
@@ -336,9 +302,7 @@ impl<'a> ConfluenceRenderer<'a> {
             KindData::Extension(_)
                 if rushdown::matches_extension_kind!(arena, node_ref, DefinitionList) =>
             {
-                self.render_definition_list(
-                    out, prepared, scope, arena, node_ref, source, footnotes,
-                )?;
+                self.render_definition_list(out, context, node_ref)?;
             }
             KindData::Extension(_)
                 if rushdown::matches_extension_kind!(arena, node_ref, FencedDiv) =>
@@ -360,45 +324,17 @@ impl<'a> ConfluenceRenderer<'a> {
                 }
 
                 if let Some(adm_type) = crate::admonition_type(&classes) {
-                    self.render_admonition(
-                        out,
-                        prepared,
-                        scope,
-                        arena,
-                        node_ref,
-                        source,
-                        heading_shift,
-                        footnotes,
-                        adm_type,
-                    )?;
+                    self.render_admonition(out, context, node_ref, adm_type)?;
                 } else {
                     for child in arena[node_ref].children(arena) {
-                        self.render_block(
-                            out,
-                            prepared,
-                            scope,
-                            arena,
-                            child,
-                            source,
-                            heading_shift,
-                            footnotes,
-                        )?;
+                        self.render_block(out, context, child)?;
                     }
                 }
             }
             KindData::Extension(_)
                 if rushdown::matches_extension_kind!(arena, node_ref, crate::caption::Caption) =>
             {
-                self.render_caption(
-                    out,
-                    prepared,
-                    scope,
-                    arena,
-                    node_ref,
-                    source,
-                    heading_shift,
-                    footnotes,
-                )?;
+                self.render_caption(out, context, node_ref)?;
             }
             KindData::Extension(_)
                 if rushdown::matches_extension_kind!(
@@ -407,14 +343,12 @@ impl<'a> ConfluenceRenderer<'a> {
                     crate::caption::CaptionText
                 ) =>
             {
-                self.render_inline_children(
-                    out, prepared, scope, arena, node_ref, source, footnotes,
-                )?;
+                self.render_inline_children(out, context, node_ref)?;
             }
             KindData::Extension(_)
                 if rushdown::matches_extension_kind!(arena, node_ref, crate::diagram::Diagram) =>
             {
-                self.render_diagram(out, prepared, scope, arena, node_ref, source)?;
+                self.render_diagram(out, context, node_ref)?;
             }
             KindData::Extension(_)
                 if rushdown::matches_extension_kind!(arena, node_ref, FootnoteDefinition) =>
@@ -429,34 +363,30 @@ impl<'a> ConfluenceRenderer<'a> {
 
     // ── inline rendering ────────────────────────────────────────────────
 
-    #[allow(clippy::too_many_arguments)]
     fn render_inline_children(
         &self,
         out: &mut String,
-        prepared: &PreparedDocument,
-        scope: &Scope,
-        arena: &Arena,
+        context: &RenderContext<'_>,
         node_ref: NodeRef,
-        source: &str,
-        footnotes: &[FootnoteEntry],
     ) -> Result<()> {
+        let arena = context.arena;
         for child in arena[node_ref].children(arena) {
-            self.render_inline(out, prepared, scope, arena, child, source, footnotes)?;
+            self.render_inline(out, context, child)?;
         }
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn render_inline(
         &self,
         out: &mut String,
-        prepared: &PreparedDocument,
-        scope: &Scope,
-        arena: &Arena,
+        context: &RenderContext<'_>,
         node_ref: NodeRef,
-        source: &str,
-        footnotes: &[FootnoteEntry],
     ) -> Result<()> {
+        let prepared = context.prepared;
+        let scope = context.scope;
+        let arena = context.arena;
+        let source = context.source;
+        let footnotes = context.footnotes;
         match arena[node_ref].kind_data() {
             KindData::Text(text) => {
                 out.push_str(&xml_escape(text.str(source)));
@@ -471,24 +401,18 @@ impl<'a> ConfluenceRenderer<'a> {
             }
             KindData::Emphasis(emphasis) if emphasis.level() == 1 => {
                 out.push_str("<em>");
-                self.render_inline_children(
-                    out, prepared, scope, arena, node_ref, source, footnotes,
-                )?;
+                self.render_inline_children(out, context, node_ref)?;
                 out.push_str("</em>");
             }
             KindData::Emphasis(_) => {
                 out.push_str("<strong>");
-                self.render_inline_children(
-                    out, prepared, scope, arena, node_ref, source, footnotes,
-                )?;
+                self.render_inline_children(out, context, node_ref)?;
                 out.push_str("</strong>");
             }
             KindData::Strikethrough(_) => {
                 // Confluence doesn't support <del>, use inline style.
                 out.push_str("<span style=\"text-decoration: line-through;\">");
-                self.render_inline_children(
-                    out, prepared, scope, arena, node_ref, source, footnotes,
-                )?;
+                self.render_inline_children(out, context, node_ref)?;
                 out.push_str("</span>");
             }
             KindData::Link(link) => {
@@ -525,22 +449,12 @@ impl<'a> ConfluenceRenderer<'a> {
                         if dest.starts_with('#') {
                             // Internal anchor link → ac:link with anchor.
                             let mut link_text = String::new();
-                            self.render_inline_children(
-                                &mut link_text,
-                                prepared,
-                                scope,
-                                arena,
-                                node_ref,
-                                source,
-                                footnotes,
-                            )?;
+                            self.render_inline_children(&mut link_text, context, node_ref)?;
                             self.render_internal_link(out, &dest, &link_text)?;
                         } else {
                             // External link.
                             write!(out, "<a href=\"{}\">", xml_attr_escape(&dest))?;
-                            self.render_inline_children(
-                                out, prepared, scope, arena, node_ref, source, footnotes,
-                            )?;
+                            self.render_inline_children(out, context, node_ref)?;
                             out.push_str("</a>");
                         }
                     }
@@ -644,9 +558,7 @@ impl<'a> ConfluenceRenderer<'a> {
                 ) =>
             {
                 out.push_str("<span>");
-                self.render_inline_children(
-                    out, prepared, scope, arena, node_ref, source, footnotes,
-                )?;
+                self.render_inline_children(out, context, node_ref)?;
                 out.push_str("</span>");
             }
             KindData::Extension(_) => {}
@@ -834,12 +746,11 @@ impl<'a> ConfluenceRenderer<'a> {
     fn render_diagram(
         &self,
         out: &mut String,
-        _prepared: &PreparedDocument,
-        _scope: &Scope,
-        arena: &Arena,
+        context: &RenderContext<'_>,
         node_ref: NodeRef,
-        source: &str,
     ) -> Result<()> {
+        let arena = context.arena;
+        let source = context.source;
         let diagram = as_extension_data!(arena, node_ref, crate::diagram::Diagram);
         let src = crate::diagram::collect_diagram_source(diagram, source);
         let attrs = arena[node_ref].attributes();
@@ -871,9 +782,9 @@ impl<'a> ConfluenceRenderer<'a> {
             false,
             Some(&svg_bytes),
         );
-        write!(
+        writeln!(
             out,
-            "><ri:attachment ri:filename=\"{}\" /></ac:image>\n",
+            "><ri:attachment ri:filename=\"{}\" /></ac:image>",
             xml_attr_escape(&filename)
         )?;
 
@@ -959,17 +870,13 @@ impl<'a> ConfluenceRenderer<'a> {
 
     // ── table rendering ─────────────────────────────────────────────────
 
-    #[allow(clippy::too_many_arguments)]
     fn render_table(
         &self,
         out: &mut String,
-        prepared: &PreparedDocument,
-        scope: &Scope,
-        arena: &Arena,
+        context: &RenderContext<'_>,
         node_ref: NodeRef,
-        source: &str,
-        footnotes: &[FootnoteEntry],
     ) -> Result<()> {
+        let arena = context.arena;
         out.push_str("<table><tbody>\n");
         for child in arena[node_ref].children(arena) {
             match arena[child].kind_data() {
@@ -983,9 +890,7 @@ impl<'a> ConfluenceRenderer<'a> {
                             } else {
                                 write!(out, "<th style=\"text-align: {align}\">")?;
                             }
-                            self.render_inline_children(
-                                out, prepared, scope, arena, cell, source, footnotes,
-                            )?;
+                            self.render_inline_children(out, context, cell)?;
                             out.push_str("</th>");
                         }
                         out.push_str("</tr>\n");
@@ -1001,9 +906,7 @@ impl<'a> ConfluenceRenderer<'a> {
                             } else {
                                 write!(out, "<td style=\"text-align: {align}\">")?;
                             }
-                            self.render_inline_children(
-                                out, prepared, scope, arena, cell, source, footnotes,
-                            )?;
+                            self.render_inline_children(out, context, cell)?;
                             out.push_str("</td>");
                         }
                         out.push_str("</tr>\n");
@@ -1027,17 +930,13 @@ impl<'a> ConfluenceRenderer<'a> {
 
     // ── definition list ─────────────────────────────────────────────────
 
-    #[allow(clippy::too_many_arguments)]
     fn render_definition_list(
         &self,
         out: &mut String,
-        prepared: &PreparedDocument,
-        scope: &Scope,
-        arena: &Arena,
+        context: &RenderContext<'_>,
         node_ref: NodeRef,
-        source: &str,
-        footnotes: &[FootnoteEntry],
     ) -> Result<()> {
+        let arena = context.arena;
         // Confluence doesn't support <dl>; render as a two-column table.
         out.push_str("<table><tbody>\n");
         let children: Vec<_> = arena[node_ref].children(arena).collect();
@@ -1063,15 +962,15 @@ impl<'a> ConfluenceRenderer<'a> {
             }
             for term_ref in &terms {
                 out.push_str("<tr><td><strong>");
-                self.render_inline_children(
-                    out, prepared, scope, arena, *term_ref, source, footnotes,
-                )?;
+                self.render_inline_children(out, context, *term_ref)?;
                 out.push_str("</strong></td><td>");
+                let definition_context = RenderContext {
+                    heading_shift: 0,
+                    ..*context
+                };
                 for def_ref in &definitions {
                     for child in arena[*def_ref].children(arena) {
-                        self.render_block(
-                            out, prepared, scope, arena, child, source, 0, footnotes,
-                        )?;
+                        self.render_block(out, &definition_context, child)?;
                     }
                 }
                 out.push_str("</td></tr>\n");
@@ -1083,19 +982,14 @@ impl<'a> ConfluenceRenderer<'a> {
 
     // ── admonition ──────────────────────────────────────────────────────
 
-    #[allow(clippy::too_many_arguments)]
     fn render_admonition(
         &self,
         out: &mut String,
-        prepared: &PreparedDocument,
-        scope: &Scope,
-        arena: &Arena,
+        context: &RenderContext<'_>,
         node_ref: NodeRef,
-        source: &str,
-        heading_shift: usize,
-        footnotes: &[FootnoteEntry],
         adm_type: &str,
     ) -> Result<()> {
+        let arena = context.arena;
         let confluence_macro = match adm_type {
             "note" => "note",
             "warning" | "important" | "caution" => "warning",
@@ -1108,15 +1002,7 @@ impl<'a> ConfluenceRenderer<'a> {
         let (title, skip_first) = if let Some(&first) = children.first() {
             if matches!(arena[first].kind_data(), KindData::Heading(_)) {
                 let mut title_buf = String::new();
-                self.render_inline_children(
-                    &mut title_buf,
-                    prepared,
-                    scope,
-                    arena,
-                    first,
-                    source,
-                    footnotes,
-                )?;
+                self.render_inline_children(&mut title_buf, context, first)?;
                 (Some(title_buf), true)
             } else {
                 (None, false)
@@ -1140,16 +1026,7 @@ impl<'a> ConfluenceRenderer<'a> {
             &children[..]
         };
         for &child in body_children {
-            self.render_block(
-                out,
-                prepared,
-                scope,
-                arena,
-                child,
-                source,
-                heading_shift,
-                footnotes,
-            )?;
+            self.render_block(out, context, child)?;
         }
         out.push_str("</ac:rich-text-body></ac:structured-macro>\n");
         Ok(())
@@ -1157,18 +1034,13 @@ impl<'a> ConfluenceRenderer<'a> {
 
     // ── caption ─────────────────────────────────────────────────────────
 
-    #[allow(clippy::too_many_arguments)]
     fn render_caption(
         &self,
         out: &mut String,
-        prepared: &PreparedDocument,
-        scope: &Scope,
-        arena: &Arena,
+        context: &RenderContext<'_>,
         node_ref: NodeRef,
-        source: &str,
-        heading_shift: usize,
-        footnotes: &[FootnoteEntry],
     ) -> Result<()> {
+        let arena = context.arena;
         let mut block_child = None;
         let mut caption_text_child = None;
         for child in arena[node_ref].children(arena) {
@@ -1180,20 +1052,11 @@ impl<'a> ConfluenceRenderer<'a> {
         }
         // Render the block content, then a caption paragraph.
         if let Some(block) = block_child {
-            self.render_block(
-                out,
-                prepared,
-                scope,
-                arena,
-                block,
-                source,
-                heading_shift,
-                footnotes,
-            )?;
+            self.render_block(out, context, block)?;
         }
         if let Some(ct) = caption_text_child {
             out.push_str("<p><em>");
-            self.render_inline_children(out, prepared, scope, arena, ct, source, footnotes)?;
+            self.render_inline_children(out, context, ct)?;
             out.push_str("</em></p>\n");
         }
         Ok(())
@@ -1244,19 +1107,18 @@ impl<'a> ConfluenceRenderer<'a> {
                 entry.index
             )?;
             if let Some(def) = doc.footnote_definition(&entry.label) {
+                let context = RenderContext {
+                    prepared,
+                    scope: Scope {
+                        doc_id: entry.doc_id,
+                    },
+                    arena: &doc.arena,
+                    source: &doc.source,
+                    heading_shift: 0,
+                    footnotes,
+                };
                 for child in doc.arena[def.node_ref].children(&doc.arena) {
-                    self.render_block(
-                        out,
-                        prepared,
-                        &Scope {
-                            doc_id: entry.doc_id,
-                        },
-                        &doc.arena,
-                        child,
-                        &doc.source,
-                        0,
-                        footnotes,
-                    )?;
+                    self.render_block(out, &context, child)?;
                 }
             }
             out.push_str("</li>\n");

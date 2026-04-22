@@ -17,8 +17,24 @@ pub struct MarkdownRenderer<'a> {
     output_dir: &'a Path,
 }
 
+#[derive(Clone, Copy)]
 struct RenderScope {
     doc_id: usize,
+}
+
+#[derive(Clone, Copy)]
+struct RenderContext<'a> {
+    prepared: &'a PreparedDocument,
+    scope: RenderScope,
+    arena: &'a Arena,
+    source: &'a str,
+    heading_shift: usize,
+}
+
+#[derive(Default)]
+struct RenderState {
+    footnotes: Vec<FootnoteEntry>,
+    seen_footnotes: HashSet<(usize, String)>,
 }
 
 /// Collected footnote for deferred rendering at document end.
@@ -39,29 +55,19 @@ impl<'a> MarkdownRenderer<'a> {
 
     pub fn render_document(&self, prepared: &PreparedDocument) -> Result<String> {
         let mut out = String::new();
-        let mut footnotes = Vec::new();
-        let mut seen_footnotes = HashSet::<(usize, String)>::new();
-        self.render_graph_document(
-            &mut out,
-            prepared,
-            prepared.graph().root_id,
-            0,
-            &mut footnotes,
-            &mut seen_footnotes,
-        )?;
-        self.render_footnote_definitions(&mut out, prepared, &footnotes)?;
+        let mut state = RenderState::default();
+        self.render_graph_document(&mut out, prepared, prepared.graph().root_id, 0, &mut state)?;
+        self.render_footnote_definitions(&mut out, prepared, &state.footnotes)?;
         Ok(out)
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn render_graph_document(
         &self,
         out: &mut String,
         prepared: &PreparedDocument,
         doc_id: usize,
         heading_shift: usize,
-        footnotes: &mut Vec<FootnoteEntry>,
-        seen_footnotes: &mut HashSet<(usize, String)>,
+        state: &mut RenderState,
     ) -> Result<()> {
         let doc = prepared.graph().document(doc_id);
         for child in doc.arena[doc.doc_ref].children(&doc.arena) {
@@ -72,68 +78,42 @@ impl<'a> MarkdownRenderer<'a> {
                         prepared,
                         entry.doc_id,
                         heading_shift + entry.heading_shift,
-                        footnotes,
-                        seen_footnotes,
+                        state,
                     )?;
                 }
                 continue;
             }
-            self.render_block(
-                out,
+            let context = RenderContext {
                 prepared,
-                &RenderScope { doc_id },
-                &doc.arena,
-                child,
-                &doc.source,
+                scope: RenderScope { doc_id },
+                arena: &doc.arena,
+                source: &doc.source,
                 heading_shift,
-                footnotes,
-                seen_footnotes,
-            )?;
+            };
+            self.render_block(out, &context, child, state)?;
         }
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn render_block(
         &self,
         out: &mut String,
-        prepared: &PreparedDocument,
-        scope: &RenderScope,
-        arena: &Arena,
+        context: &RenderContext<'_>,
         node_ref: NodeRef,
-        source: &str,
-        heading_shift: usize,
-        footnotes: &mut Vec<FootnoteEntry>,
-        seen_footnotes: &mut HashSet<(usize, String)>,
+        state: &mut RenderState,
     ) -> Result<()> {
+        let arena = context.arena;
+        let source = context.source;
         match arena[node_ref].kind_data() {
             KindData::Paragraph(_) => {
-                self.render_inline_children(
-                    out,
-                    prepared,
-                    scope,
-                    arena,
-                    node_ref,
-                    source,
-                    footnotes,
-                    seen_footnotes,
-                )?;
+                self.render_inline_children(out, context, node_ref, state)?;
                 out.push_str("\n\n");
             }
             KindData::Heading(heading) => {
-                let level = (heading.level() as usize + heading_shift).min(6);
+                let level = (heading.level() as usize + context.heading_shift).min(6);
                 out.push_str(&"#".repeat(level));
                 out.push(' ');
-                self.render_inline_children(
-                    out,
-                    prepared,
-                    scope,
-                    arena,
-                    node_ref,
-                    source,
-                    footnotes,
-                    seen_footnotes,
-                )?;
+                self.render_inline_children(out, context, node_ref, state)?;
                 if let Some(id) = arena[node_ref].attributes().get("id") {
                     write!(out, " {{#{}}}", id.str(source))?;
                 }
@@ -187,17 +167,7 @@ impl<'a> MarkdownRenderer<'a> {
             KindData::Blockquote(_) => {
                 let mut inner = String::new();
                 for child in arena[node_ref].children(arena) {
-                    self.render_block(
-                        &mut inner,
-                        prepared,
-                        scope,
-                        arena,
-                        child,
-                        source,
-                        heading_shift,
-                        footnotes,
-                        seen_footnotes,
-                    )?;
+                    self.render_block(&mut inner, context, child, state)?;
                 }
                 // Prefix each line with `> `.
                 for line in inner.lines() {
@@ -223,17 +193,7 @@ impl<'a> MarkdownRenderer<'a> {
                     let indent = " ".repeat(marker.len());
                     let mut item_content = String::new();
                     for child in arena[item].children(arena) {
-                        self.render_block(
-                            &mut item_content,
-                            prepared,
-                            scope,
-                            arena,
-                            child,
-                            source,
-                            heading_shift,
-                            footnotes,
-                            seen_footnotes,
-                        )?;
+                        self.render_block(&mut item_content, context, child, state)?;
                     }
                     let mut first_line = true;
                     for line in item_content.lines() {
@@ -255,16 +215,7 @@ impl<'a> MarkdownRenderer<'a> {
                 out.push('\n');
             }
             KindData::Table(_) => {
-                self.render_table(
-                    out,
-                    prepared,
-                    scope,
-                    arena,
-                    node_ref,
-                    source,
-                    footnotes,
-                    seen_footnotes,
-                )?;
+                self.render_table(out, context, node_ref, state)?;
             }
             KindData::HtmlBlock(html) => {
                 for line in html.value().iter(source) {
@@ -281,17 +232,7 @@ impl<'a> MarkdownRenderer<'a> {
             KindData::Extension(_)
                 if rushdown::matches_extension_kind!(arena, node_ref, DefinitionList) =>
             {
-                self.render_definition_list(
-                    out,
-                    prepared,
-                    scope,
-                    arena,
-                    node_ref,
-                    source,
-                    heading_shift,
-                    footnotes,
-                    seen_footnotes,
-                )?;
+                self.render_definition_list(out, context, node_ref, state)?;
             }
             KindData::Extension(_)
                 if rushdown::matches_extension_kind!(arena, node_ref, FencedDiv) =>
@@ -315,33 +256,13 @@ impl<'a> MarkdownRenderer<'a> {
                     return Ok(());
                 }
                 for child in arena[node_ref].children(arena) {
-                    self.render_block(
-                        out,
-                        prepared,
-                        scope,
-                        arena,
-                        child,
-                        source,
-                        heading_shift,
-                        footnotes,
-                        seen_footnotes,
-                    )?;
+                    self.render_block(out, context, child, state)?;
                 }
             }
             KindData::Extension(_)
                 if rushdown::matches_extension_kind!(arena, node_ref, crate::caption::Caption) =>
             {
-                self.render_caption(
-                    out,
-                    prepared,
-                    scope,
-                    arena,
-                    node_ref,
-                    source,
-                    heading_shift,
-                    footnotes,
-                    seen_footnotes,
-                )?;
+                self.render_caption(out, context, node_ref, state)?;
             }
             KindData::Extension(_)
                 if rushdown::matches_extension_kind!(
@@ -351,16 +272,7 @@ impl<'a> MarkdownRenderer<'a> {
                 ) =>
             {
                 // CaptionText rendered as part of Caption; standalone: inline children.
-                self.render_inline_children(
-                    out,
-                    prepared,
-                    scope,
-                    arena,
-                    node_ref,
-                    source,
-                    footnotes,
-                    seen_footnotes,
-                )?;
+                self.render_inline_children(out, context, node_ref, state)?;
             }
             KindData::Extension(_)
                 if rushdown::matches_extension_kind!(arena, node_ref, FootnoteDefinition) =>
@@ -373,19 +285,15 @@ impl<'a> MarkdownRenderer<'a> {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn render_caption(
         &self,
         out: &mut String,
-        prepared: &PreparedDocument,
-        scope: &RenderScope,
-        arena: &Arena,
+        context: &RenderContext<'_>,
         node_ref: NodeRef,
-        source: &str,
-        heading_shift: usize,
-        footnotes: &mut Vec<FootnoteEntry>,
-        seen_footnotes: &mut HashSet<(usize, String)>,
+        state: &mut RenderState,
     ) -> Result<()> {
+        let arena = context.arena;
+        let source = context.source;
         let caption = as_extension_data!(arena, node_ref, crate::caption::Caption);
         let prefix = match caption.kind() {
             crate::caption::CaptionKind::Table => "Table: ",
@@ -412,16 +320,7 @@ impl<'a> MarkdownRenderer<'a> {
                 // Caption text first.
                 out.push_str(prefix);
                 if let Some(ct) = caption_text_child {
-                    self.render_inline_children(
-                        out,
-                        prepared,
-                        scope,
-                        arena,
-                        ct,
-                        source,
-                        footnotes,
-                        seen_footnotes,
-                    )?;
+                    self.render_inline_children(out, context, ct, state)?;
                 }
                 if let Some(id) = arena[node_ref].attributes().get("id") {
                     write!(out, " {{#{}}}", id.str(source))?;
@@ -429,47 +328,18 @@ impl<'a> MarkdownRenderer<'a> {
                 out.push_str("\n\n");
                 // Then the block.
                 if let Some(block) = block_child {
-                    self.render_block(
-                        out,
-                        prepared,
-                        scope,
-                        arena,
-                        block,
-                        source,
-                        heading_shift,
-                        footnotes,
-                        seen_footnotes,
-                    )?;
+                    self.render_block(out, context, block, state)?;
                 }
             }
             crate::caption::CaptionPosition::After => {
                 // Block first.
                 if let Some(block) = block_child {
-                    self.render_block(
-                        out,
-                        prepared,
-                        scope,
-                        arena,
-                        block,
-                        source,
-                        heading_shift,
-                        footnotes,
-                        seen_footnotes,
-                    )?;
+                    self.render_block(out, context, block, state)?;
                 }
                 // Then caption text.
                 out.push_str(prefix);
                 if let Some(ct) = caption_text_child {
-                    self.render_inline_children(
-                        out,
-                        prepared,
-                        scope,
-                        arena,
-                        ct,
-                        source,
-                        footnotes,
-                        seen_footnotes,
-                    )?;
+                    self.render_inline_children(out, context, ct, state)?;
                 }
                 if let Some(id) = arena[node_ref].attributes().get("id") {
                     write!(out, " {{#{}}}", id.str(source))?;
@@ -480,19 +350,14 @@ impl<'a> MarkdownRenderer<'a> {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn render_definition_list(
         &self,
         out: &mut String,
-        prepared: &PreparedDocument,
-        scope: &RenderScope,
-        arena: &Arena,
+        context: &RenderContext<'_>,
         node_ref: NodeRef,
-        source: &str,
-        heading_shift: usize,
-        footnotes: &mut Vec<FootnoteEntry>,
-        seen_footnotes: &mut HashSet<(usize, String)>,
+        state: &mut RenderState,
     ) -> Result<()> {
+        let arena = context.arena;
         let children = arena[node_ref].children(arena).collect::<Vec<_>>();
         let mut index = 0usize;
         while index < children.len() {
@@ -516,16 +381,7 @@ impl<'a> MarkdownRenderer<'a> {
 
             // Emit each term.
             for term_ref in &terms {
-                self.render_inline_children(
-                    out,
-                    prepared,
-                    scope,
-                    arena,
-                    *term_ref,
-                    source,
-                    footnotes,
-                    seen_footnotes,
-                )?;
+                self.render_inline_children(out, context, *term_ref, state)?;
                 out.push('\n');
             }
 
@@ -533,17 +389,7 @@ impl<'a> MarkdownRenderer<'a> {
             for def_ref in &definitions {
                 for child in arena[*def_ref].children(arena) {
                     let mut inner = String::new();
-                    self.render_block(
-                        &mut inner,
-                        prepared,
-                        scope,
-                        arena,
-                        child,
-                        source,
-                        heading_shift,
-                        footnotes,
-                        seen_footnotes,
-                    )?;
+                    self.render_block(&mut inner, context, child, state)?;
                     let trimmed = inner.trim_end();
                     let mut first_line = true;
                     for line in trimmed.lines() {
@@ -571,18 +417,14 @@ impl<'a> MarkdownRenderer<'a> {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn render_table(
         &self,
         out: &mut String,
-        prepared: &PreparedDocument,
-        scope: &RenderScope,
-        arena: &Arena,
+        context: &RenderContext<'_>,
         node_ref: NodeRef,
-        source: &str,
-        footnotes: &mut Vec<FootnoteEntry>,
-        seen_footnotes: &mut HashSet<(usize, String)>,
+        state: &mut RenderState,
     ) -> Result<()> {
+        let arena = context.arena;
         let mut header_rows = Vec::new();
         let mut body_rows = Vec::new();
         let mut aligns = Vec::new();
@@ -613,16 +455,7 @@ impl<'a> MarkdownRenderer<'a> {
 
         // Render header rows.
         for row in &header_rows {
-            self.render_table_row(
-                out,
-                prepared,
-                scope,
-                arena,
-                *row,
-                source,
-                footnotes,
-                seen_footnotes,
-            )?;
+            self.render_table_row(out, context, *row, state)?;
         }
 
         // Separator row.
@@ -641,92 +474,56 @@ impl<'a> MarkdownRenderer<'a> {
 
         // Body rows.
         for row in &body_rows {
-            self.render_table_row(
-                out,
-                prepared,
-                scope,
-                arena,
-                *row,
-                source,
-                footnotes,
-                seen_footnotes,
-            )?;
+            self.render_table_row(out, context, *row, state)?;
         }
 
         out.push('\n');
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn render_table_row(
         &self,
         out: &mut String,
-        prepared: &PreparedDocument,
-        scope: &RenderScope,
-        arena: &Arena,
+        context: &RenderContext<'_>,
         row_ref: NodeRef,
-        source: &str,
-        footnotes: &mut Vec<FootnoteEntry>,
-        seen_footnotes: &mut HashSet<(usize, String)>,
+        state: &mut RenderState,
     ) -> Result<()> {
+        let arena = context.arena;
         out.push('|');
         for cell in arena[row_ref].children(arena) {
             out.push(' ');
-            self.render_inline_children(
-                out,
-                prepared,
-                scope,
-                arena,
-                cell,
-                source,
-                footnotes,
-                seen_footnotes,
-            )?;
+            self.render_inline_children(out, context, cell, state)?;
             out.push_str(" |");
         }
         out.push('\n');
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn render_inline_children(
         &self,
         out: &mut String,
-        prepared: &PreparedDocument,
-        scope: &RenderScope,
-        arena: &Arena,
+        context: &RenderContext<'_>,
         node_ref: NodeRef,
-        source: &str,
-        footnotes: &mut Vec<FootnoteEntry>,
-        seen_footnotes: &mut HashSet<(usize, String)>,
+        state: &mut RenderState,
     ) -> Result<()> {
+        let arena = context.arena;
         for child in arena[node_ref].children(arena) {
-            self.render_inline(
-                out,
-                prepared,
-                scope,
-                arena,
-                child,
-                source,
-                footnotes,
-                seen_footnotes,
-            )?;
+            self.render_inline(out, context, child, state)?;
         }
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn render_inline(
         &self,
         out: &mut String,
-        prepared: &PreparedDocument,
-        scope: &RenderScope,
-        arena: &Arena,
+        context: &RenderContext<'_>,
         node_ref: NodeRef,
-        source: &str,
-        footnotes: &mut Vec<FootnoteEntry>,
-        seen_footnotes: &mut HashSet<(usize, String)>,
+        state: &mut RenderState,
     ) -> Result<()> {
+        let prepared = context.prepared;
+        let scope = context.scope;
+        let arena = context.arena;
+        let source = context.source;
         match arena[node_ref].kind_data() {
             KindData::Text(text) => {
                 out.push_str(text.str(source));
@@ -753,44 +550,17 @@ impl<'a> MarkdownRenderer<'a> {
             }
             KindData::Emphasis(emphasis) if emphasis.level() == 1 => {
                 out.push('*');
-                self.render_inline_children(
-                    out,
-                    prepared,
-                    scope,
-                    arena,
-                    node_ref,
-                    source,
-                    footnotes,
-                    seen_footnotes,
-                )?;
+                self.render_inline_children(out, context, node_ref, state)?;
                 out.push('*');
             }
             KindData::Emphasis(_) => {
                 out.push_str("**");
-                self.render_inline_children(
-                    out,
-                    prepared,
-                    scope,
-                    arena,
-                    node_ref,
-                    source,
-                    footnotes,
-                    seen_footnotes,
-                )?;
+                self.render_inline_children(out, context, node_ref, state)?;
                 out.push_str("**");
             }
             KindData::Strikethrough(_) => {
                 out.push_str("~~");
-                self.render_inline_children(
-                    out,
-                    prepared,
-                    scope,
-                    arena,
-                    node_ref,
-                    source,
-                    footnotes,
-                    seen_footnotes,
-                )?;
+                self.render_inline_children(out, context, node_ref, state)?;
                 out.push_str("~~");
             }
             KindData::Link(link) => {
@@ -812,16 +582,7 @@ impl<'a> MarkdownRenderer<'a> {
                     _ => {
                         let rewritten = self.rewrite_link_for_markdown(&dest);
                         out.push('[');
-                        self.render_inline_children(
-                            out,
-                            prepared,
-                            scope,
-                            arena,
-                            node_ref,
-                            source,
-                            footnotes,
-                            seen_footnotes,
-                        )?;
+                        self.render_inline_children(out, context, node_ref, state)?;
                         out.push(']');
                         out.push('(');
                         out.push_str(&rewritten);
@@ -866,10 +627,10 @@ impl<'a> MarkdownRenderer<'a> {
 
                 // Collect the footnote for rendering at document end.
                 let key = (scope.doc_id, label.clone());
-                if seen_footnotes.insert(key) {
+                if state.seen_footnotes.insert(key) {
                     let doc = prepared.graph().document(scope.doc_id);
                     if let Some(definition) = doc.footnote_definition(&label) {
-                        footnotes.push(FootnoteEntry {
+                        state.footnotes.push(FootnoteEntry {
                             label: label.clone(),
                             doc_id: scope.doc_id,
                             node_ref: definition.node_ref,
@@ -885,16 +646,7 @@ impl<'a> MarkdownRenderer<'a> {
                 ) =>
             {
                 out.push('[');
-                self.render_inline_children(
-                    out,
-                    prepared,
-                    scope,
-                    arena,
-                    node_ref,
-                    source,
-                    footnotes,
-                    seen_footnotes,
-                )?;
+                self.render_inline_children(out, context, node_ref, state)?;
                 out.push(']');
                 // Render attributes.
                 let attrs = arena[node_ref].attributes();
@@ -973,23 +725,18 @@ impl<'a> MarkdownRenderer<'a> {
             for entry in &batch {
                 let doc = prepared.graph().document(entry.doc_id);
                 let mut body = String::new();
-                let scope = RenderScope {
-                    doc_id: entry.doc_id,
+                let context = RenderContext {
+                    prepared,
+                    scope: RenderScope {
+                        doc_id: entry.doc_id,
+                    },
+                    arena: &doc.arena,
+                    source: &doc.source,
+                    heading_shift: 0,
                 };
-                let mut nested_footnotes = Vec::new();
-                let mut nested_seen = HashSet::new();
+                let mut nested_state = RenderState::default();
                 for child in doc.arena[entry.node_ref].children(&doc.arena) {
-                    self.render_block(
-                        &mut body,
-                        prepared,
-                        &scope,
-                        &doc.arena,
-                        child,
-                        &doc.source,
-                        0,
-                        &mut nested_footnotes,
-                        &mut nested_seen,
-                    )?;
+                    self.render_block(&mut body, &context, child, &mut nested_state)?;
                 }
                 let trimmed = body.trim_end();
                 let mut first_line = true;
@@ -1009,7 +756,7 @@ impl<'a> MarkdownRenderer<'a> {
                 }
 
                 // Collect newly discovered nested footnotes for the next pass.
-                for nested in nested_footnotes {
+                for nested in nested_state.footnotes {
                     let key = (nested.doc_id, nested.label.clone());
                     if global_seen.insert(key) {
                         pending.push(nested);

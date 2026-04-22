@@ -68,13 +68,15 @@ pub fn run(cli: Cli) -> Result<()> {
                 &logger,
                 &cache,
                 &theme,
-                format,
-                input,
-                output,
-                base.as_deref(),
-                broken_links,
-                meta_drop,
-                &meta_overrides,
+                BuildCommandOptions {
+                    format,
+                    input,
+                    output,
+                    base: base.as_deref(),
+                    broken_links,
+                    meta_drops: meta_drop,
+                    meta_overrides: &meta_overrides,
+                },
             )
         }
         cli::Command::Dump { ref path, ref base } => {
@@ -480,19 +482,31 @@ fn resolve_output(output: &Path, input: &Path, format: OutputFormat) -> Result<(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+pub(crate) struct BuildCommandOptions<'a> {
+    pub format: OutputFormat,
+    pub input: &'a Path,
+    pub output: &'a Path,
+    pub base: Option<&'a Path>,
+    pub broken_links: BrokenLinkMode,
+    pub meta_drops: &'a [String],
+    pub meta_overrides: &'a [(String, String)],
+}
+
 pub(crate) fn build_command(
     logger: &DebugDumper,
     cache: &Cache,
     theme: &Theme,
-    format: OutputFormat,
-    input: &Path,
-    output: &Path,
-    base: Option<&Path>,
-    broken_links: BrokenLinkMode,
-    meta_drops: &[String],
-    meta_overrides: &[(String, String)],
+    options: BuildCommandOptions<'_>,
 ) -> Result<()> {
+    let BuildCommandOptions {
+        format,
+        input,
+        output,
+        base,
+        broken_links,
+        meta_drops,
+        meta_overrides,
+    } = options;
     let (source, base_dir) = resolve_input_and_base(input, base)?;
     let (output_file, output_dir) = resolve_output(output, &source, format)?;
     let doc_name = source
