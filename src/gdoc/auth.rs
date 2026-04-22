@@ -12,6 +12,7 @@
 //!    credential store so subsequent runs do not require browser interaction.
 
 use anyhow::{bail, Context, Result};
+use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 
 /// Google OAuth2 endpoints.
@@ -143,7 +144,7 @@ pub(crate) fn service_account_access_token(key: &ServiceAccountKey) -> Result<(S
 /// Returns the full token response (access_token + refresh_token).
 pub(crate) fn oauth2_authorization_flow() -> Result<OAuthCredential> {
     // Generate PKCE code verifier (43-128 chars, RFC 7636).
-    let code_verifier = generate_code_verifier();
+    let code_verifier = generate_code_verifier()?;
     let code_challenge = generate_code_challenge(&code_verifier);
 
     // Exchange code for tokens — agent reused below.
@@ -159,7 +160,7 @@ pub(crate) fn oauth2_authorization_flow() -> Result<OAuthCredential> {
         .port();
 
     let redirect_uri = format!("http://127.0.0.1:{port}");
-    let state = format!("{:016x}", rand_u64());
+    let state = generate_oauth_state()?;
 
     let auth_url = format!(
         "{GOOGLE_AUTH_URL}?\
@@ -287,30 +288,24 @@ pub(crate) fn refresh_access_token(refresh_token: &str) -> Result<(String, u64)>
 // ── PKCE helpers ────────────────────────────────────────────────────────
 
 /// Generate a PKCE code verifier (RFC 7636 §4.1).
-fn generate_code_verifier() -> String {
+fn generate_code_verifier() -> Result<String> {
     // 32 random bytes → 43-char base64url string (well within 43–128 range).
     let mut bytes = [0u8; 32];
-    // Use the OS random source for cryptographic randomness.
-    #[cfg(unix)]
-    {
-        use std::io::Read;
-        if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
-            let _ = f.read_exact(&mut bytes);
-        }
-    }
-    #[cfg(windows)]
-    {
-        // Fallback: use multiple RandomState hashes for reasonable entropy.
-        use std::collections::hash_map::RandomState;
-        use std::hash::{BuildHasher, Hasher};
-        for chunk in bytes.chunks_mut(8) {
-            let val = RandomState::new().build_hasher().finish().to_le_bytes();
-            for (dst, src) in chunk.iter_mut().zip(val.iter()) {
-                *dst = *src;
-            }
-        }
-    }
-    base64url_encode(&bytes)
+    fill_secure_random(&mut bytes)?;
+    Ok(base64url_encode(&bytes))
+}
+
+/// Generate a URL-safe OAuth state value.
+fn generate_oauth_state() -> Result<String> {
+    let mut bytes = [0u8; 16];
+    fill_secure_random(&mut bytes)?;
+    Ok(base64url_encode(&bytes))
+}
+
+fn fill_secure_random(bytes: &mut [u8]) -> Result<()> {
+    let mut rng = OsRng;
+    rng.try_fill_bytes(bytes)
+        .context("failed to read secure random bytes from OS")
 }
 
 /// Generate a PKCE code challenge from a code verifier (RFC 7636 §4.2).
@@ -328,7 +323,7 @@ fn generate_code_challenge(verifier: &str) -> String {
 /// Base64url encode without padding (RFC 4648 §5).
 fn base64url_encode(data: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    let mut out = String::with_capacity((data.len() * 4 + 2) / 3);
+    let mut out = String::with_capacity((data.len() * 4).div_ceil(3));
     let mut i = 0;
     while i + 2 < data.len() {
         let n = (data[i] as u32) << 16 | (data[i + 1] as u32) << 8 | data[i + 2] as u32;
@@ -354,9 +349,42 @@ fn base64url_encode(data: &[u8]) -> String {
     out
 }
 
-/// Simple non-cryptographic random u64 for state parameters.
-fn rand_u64() -> u64 {
-    use std::collections::hash_map::RandomState;
-    use std::hash::{BuildHasher, Hasher};
-    RandomState::new().build_hasher().finish()
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn is_pkce_allowed_char(c: char) -> bool {
+        c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '~'
+    }
+
+    #[test]
+    fn pkce_verifier_length_and_charset() {
+        let verifier = generate_code_verifier().expect("verifier generation must succeed");
+        assert!(
+            (43..=128).contains(&verifier.len()),
+            "unexpected verifier length: {}",
+            verifier.len()
+        );
+        assert!(verifier.chars().all(is_pkce_allowed_char));
+    }
+
+    #[test]
+    fn pkce_verifier_values_differ_between_calls() {
+        let first = generate_code_verifier().expect("first verifier generation must succeed");
+        let second = generate_code_verifier().expect("second verifier generation must succeed");
+        assert_ne!(first, second, "two generated verifiers unexpectedly match");
+    }
+
+    #[test]
+    fn oauth_state_is_url_safe_and_changes() {
+        let first = generate_oauth_state().expect("first state generation must succeed");
+        let second = generate_oauth_state().expect("second state generation must succeed");
+        assert!(!first.is_empty());
+        assert!(
+            first
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        );
+        assert_ne!(first, second, "two generated state values unexpectedly match");
+    }
 }

@@ -1,4 +1,5 @@
 use anyhow::{bail, Context, Result};
+use rand::{rngs::OsRng, RngCore};
 use serde_json::{json, Value};
 
 /// Metadata about a Confluence page.
@@ -33,7 +34,7 @@ pub(crate) struct ConfluenceClient {
 impl ConfluenceClient {
     pub fn new(base_url: &str, token: &str) -> Self {
         let agent =
-            ureq::Agent::new_with_config(ureq::Agent::config_builder().https_only(false).build());
+            ureq::Agent::new_with_config(ureq::Agent::config_builder().https_only(true).build());
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             token: token.to_string(),
@@ -357,7 +358,7 @@ impl ConfluenceClient {
         data: &[u8],
         comment: &str,
     ) -> Result<()> {
-        let boundary = format!("----docbake{:016x}", rand_u64());
+        let boundary = format!("----docbake{:016x}", random_u64());
         let mut body = Vec::new();
 
         // -- file part
@@ -459,9 +460,22 @@ fn percent_encode(value: &str) -> String {
 
 const HEX: &[u8; 16] = b"0123456789ABCDEF";
 
-/// Simple non-cryptographic random u64 for multipart boundary generation.
-fn rand_u64() -> u64 {
-    use std::collections::hash_map::RandomState;
-    use std::hash::{BuildHasher, Hasher};
-    RandomState::new().build_hasher().finish()
+fn random_u64() -> u64 {
+    let mut rng = OsRng;
+    rng.next_u64()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn https_only_client_rejects_plain_http() {
+        let client = ConfluenceClient::new("http://127.0.0.1:1", "token");
+        let err = client
+            .get_page_by_id("123")
+            .expect_err("HTTP requests must be rejected in HTTPS-only mode");
+        let msg = format!("{err:#}").to_ascii_lowercase();
+        assert!(msg.contains("https") || msg.contains("tls"));
+    }
 }
