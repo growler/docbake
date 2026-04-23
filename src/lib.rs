@@ -553,6 +553,37 @@ pub(crate) fn build_command(
         format
     ));
 
+    fs::create_dir_all(&output_dir)
+        .with_context(|| format!("failed to create output dir {}", output_dir.display()))?;
+
+    let effective_format = EffectiveFormat::from_output_format(format);
+
+    // ── Markdown format (no theme needed) ───────────────────────────────
+    if matches!(format, OutputFormat::Markdown) {
+        let mut build = crate::graph::prepare_document_with_options(
+            logger,
+            &base_dir,
+            &source,
+            Some(&doc_name),
+            BrokenLinkMode::Warn,
+            crate::graph::PrepareOptions {
+                transform_diagram_images: false,
+            },
+        )?;
+        let mut metadata = build.document_metadata();
+        apply_meta_drops(&mut metadata, meta_drops);
+        apply_meta_overrides(&mut metadata, meta_overrides)?;
+        let render_profile = RenderProfile::from_metadata(effective_format, &metadata)?;
+        enforce_visible_target_policy(build.graph(), &render_profile, broken_links)?;
+
+        let renderer = render_markdown::MarkdownRenderer::new(render_profile.clone());
+        let markdown = renderer.render_document(&mut build)?;
+        fs::write(&output_file, markdown)
+            .with_context(|| format!("failed to write {}", output_file.display()))?;
+        logger.log(format!("wrote {}", output_file.display()));
+        return Ok(());
+    }
+
     let build = prepare_document(
         logger,
         &base_dir,
@@ -560,10 +591,6 @@ pub(crate) fn build_command(
         Some(&doc_name),
         BrokenLinkMode::Warn,
     )?;
-    fs::create_dir_all(&output_dir)
-        .with_context(|| format!("failed to create output dir {}", output_dir.display()))?;
-
-    let effective_format = EffectiveFormat::from_output_format(format);
 
     // ── Build template context from front matter ────────────────────────
     let mut metadata = build.document_metadata();
@@ -572,17 +599,6 @@ pub(crate) fn build_command(
     let render_profile = RenderProfile::from_metadata(effective_format, &metadata)?;
 
     enforce_visible_target_policy(build.graph(), &render_profile, broken_links)?;
-
-    // ── Markdown format (no theme needed) ───────────────────────────────
-    if matches!(format, OutputFormat::Markdown) {
-        let renderer =
-            render_markdown::MarkdownRenderer::new(&base_dir, &output_dir, render_profile.clone());
-        let markdown = renderer.render_document(&build)?;
-        fs::write(&output_file, markdown)
-            .with_context(|| format!("failed to write {}", output_file.display()))?;
-        logger.log(format!("wrote {}", output_file.display()));
-        return Ok(());
-    }
 
     // ── DOCX-for-Google-Docs format (no theme needed) ───────────────────
     // Uses the same DocxRenderer as `publish gdoc` — diagrams are rendered

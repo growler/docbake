@@ -5,6 +5,20 @@ use rushdown::text::BasicReader;
 use crate::fmt::renderer::MarkdownFmtRenderer;
 use crate::fmt::rules;
 
+pub(crate) fn format_prepared_markdown(
+    prepared: &crate::graph::PreparedDocument,
+    profile: &crate::conditional::RenderProfile,
+) -> Result<String> {
+    let base_renderer = MarkdownFmtRenderer::new(rules::PARAGRAPH_LINE_WIDTH, rules::ALIGN_TABLES);
+    let graph_renderer = base_renderer.for_graph(profile.clone());
+    let rendered = graph_renderer.render_prepared_document(prepared)?;
+    let mut out = post_process(&rendered);
+    if rules::ENSURE_FINAL_NEWLINE && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    Ok(out)
+}
+
 pub(crate) fn format_markdown(input: &str) -> Result<String> {
     let (front_matter, body) = crate::graph::build::split_front_matter(input);
 

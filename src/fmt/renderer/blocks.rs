@@ -22,6 +22,7 @@ impl MarkdownFmtRenderer {
         node_ref: NodeRef,
         source: &str,
         footnote_labels: &FootnoteLabels,
+        heading_shift: usize,
     ) -> Result<()> {
         match arena[node_ref].kind_data() {
             KindData::Paragraph(_) => {
@@ -32,7 +33,8 @@ impl MarkdownFmtRenderer {
                 out.push_str("\n\n");
             }
             KindData::Heading(heading) => {
-                out.push_str(&"#".repeat(heading.level() as usize));
+                let level = (heading.level() as usize + heading_shift).min(6);
+                out.push_str(&"#".repeat(level));
                 out.push(' ');
                 self.render_inline_children(out, arena, node_ref, source)?;
                 if let Some(attrs) = render_node_attrs(arena, node_ref, source) {
@@ -93,7 +95,14 @@ impl MarkdownFmtRenderer {
             KindData::Blockquote(_) => {
                 let mut inner = String::new();
                 for child in arena[node_ref].children(arena) {
-                    self.render_block(&mut inner, arena, child, source, footnote_labels)?;
+                    self.render_block(
+                        &mut inner,
+                        arena,
+                        child,
+                        source,
+                        footnote_labels,
+                        heading_shift,
+                    )?;
                 }
                 let inner = inner.trim_end_matches('\n');
                 for line in inner.lines() {
@@ -150,6 +159,7 @@ impl MarkdownFmtRenderer {
                                     *child,
                                     source,
                                     footnote_labels,
+                                    heading_shift,
                                 )?;
                             }
                         }
@@ -203,6 +213,9 @@ impl MarkdownFmtRenderer {
                 out.push('\n');
             }
             KindData::LinkReferenceDefinition(def) => {
+                if self.suppress_link_reference_definitions {
+                    return Ok(());
+                }
                 write!(
                     out,
                     "[{}]: {}",
@@ -221,17 +234,50 @@ impl MarkdownFmtRenderer {
             KindData::Extension(_)
                 if rushdown::matches_extension_kind!(arena, node_ref, DefinitionList) =>
             {
-                self.render_definition_list(out, arena, node_ref, source, footnote_labels)?;
+                self.render_definition_list(
+                    out,
+                    arena,
+                    node_ref,
+                    source,
+                    footnote_labels,
+                    heading_shift,
+                )?;
             }
             KindData::Extension(_)
                 if rushdown::matches_extension_kind!(arena, node_ref, FencedDiv) =>
             {
-                self.render_fenced_div(out, arena, node_ref, source, footnote_labels)?;
+                if let Some(profile) = self.graph_profile.as_ref() {
+                    if !crate::conditional::fenced_div_is_visible(arena, node_ref, source, profile)?
+                    {
+                        return Ok(());
+                    }
+                }
+                if self.suppress_include_fenced_divs {
+                    let classes = arena[node_ref]
+                        .attributes()
+                        .get("class")
+                        .map(|value| value.str(source))
+                        .unwrap_or_default();
+                    if classes
+                        .split_whitespace()
+                        .any(|class_name| class_name == "include")
+                    {
+                        return Ok(());
+                    }
+                }
+                self.render_fenced_div(
+                    out,
+                    arena,
+                    node_ref,
+                    source,
+                    footnote_labels,
+                    heading_shift,
+                )?;
             }
             KindData::Extension(_)
                 if rushdown::matches_extension_kind!(arena, node_ref, crate::caption::Caption) =>
             {
-                self.render_caption(out, arena, node_ref, source, footnote_labels)?;
+                self.render_caption(out, arena, node_ref, source, footnote_labels, heading_shift)?;
             }
             KindData::Extension(_)
                 if rushdown::matches_extension_kind!(
@@ -250,7 +296,17 @@ impl MarkdownFmtRenderer {
             KindData::Extension(_)
                 if rushdown::matches_extension_kind!(arena, node_ref, FootnoteDefinition) =>
             {
-                self.render_footnote_definition(out, arena, node_ref, source, footnote_labels)?;
+                if self.suppress_footnote_definitions {
+                    return Ok(());
+                }
+                self.render_footnote_definition(
+                    out,
+                    arena,
+                    node_ref,
+                    source,
+                    footnote_labels,
+                    heading_shift,
+                )?;
             }
             KindData::Extension(_) => {}
             _ => {}
@@ -299,6 +355,7 @@ impl MarkdownFmtRenderer {
         node_ref: NodeRef,
         source: &str,
         footnote_labels: &FootnoteLabels,
+        heading_shift: usize,
     ) -> Result<()> {
         let caption = as_extension_data!(arena, node_ref, crate::caption::Caption);
 
@@ -342,12 +399,12 @@ impl MarkdownFmtRenderer {
                 out.push_str(caption_line.trim_end());
                 out.push_str("\n\n");
                 if let Some(block) = block_child {
-                    self.render_block(out, arena, block, source, footnote_labels)?;
+                    self.render_block(out, arena, block, source, footnote_labels, heading_shift)?;
                 }
             }
             crate::caption::CaptionPosition::After => {
                 if let Some(block) = block_child {
-                    self.render_block(out, arena, block, source, footnote_labels)?;
+                    self.render_block(out, arena, block, source, footnote_labels, heading_shift)?;
                 }
                 out.push_str(caption_line.trim_end());
                 out.push_str("\n\n");
@@ -363,6 +420,7 @@ impl MarkdownFmtRenderer {
         node_ref: NodeRef,
         source: &str,
         footnote_labels: &FootnoteLabels,
+        heading_shift: usize,
     ) -> Result<()> {
         let opening = fenced_div_opening(arena, node_ref, source);
         out.push_str(&opening);
@@ -371,7 +429,14 @@ impl MarkdownFmtRenderer {
         let children: Vec<NodeRef> = arena[node_ref].children(arena).collect();
         for (index, child) in children.iter().enumerate() {
             let mut rendered = String::new();
-            self.render_block(&mut rendered, arena, *child, source, footnote_labels)?;
+            self.render_block(
+                &mut rendered,
+                arena,
+                *child,
+                source,
+                footnote_labels,
+                heading_shift,
+            )?;
             out.push_str(rendered.trim_end_matches('\n'));
 
             if index + 1 < children.len() {
@@ -414,6 +479,7 @@ impl MarkdownFmtRenderer {
         node_ref: NodeRef,
         source: &str,
         footnote_labels: &FootnoteLabels,
+        heading_shift: usize,
     ) -> Result<()> {
         let tight = as_extension_data!(arena, node_ref, DefinitionList).is_tight();
         let children: Vec<NodeRef> = arena[node_ref].children(arena).collect();
@@ -459,6 +525,7 @@ impl MarkdownFmtRenderer {
                     *first_child,
                     source,
                     footnote_labels,
+                    heading_shift,
                 )?;
                 let first_rendered = first_rendered.trim_end_matches('\n');
                 let mut first_line = true;
@@ -480,7 +547,14 @@ impl MarkdownFmtRenderer {
                 for child in rest {
                     out.push('\n');
                     let mut rendered = String::new();
-                    self.render_block(&mut rendered, arena, *child, source, footnote_labels)?;
+                    self.render_block(
+                        &mut rendered,
+                        arena,
+                        *child,
+                        source,
+                        footnote_labels,
+                        heading_shift,
+                    )?;
                     let rendered = rendered.trim_end_matches('\n');
                     let child_indent =
                         definition_child_indent_from_source(arena, def_ref, *child, source)

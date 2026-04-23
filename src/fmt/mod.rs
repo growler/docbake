@@ -10,6 +10,17 @@ use std::path::Path;
 
 use anyhow::{bail, Context, Result};
 
+pub(crate) fn format_markdown(input: &str) -> Result<String> {
+    engine::format_markdown(input)
+}
+
+pub(crate) fn format_prepared_markdown(
+    prepared: &crate::graph::PreparedDocument,
+    profile: &crate::conditional::RenderProfile,
+) -> Result<String> {
+    engine::format_prepared_markdown(prepared, profile)
+}
+
 pub(crate) fn fmt_command(path: &Path, check: bool) -> Result<()> {
     let files = discovery::discover_markdown_files(path)?;
     if files.is_empty() {
@@ -23,7 +34,7 @@ pub(crate) fn fmt_command(path: &Path, check: bool) -> Result<()> {
     for file in files {
         let original = fs::read_to_string(&file)
             .with_context(|| format!("failed to read {}", file.display()))?;
-        let formatted = engine::format_markdown(&original)
+        let formatted = format_markdown(&original)
             .with_context(|| format!("failed to format {}", file.display()))?;
         if original == formatted {
             continue;

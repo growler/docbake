@@ -14,6 +14,19 @@ use crate::cli::BrokenLinkMode;
 use crate::conditional::RenderProfile;
 use crate::DebugDumper;
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PrepareOptions {
+    pub(crate) transform_diagram_images: bool,
+}
+
+impl Default for PrepareOptions {
+    fn default() -> Self {
+        Self {
+            transform_diagram_images: true,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct DocumentGraph {
     pub(crate) root_id: usize,
@@ -34,6 +47,10 @@ impl DocumentGraph {
 
     pub(crate) fn document(&self, doc_id: usize) -> &DocumentOccurrence {
         &self.documents[doc_id]
+    }
+
+    pub(crate) fn document_mut(&mut self, doc_id: usize) -> &mut DocumentOccurrence {
+        &mut self.documents[doc_id]
     }
 
     pub(crate) fn include_entries(
@@ -252,6 +269,10 @@ impl PreparedDocument {
         &self.graph
     }
 
+    pub(crate) fn graph_mut(&mut self) -> &mut DocumentGraph {
+        &mut self.graph
+    }
+
     pub(crate) fn asset_targets(&self) -> &HashSet<PathBuf> {
         self.graph.asset_targets()
     }
@@ -372,10 +393,41 @@ pub(crate) fn prepare_document(
     document_name: Option<&str>,
     broken_links: BrokenLinkMode,
 ) -> Result<PreparedDocument> {
+    prepare_document_with_options(
+        logger,
+        base_dir,
+        source_path,
+        document_name,
+        broken_links,
+        PrepareOptions {
+            transform_diagram_images: true,
+        },
+    )
+}
+
+pub(crate) fn prepare_document_with_options(
+    logger: &DebugDumper,
+    base_dir: &Path,
+    source_path: &Path,
+    document_name: Option<&str>,
+    broken_links: BrokenLinkMode,
+    options: PrepareOptions,
+) -> Result<PreparedDocument> {
     let canonical_root = base_dir
         .canonicalize()
         .with_context(|| format!("failed to resolve {}", base_dir.display()))?;
-    let mut graph = build::parse_document_graph(&canonical_root, logger, source_path)?;
+    let mut graph = if options.transform_diagram_images {
+        build::parse_document_graph(&canonical_root, logger, source_path)?
+    } else {
+        build::parse_document_graph_with_options(
+            &canonical_root,
+            logger,
+            source_path,
+            build::ParseOptions {
+                transform_diagram_images: false,
+            },
+        )?
+    };
     let diagnostics = resolve::resolve_document_graph(&canonical_root, &mut graph)?;
 
     if !diagnostics.is_empty() {

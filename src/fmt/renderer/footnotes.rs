@@ -16,6 +16,7 @@ impl MarkdownFmtRenderer {
         node_ref: NodeRef,
         source: &str,
         footnote_labels: &FootnoteLabels,
+        heading_shift: usize,
     ) -> Result<()> {
         let _footnote = as_extension_data!(arena, node_ref, FootnoteDefinition);
         let label = footnote_labels
@@ -25,7 +26,14 @@ impl MarkdownFmtRenderer {
         let inline_first_line = footnote_has_inline_body(arena, node_ref, source).unwrap_or(true);
         let mut body = String::new();
         for child in arena[node_ref].children(arena) {
-            self.render_block(&mut body, arena, child, source, footnote_labels)?;
+            self.render_block(
+                &mut body,
+                arena,
+                child,
+                source,
+                footnote_labels,
+                heading_shift,
+            )?;
         }
         let trimmed = body.trim_end();
 

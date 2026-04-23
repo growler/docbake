@@ -13,12 +13,34 @@ use super::DocumentGraph;
 use crate::build::markdown_parser;
 use crate::DebugDumper;
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ParseOptions {
+    pub(crate) transform_diagram_images: bool,
+}
+
+impl Default for ParseOptions {
+    fn default() -> Self {
+        Self {
+            transform_diagram_images: true,
+        }
+    }
+}
+
 pub(crate) fn parse_document_graph(
     base_dir: &Path,
     logger: &DebugDumper,
     source_path: &Path,
 ) -> Result<DocumentGraph> {
-    let mut builder = GraphBuilder::new(base_dir, logger);
+    parse_document_graph_with_options(base_dir, logger, source_path, ParseOptions::default())
+}
+
+pub(crate) fn parse_document_graph_with_options(
+    base_dir: &Path,
+    logger: &DebugDumper,
+    source_path: &Path,
+    options: ParseOptions,
+) -> Result<DocumentGraph> {
+    let mut builder = GraphBuilder::new(base_dir, logger, options);
     let root_id = builder.build_document(source_path, true)?;
     let mut graph = DocumentGraph {
         root_id,
@@ -39,15 +61,17 @@ pub(crate) fn parse_document_graph(
 struct GraphBuilder {
     base_dir: PathBuf,
     logger: DebugDumper,
+    options: ParseOptions,
     documents: Vec<DocumentOccurrence>,
     stack: Vec<PathBuf>,
 }
 
 impl GraphBuilder {
-    fn new(base_dir: &Path, logger: &DebugDumper) -> Self {
+    fn new(base_dir: &Path, logger: &DebugDumper, options: ParseOptions) -> Self {
         Self {
             base_dir: base_dir.to_path_buf(),
             logger: logger.clone(),
+            options,
             documents: Vec::new(),
             stack: Vec::new(),
         }
@@ -91,13 +115,15 @@ impl GraphBuilder {
 
         // Transform diagram images (.puml, .mmd, .drawio) into Diagram AST nodes.
         let source_dir = canonical.parent().unwrap_or(&self.base_dir);
-        crate::diagram::transform_diagram_images(
-            &mut arena,
-            doc_ref,
-            &parsed_source,
-            source_dir,
-            &self.base_dir,
-        )?;
+        if self.options.transform_diagram_images {
+            crate::diagram::transform_diagram_images(
+                &mut arena,
+                doc_ref,
+                &parsed_source,
+                source_dir,
+                &self.base_dir,
+            )?;
+        }
 
         // Run caption detection after all diagram transforms are complete,
         // so that Figure: captions can match both code-block diagrams and
