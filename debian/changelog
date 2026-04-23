@@ -1,3 +1,9 @@
+docbake (0.1.10) unstable; urgency=high
+
+  * fix: wrong tagging 
+
+ -- Alexey Naidyonov <alexey.naidyonov@gmail.com>  Thu, 23 Apr 2026 12:33:32 +0200
+
 docbake (0.1.9) unstable; urgency=medium
 
   * feat: Google Docs publishing support with OAuth2
