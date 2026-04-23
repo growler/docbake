@@ -153,6 +153,77 @@ pub(super) fn fenced_div_opening(arena: &Arena, node_ref: NodeRef, source: &str)
     format!(":::{attrs_text}")
 }
 
+pub(super) fn fenced_div_closing_and_trailing_blank_lines(
+    arena: &Arena,
+    node_ref: NodeRef,
+    source: &str,
+) -> Option<(String, usize)> {
+    let pos = arena[node_ref].pos()?;
+    let opening = source_line_at_pos(source, pos)?;
+    let opening_run = parse_colon_fence_opening(opening)?;
+
+    let opening_line_start = source[..pos].rfind('\n').map(|idx| idx + 1).unwrap_or(0);
+    let opening_line_end = source[opening_line_start..]
+        .find('\n')
+        .map(|idx| opening_line_start + idx)
+        .unwrap_or(source.len());
+
+    let mut cursor = if opening_line_end < source.len() {
+        opening_line_end + 1
+    } else {
+        opening_line_end
+    };
+    let mut stack = vec![opening_run];
+
+    while cursor < source.len() {
+        let line_end = source[cursor..]
+            .find('\n')
+            .map(|idx| cursor + idx)
+            .unwrap_or(source.len());
+        let line = source[cursor..line_end].trim_end_matches('\r');
+
+        if let Some(close_run) = parse_colon_fence_closing(line) {
+            if close_run >= *stack.last().unwrap_or(&usize::MAX) {
+                stack.pop();
+                if stack.is_empty() {
+                    let mut blank_lines = 0usize;
+                    let mut next = if line_end < source.len() {
+                        line_end + 1
+                    } else {
+                        line_end
+                    };
+                    while next < source.len() {
+                        let next_end = source[next..]
+                            .find('\n')
+                            .map(|idx| next + idx)
+                            .unwrap_or(source.len());
+                        let next_line = source[next..next_end].trim_end_matches('\r');
+                        if !next_line.trim().is_empty() {
+                            break;
+                        }
+                        blank_lines += 1;
+                        next = if next_end < source.len() {
+                            next_end + 1
+                        } else {
+                            next_end
+                        };
+                    }
+                    return Some((line.to_string(), blank_lines));
+                }
+            }
+        } else if let Some(open_run) = parse_colon_fence_opening(line) {
+            stack.push(open_run);
+        }
+
+        if line_end == source.len() {
+            break;
+        }
+        cursor = line_end + 1;
+    }
+
+    None
+}
+
 fn fenced_div_opening_from_source(
     arena: &Arena,
     node_ref: NodeRef,
@@ -357,11 +428,29 @@ fn parse_opening_fence(line: &str) -> Option<(usize, char, usize)> {
     }
     let trimmed = &line[indent..];
     let marker = trimmed.chars().next()?;
-    if marker != '`' && marker != '~' {
+    if marker != '`' && marker != '~' && marker != ':' {
         return None;
     }
     let run = trimmed.chars().take_while(|c| *c == marker).count();
     (run >= 3).then_some((indent, marker, run))
+}
+
+fn parse_colon_fence_opening(line: &str) -> Option<usize> {
+    let (_, marker, run) = parse_opening_fence(line)?;
+    (marker == ':').then_some(run)
+}
+
+fn parse_colon_fence_closing(line: &str) -> Option<usize> {
+    let indent = line.chars().take_while(|c| *c == ' ').count();
+    if indent > 3 {
+        return None;
+    }
+    let trimmed = &line[indent..];
+    let run = parse_colon_fence_opening(trimmed)?;
+    trimmed[run..]
+        .chars()
+        .all(|c| c == ' ' || c == '\t')
+        .then_some(run)
 }
 
 fn parse_opening_fence_any_indent(line: &str) -> Option<(usize, char, usize)> {

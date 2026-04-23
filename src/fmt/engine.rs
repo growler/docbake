@@ -43,8 +43,15 @@ fn post_process(text: &str) -> String {
     let mut out_lines = Vec::new();
     let mut blank_run = 0usize;
     let mut in_fence: Option<(char, usize)> = None;
+    let mut preserve_blank_run = false;
 
     for line in text.lines() {
+        if line == crate::fmt::renderer::PRESERVE_BLANK_RUN_MARKER {
+            preserve_blank_run = true;
+            blank_run = 0;
+            continue;
+        }
+
         if let Some((marker, len)) = in_fence {
             out_lines.push(line.to_string());
             if is_fence_close(line, marker, len) {
@@ -67,12 +74,13 @@ fn post_process(text: &str) -> String {
         };
 
         if line.trim().is_empty() {
-            if blank_run >= rules::MAX_CONSECUTIVE_BLANK_LINES {
+            if !preserve_blank_run && blank_run >= rules::MAX_CONSECUTIVE_BLANK_LINES {
                 continue;
             }
             blank_run += 1;
         } else {
             blank_run = 0;
+            preserve_blank_run = false;
         }
         out_lines.push(line);
     }
@@ -300,6 +308,46 @@ mod tests {
         let src = "::: important\nText\n:::\n";
         let formatted = super::format_markdown(src)?;
         assert!(formatted.starts_with("::: important\n"));
+        Ok(())
+    }
+
+    #[test]
+    fn preserves_fenced_div_closing_fence_length() -> Result<()> {
+        let src = ":::: {.confluence}\nТекст\n\n:::::\n";
+        let formatted = super::format_markdown(src)?;
+        assert!(formatted.contains("\n:::::\n"));
+        Ok(())
+    }
+
+    #[test]
+    fn preserves_extra_blank_lines_between_fenced_div_blocks() -> Result<()> {
+        let src = concat!(
+            ":::alpha\n",
+            "Один\n",
+            ":::\n",
+            "\n",
+            "\n",
+            ":::beta\n",
+            "Два\n",
+            ":::\n",
+        );
+        let formatted = super::format_markdown(src)?;
+        assert!(formatted.contains(":::\n\n\n:::beta"));
+        Ok(())
+    }
+
+    #[test]
+    fn inserts_blank_line_before_nested_fenced_div_when_missing() -> Result<()> {
+        let src = concat!(
+            ":::: {.confluence}\n",
+            "Это текст\n",
+            ":::warning\n",
+            "Внимание\n",
+            ":::\n",
+            ":::::::::::::::::::::::::::::::::::::::::\n",
+        );
+        let formatted = super::format_markdown(src)?;
+        assert!(formatted.contains("Это текст\n\n:::warning"));
         Ok(())
     }
 

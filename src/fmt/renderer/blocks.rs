@@ -9,10 +9,10 @@ use rushdown_footnote::FootnoteDefinition;
 
 use super::source_recovery::{
     caption_prefix_from_source, closing_fence_from_opening, definition_child_indent_from_source,
-    definition_prefix_from_source, fenced_div_opening, opening_fence_from_source,
-    render_node_attrs, verbatim_fenced_code_block_from_source,
+    definition_prefix_from_source, fenced_div_closing_and_trailing_blank_lines, fenced_div_opening,
+    opening_fence_from_source, render_node_attrs, verbatim_fenced_code_block_from_source,
 };
-use super::{FootnoteLabels, MarkdownFmtRenderer};
+use super::{FootnoteLabels, MarkdownFmtRenderer, PRESERVE_BLANK_RUN_MARKER};
 
 impl MarkdownFmtRenderer {
     pub(super) fn render_block(
@@ -364,7 +364,8 @@ impl MarkdownFmtRenderer {
         source: &str,
         footnote_labels: &FootnoteLabels,
     ) -> Result<()> {
-        out.push_str(&fenced_div_opening(arena, node_ref, source));
+        let opening = fenced_div_opening(arena, node_ref, source);
+        out.push_str(&opening);
         out.push('\n');
 
         let children: Vec<NodeRef> = arena[node_ref].children(arena).collect();
@@ -388,7 +389,21 @@ impl MarkdownFmtRenderer {
             }
         }
 
-        out.push_str(":::\n\n");
+        let (closing, trailing_blank_lines) = fenced_div_closing_and_trailing_blank_lines(
+            arena, node_ref, source,
+        )
+        .unwrap_or_else(|| {
+            let closing = closing_fence_from_opening(&opening).unwrap_or_else(|| ":::".to_string());
+            (closing, 1)
+        });
+
+        out.push_str(&closing);
+        out.push('\n');
+        out.push_str(PRESERVE_BLANK_RUN_MARKER);
+        out.push('\n');
+        for _ in 0..trailing_blank_lines.max(1) {
+            out.push('\n');
+        }
         Ok(())
     }
 
