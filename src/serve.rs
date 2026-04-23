@@ -45,6 +45,7 @@ pub(crate) fn serve_command(
     broken_links: BrokenLinkMode,
     meta_drops: &[String],
     meta_overrides: &[(String, String)],
+    meta_file: Option<&Path>,
 ) -> Result<()> {
     match format {
         OutputFormat::Html | OutputFormat::HtmlMulti => {}
@@ -71,6 +72,7 @@ pub(crate) fn serve_command(
         broken_links,
         meta_drops,
         meta_overrides,
+        meta_file,
     )?;
 
     // Version counter polled by the live-reload script.
@@ -102,6 +104,7 @@ pub(crate) fn serve_command(
     let output_dir_w = output_dir.clone();
     let meta_drops_w: Vec<String> = meta_drops.to_vec();
     let meta_w: Vec<(String, String)> = meta_overrides.to_vec();
+    let meta_file_w = meta_file.map(Path::to_path_buf);
     let rebuild_lock = Arc::new(Mutex::new(()));
 
     let _debouncer = {
@@ -121,6 +124,7 @@ pub(crate) fn serve_command(
                     broken_links,
                     &meta_drops_w,
                     &meta_w,
+                    meta_file_w.as_deref(),
                 ) {
                     Ok(()) => {
                         version_w.fetch_add(1, Ordering::Relaxed);
@@ -217,6 +221,7 @@ fn rebuild(
     broken_links: BrokenLinkMode,
     meta_drops: &[String],
     meta_overrides: &[(String, String)],
+    meta_file: Option<&Path>,
 ) -> Result<()> {
     let doc_name = source
         .file_stem()
@@ -242,6 +247,7 @@ fn rebuild(
         .with_context(|| format!("failed to create output dir {}", output_dir.display()))?;
 
     let mut metadata = build.document_metadata();
+    crate::apply_meta_file_from_path(&mut metadata, meta_file)?;
     crate::apply_meta_drops(&mut metadata, meta_drops);
     crate::apply_meta_overrides(&mut metadata, meta_overrides)?;
     let render_profile =

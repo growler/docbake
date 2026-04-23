@@ -92,6 +92,11 @@ pub enum Command {
         /// Repeatable.  Key may use dot-notation (e.g. "confluence.path").
         #[arg(long = "meta-drop", value_name = "KEY")]
         meta_drop: Vec<String>,
+
+        /// Merge top-level metadata keys from a YAML file.
+        /// Keys with the same name replace front-matter keys.
+        #[arg(long = "meta-file", value_name = "PATH")]
+        meta_file: Option<PathBuf>,
     },
 
     /// Dump the document include-graph for a markdown file.
@@ -158,6 +163,11 @@ pub enum Command {
         /// Repeatable.  Key may use dot-notation (e.g. "confluence.path").
         #[arg(long = "meta-drop", value_name = "KEY")]
         meta_drop: Vec<String>,
+
+        /// Merge top-level metadata keys from a YAML file.
+        /// Keys with the same name replace front-matter keys.
+        #[arg(long = "meta-file", value_name = "PATH")]
+        meta_file: Option<PathBuf>,
     },
 
     /// Watch source files and rebuild on changes.
@@ -193,6 +203,11 @@ pub enum Command {
         /// Repeatable.  Key may use dot-notation (e.g. "confluence.path").
         #[arg(long = "meta-drop", value_name = "KEY")]
         meta_drop: Vec<String>,
+
+        /// Merge top-level metadata keys from a YAML file.
+        /// Keys with the same name replace front-matter keys.
+        #[arg(long = "meta-file", value_name = "PATH")]
+        meta_file: Option<PathBuf>,
     },
 
     /// Validate the document: check all links and render all diagrams.
@@ -219,6 +234,11 @@ pub enum Command {
         /// Repeatable.  Key may use dot-notation (e.g. "confluence.path").
         #[arg(long = "meta-drop", value_name = "KEY")]
         meta_drop: Vec<String>,
+
+        /// Merge top-level metadata keys from a YAML file.
+        /// Keys with the same name replace front-matter keys.
+        #[arg(long = "meta-file", value_name = "PATH")]
+        meta_file: Option<PathBuf>,
     },
 
     /// Format markdown files in place.
@@ -305,6 +325,11 @@ pub enum PublishTarget {
         /// Repeatable.  Key may use dot-notation (e.g. "confluence.path").
         #[arg(long = "meta-drop", value_name = "KEY")]
         meta_drop: Vec<String>,
+
+        /// Merge top-level metadata keys from a YAML file.
+        /// Keys with the same name replace front-matter keys.
+        #[arg(long = "meta-file", value_name = "PATH")]
+        meta_file: Option<PathBuf>,
     },
 
     /// Publish to Google Docs.
@@ -336,6 +361,11 @@ pub enum PublishTarget {
         /// Remove a front-matter key before applying --meta overrides.
         #[arg(long = "meta-drop", value_name = "KEY")]
         meta_drop: Vec<String>,
+
+        /// Merge top-level metadata keys from a YAML file.
+        /// Keys with the same name replace front-matter keys.
+        #[arg(long = "meta-file", value_name = "PATH")]
+        meta_file: Option<PathBuf>,
 
         /// Write the new document ID back into the source file's front
         /// matter after creating a new Google Doc.

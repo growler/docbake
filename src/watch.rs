@@ -23,6 +23,7 @@ pub(crate) fn watch_command(
     broken_links: BrokenLinkMode,
     meta_drops: &[String],
     meta_overrides: &[(String, String)],
+    meta_file: Option<&Path>,
 ) -> Result<()> {
     // Resolve base_dir once up front so we know what to watch.
     let (_source, base_dir) = crate::resolve_input_and_base(input, base)?;
@@ -40,6 +41,7 @@ pub(crate) fn watch_command(
             broken_links,
             meta_drops,
             meta_overrides,
+            meta_file,
         },
     )?;
 
@@ -52,6 +54,7 @@ pub(crate) fn watch_command(
     let base_w = base.map(Path::to_path_buf);
     let meta_drops_w: Vec<String> = meta_drops.to_vec();
     let meta_w: Vec<(String, String)> = meta_overrides.to_vec();
+    let meta_file_w = meta_file.map(Path::to_path_buf);
     let rebuild_lock = Mutex::new(());
 
     let _debouncer = {
@@ -71,6 +74,7 @@ pub(crate) fn watch_command(
                         broken_links,
                         meta_drops: &meta_drops_w,
                         meta_overrides: &meta_w,
+                        meta_file: meta_file_w.as_deref(),
                     },
                 ) {
                     Ok(()) => {

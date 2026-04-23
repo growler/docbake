@@ -67,6 +67,9 @@ Options:
                                  Key may use dot-notation
       --meta-drop <KEY>          Remove a front-matter key before applying
                                  --meta overrides. Repeatable
+      --meta-file <PATH>         Merge top-level metadata keys from a YAML
+                                 file. Keys with the same name replace
+                                 front-matter keys
   -h, --help                     Print help
 ~~~
 
@@ -92,6 +95,9 @@ Options:
                                  Key may use dot-notation
       --meta-drop <KEY>          Remove a front-matter key before applying
                                  --meta overrides. Repeatable
+      --meta-file <PATH>         Merge top-level metadata keys from a YAML
+                                 file. Keys with the same name replace
+                                 front-matter keys
   -h, --help                     Print help
 ~~~
 
@@ -154,6 +160,14 @@ $ docbake build -f html -i doc.md -o out.html \
 
 Это используется условием `if-variant` в fenced div.
 
+Флаг `--meta-file path.yml` позволяет загрузить YAML-файл и слить его с
+преамбулой документа по верхнему уровню ключей. Это **не глубокое** слияние:
+если в файле есть ключ `confluence`, он полностью заменяет весь объект
+`confluence` из преамбулы.
+
+Порядок применения метаданных: преамбула документа -> `--meta-file` ->
+`--meta-drop` -> `--meta`.
+
 Флаг `--meta-drop KEY` удаляет указанный ключ из метаданных **до** применения
 `--meta`. Это полезно для удаления массивов и вложенных объектов, которые
 невозможно переопределить через `--meta`. Ключ также поддерживает точечную
@@ -178,8 +192,8 @@ $ docbake publish confluence -i doc.md \
     --meta confluence.space "NEWSPACE"
 ~~~
 
-Флаги `--meta` и `--meta-drop` доступны в командах `build`, `serve`, `watch`,
-`check`, `publish confluence` и `publish gdoc`.
+Флаги `--meta`, `--meta-drop` и `--meta-file` доступны в командах `build`,
+`serve`, `watch`, `check`, `publish confluence` и `publish gdoc`.
 
 ## Предварительный просмотр {.unnumbered}
 

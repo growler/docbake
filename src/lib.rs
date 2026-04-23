@@ -67,6 +67,7 @@ pub fn run(cli: Cli) -> Result<()> {
             broken_links,
             ref meta,
             ref meta_drop,
+            ref meta_file,
         } => {
             let meta_overrides = parse_meta_pairs(meta)?;
             build_command(
@@ -81,6 +82,7 @@ pub fn run(cli: Cli) -> Result<()> {
                     broken_links,
                     meta_drops: meta_drop,
                     meta_overrides: &meta_overrides,
+                    meta_file: meta_file.as_deref(),
                 },
             )
         }
@@ -105,6 +107,7 @@ pub fn run(cli: Cli) -> Result<()> {
             broken_links,
             ref meta,
             ref meta_drop,
+            ref meta_file,
         } => {
             let meta_overrides = parse_meta_pairs(meta)?;
             serve::serve_command(
@@ -118,6 +121,7 @@ pub fn run(cli: Cli) -> Result<()> {
                 broken_links,
                 meta_drop,
                 &meta_overrides,
+                meta_file.as_deref(),
             )
         }
         cli::Command::Watch {
@@ -128,6 +132,7 @@ pub fn run(cli: Cli) -> Result<()> {
             broken_links,
             ref meta,
             ref meta_drop,
+            ref meta_file,
         } => {
             let meta_overrides = parse_meta_pairs(meta)?;
             watch::watch_command(
@@ -141,6 +146,7 @@ pub fn run(cli: Cli) -> Result<()> {
                 broken_links,
                 meta_drop,
                 &meta_overrides,
+                meta_file.as_deref(),
             )
         }
         cli::Command::Check {
@@ -149,6 +155,7 @@ pub fn run(cli: Cli) -> Result<()> {
             ref base,
             ref meta,
             ref meta_drop,
+            ref meta_file,
         } => {
             let meta_overrides = parse_meta_pairs(meta)?;
             check_command(
@@ -160,6 +167,7 @@ pub fn run(cli: Cli) -> Result<()> {
                 base.as_deref(),
                 meta_drop,
                 &meta_overrides,
+                meta_file.as_deref(),
             )
         }
         cli::Command::Fmt { check, ref path } => fmt::fmt_command(path, check),
@@ -175,6 +183,7 @@ pub fn run(cli: Cli) -> Result<()> {
                 broken_links,
                 ref meta,
                 ref meta_drop,
+                ref meta_file,
             } => {
                 let meta_overrides = parse_meta_pairs(meta)?;
                 publish::publish_confluence_command(
@@ -186,6 +195,7 @@ pub fn run(cli: Cli) -> Result<()> {
                     *broken_links,
                     meta_drop,
                     &meta_overrides,
+                    meta_file.as_deref(),
                 )
             }
             cli::PublishTarget::Gdoc {
@@ -194,6 +204,7 @@ pub fn run(cli: Cli) -> Result<()> {
                 broken_links,
                 ref meta,
                 ref meta_drop,
+                ref meta_file,
                 write_id,
             } => {
                 let meta_overrides = parse_meta_pairs(meta)?;
@@ -206,6 +217,7 @@ pub fn run(cli: Cli) -> Result<()> {
                     *broken_links,
                     meta_drop,
                     &meta_overrides,
+                    meta_file.as_deref(),
                     *write_id,
                 )
             }
@@ -325,6 +337,51 @@ fn parse_meta_pairs(raw: &[String]) -> Result<Vec<(String, String)>> {
         .chunks(2)
         .map(|c| (c[0].clone(), c[1].clone()))
         .collect())
+}
+
+/// Load top-level metadata overrides from a YAML file.
+///
+/// The file must contain a YAML mapping at the top level.  An empty file is
+/// treated as an empty mapping.
+fn load_meta_file(path: &Path) -> Result<JsonMap<String, JsonValue>> {
+    let content = fs::read_to_string(path)
+        .with_context(|| format!("failed to read --meta-file path {}", path.display()))?;
+
+    let value: JsonValue = serde_yaml::from_str(&content)
+        .with_context(|| format!("failed to parse --meta-file YAML file {}", path.display()))?;
+
+    match value {
+        JsonValue::Object(map) => Ok(map),
+        JsonValue::Null => Ok(JsonMap::new()),
+        _ => bail!(
+            "--meta-file path {} must contain a YAML mapping at the top level",
+            path.display()
+        ),
+    }
+}
+
+/// Apply top-level metadata overrides loaded from `--meta-file`.
+///
+/// This merge is shallow by design: each matching top-level key replaces the
+/// previous value entirely.
+pub(crate) fn apply_meta_file_overrides(
+    metadata: &mut JsonMap<String, JsonValue>,
+    overrides: &JsonMap<String, JsonValue>,
+) {
+    for (key, value) in overrides {
+        metadata.insert(key.clone(), value.clone());
+    }
+}
+
+pub(crate) fn apply_meta_file_from_path(
+    metadata: &mut JsonMap<String, JsonValue>,
+    meta_file: Option<&Path>,
+) -> Result<()> {
+    if let Some(path) = meta_file {
+        let overrides = load_meta_file(path)?;
+        apply_meta_file_overrides(metadata, &overrides);
+    }
+    Ok(())
 }
 
 /// Remove keys listed in `--meta-drop` from a metadata map.
@@ -521,6 +578,7 @@ pub(crate) struct BuildCommandOptions<'a> {
     pub broken_links: BrokenLinkMode,
     pub meta_drops: &'a [String],
     pub meta_overrides: &'a [(String, String)],
+    pub meta_file: Option<&'a Path>,
 }
 
 pub(crate) fn build_command(
@@ -537,6 +595,7 @@ pub(crate) fn build_command(
         broken_links,
         meta_drops,
         meta_overrides,
+        meta_file,
     } = options;
     let (source, base_dir) = resolve_input_and_base(input, base)?;
     let (output_file, output_dir) = resolve_output(output, &source, format)?;
@@ -571,6 +630,7 @@ pub(crate) fn build_command(
             },
         )?;
         let mut metadata = build.document_metadata();
+        apply_meta_file_from_path(&mut metadata, meta_file)?;
         apply_meta_drops(&mut metadata, meta_drops);
         apply_meta_overrides(&mut metadata, meta_overrides)?;
         let render_profile = RenderProfile::from_metadata(effective_format, &metadata)?;
@@ -594,6 +654,7 @@ pub(crate) fn build_command(
 
     // ── Build template context from front matter ────────────────────────
     let mut metadata = build.document_metadata();
+    apply_meta_file_from_path(&mut metadata, meta_file)?;
     apply_meta_drops(&mut metadata, meta_drops);
     apply_meta_overrides(&mut metadata, meta_overrides)?;
     let render_profile = RenderProfile::from_metadata(effective_format, &metadata)?;
@@ -882,11 +943,13 @@ fn check_command(
     base: Option<&Path>,
     meta_drops: &[String],
     meta_overrides: &[(String, String)],
+    meta_file: Option<&Path>,
 ) -> Result<()> {
     let (source, base_dir) = resolve_input_and_base(input, base)?;
     let build = prepare_document(logger, &base_dir, &source, None, BrokenLinkMode::Warn)?;
 
     let mut metadata = build.document_metadata();
+    apply_meta_file_from_path(&mut metadata, meta_file)?;
     apply_meta_drops(&mut metadata, meta_drops);
     apply_meta_overrides(&mut metadata, meta_overrides)?;
     let render_profile =
@@ -1049,7 +1112,7 @@ impl DebugDumper {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::{Map as JsonMap, Value as JsonValue};
+    use serde_json::{json, Map as JsonMap, Value as JsonValue};
 
     use rushdown::ast::{Arena, KindData, NodeRef};
     use rushdown::parser::{self, ParserExtension};
@@ -1135,6 +1198,92 @@ mod tests {
                 JsonValue::String("mts".to_string()),
                 JsonValue::String("foo".to_string()),
             ]))
+        );
+    }
+
+    #[test]
+    fn meta_file_merge_replaces_top_level_keys_without_deep_merge() {
+        let mut metadata = JsonMap::new();
+        metadata.insert(
+            "confluence".to_string(),
+            json!({
+                "space": "OLD",
+                "path": ["Parent", "Leaf"]
+            }),
+        );
+        metadata.insert(
+            "title".to_string(),
+            JsonValue::String("Original".to_string()),
+        );
+
+        let mut flag = JsonMap::new();
+        flag.insert(
+            "confluence".to_string(),
+            json!({
+                "server": "https://example.com"
+            }),
+        );
+        flag.insert("version".to_string(), JsonValue::String("2.0".to_string()));
+
+        crate::apply_meta_file_overrides(&mut metadata, &flag);
+
+        assert_eq!(
+            metadata.get("title"),
+            Some(&JsonValue::String("Original".to_string()))
+        );
+        assert_eq!(
+            metadata.get("version"),
+            Some(&JsonValue::String("2.0".to_string()))
+        );
+        assert_eq!(
+            metadata.get("confluence"),
+            Some(&json!({ "server": "https://example.com" }))
+        );
+    }
+
+    #[test]
+    fn meta_file_then_drop_then_meta_override_order_is_applied() {
+        let mut metadata = JsonMap::new();
+        metadata.insert(
+            "confluence".to_string(),
+            json!({ "space": "OLD", "path": ["Parent", "Leaf"] }),
+        );
+        metadata.insert(
+            "title".to_string(),
+            JsonValue::String("Original".to_string()),
+        );
+
+        let mut flag = JsonMap::new();
+        flag.insert(
+            "confluence".to_string(),
+            json!({ "server": "https://example.com", "space": "FLAG" }),
+        );
+        flag.insert(
+            "title".to_string(),
+            JsonValue::String("From flag".to_string()),
+        );
+
+        crate::apply_meta_file_overrides(&mut metadata, &flag);
+        crate::apply_meta_drops(
+            &mut metadata,
+            &["confluence.server".to_string(), "title".to_string()],
+        );
+        crate::apply_meta_overrides(
+            &mut metadata,
+            &[
+                ("title".to_string(), "From --meta".to_string()),
+                ("confluence.space".to_string(), "OVERRIDE".to_string()),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(
+            metadata.get("title"),
+            Some(&JsonValue::String("From --meta".to_string()))
+        );
+        assert_eq!(
+            metadata.get("confluence"),
+            Some(&json!({ "space": "OVERRIDE" }))
         );
     }
 }

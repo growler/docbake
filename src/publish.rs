@@ -26,6 +26,7 @@ pub(crate) fn publish_confluence_command(
     broken_links: BrokenLinkMode,
     meta_drops: &[String],
     meta_overrides: &[(String, String)],
+    meta_file: Option<&Path>,
 ) -> Result<()> {
     // ── resolve input / base ────────────────────────────────────────────
     let (source, base_dir) = crate::resolve_input_and_base(input, base)?;
@@ -50,6 +51,7 @@ pub(crate) fn publish_confluence_command(
         BrokenLinkMode::Warn,
     )?;
     let mut metadata = build.document_metadata();
+    crate::apply_meta_file_from_path(&mut metadata, meta_file)?;
     crate::apply_meta_drops(&mut metadata, meta_drops);
     crate::apply_meta_overrides(&mut metadata, meta_overrides)?;
     let render_profile = RenderProfile::from_metadata(EffectiveFormat::Confluence, &metadata)?;
@@ -399,6 +401,7 @@ pub(crate) fn publish_gdoc_command(
     broken_links: BrokenLinkMode,
     meta_drops: &[String],
     meta_overrides: &[(String, String)],
+    meta_file: Option<&Path>,
     write_id: bool,
 ) -> Result<()> {
     // ── resolve input / base ────────────────────────────────────────────
@@ -424,6 +427,7 @@ pub(crate) fn publish_gdoc_command(
         BrokenLinkMode::Warn,
     )?;
     let mut metadata = build.document_metadata();
+    crate::apply_meta_file_from_path(&mut metadata, meta_file)?;
     crate::apply_meta_drops(&mut metadata, meta_drops);
     crate::apply_meta_overrides(&mut metadata, meta_overrides)?;
     let render_profile = RenderProfile::from_metadata(EffectiveFormat::Docx, &metadata)?;
