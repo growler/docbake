@@ -165,7 +165,8 @@ its place. No filler, no boilerplate — just distilled, essential context that
 compounds in value over time as the git history becomes the project's
 institutional memory.
 
-Keep commit messages human-readable and the line length below 80 characters.
+To keep commit messages readable, first write it as markdown file, and then run 
+cargo run -- fmt <message.md>.
 
 ### Structure
 
