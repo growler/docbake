@@ -177,6 +177,104 @@ fn rewrites_fragment_links_to_final_heading_ids() {
 }
 
 #[test]
+fn title_shortcut_resolves_targets_in_current_document() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    write(
+        &root.join("doc/index.md"),
+        "# Complex _header_ with `code`\n\nTable: Applied standards\n\n| A |\n|---|\n| 1 |\n\n```rust Header name\nfn demo() {}\n```\n\n[Heading](# \"Complex header with code\")\n[Table](# \"Applied standards\")\n[Code](# \"Header name\")\n",
+    );
+
+    let prepared = prepare_document(
+        &DebugDumper::new(false),
+        root,
+        &root.join("doc/index.md"),
+        None,
+        BrokenLinkMode::Error,
+    )
+    .unwrap();
+
+    let values: Vec<_> = prepared.graph().link_targets.values().cloned().collect();
+    assert!(
+        values
+            .iter()
+            .any(|value| value == "#complex-header-with-code"),
+        "expected title shortcut for heading, got: {:?}",
+        values
+    );
+    assert!(
+        values.iter().any(|value| value == "#applied-standards"),
+        "expected title shortcut for caption, got: {:?}",
+        values
+    );
+    assert!(
+        values.iter().any(|value| value == "#header-name"),
+        "expected title shortcut for code block, got: {:?}",
+        values
+    );
+}
+
+#[test]
+fn title_shortcut_resolves_markdown_link_without_fragment() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    write(
+        &root.join("doc/index.md"),
+        "# Root\n\n:::include\n# [Part](part.md)\n:::\n\n[go](part.md \"Target heading\")\n",
+    );
+    write(&root.join("doc/part.md"), "# Intro\n\n## Target heading\n");
+
+    let prepared = prepare_document(
+        &DebugDumper::new(false),
+        root,
+        &root.join("doc/index.md"),
+        None,
+        BrokenLinkMode::Error,
+    )
+    .unwrap();
+
+    assert!(
+        prepared
+            .graph()
+            .link_targets
+            .values()
+            .any(|value| value == "#target-heading"),
+        "expected title-based target '#target-heading', got: {:?}",
+        prepared.graph().link_targets
+    );
+}
+
+#[test]
+fn title_shortcut_resolves_markdown_link_with_empty_fragment() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    write(
+        &root.join("doc/index.md"),
+        "# Root\n\n:::include\n# [Part](part.md)\n:::\n\n[go](part.md# \"Target heading\")\n",
+    );
+    write(&root.join("doc/part.md"), "# Intro\n\n## Target heading\n");
+
+    let prepared = prepare_document(
+        &DebugDumper::new(false),
+        root,
+        &root.join("doc/index.md"),
+        None,
+        BrokenLinkMode::Error,
+    )
+    .unwrap();
+
+    assert!(
+        prepared
+            .graph()
+            .link_targets
+            .values()
+            .any(|value| value == "#target-heading"),
+        "expected title-based target '#target-heading', got: {:?}",
+        prepared.graph().link_targets
+    );
+}
+
+#[test]
 fn rejects_ambiguous_markdown_links_for_repeated_includes() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();

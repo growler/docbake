@@ -343,6 +343,7 @@ struct TargetInfo {
     node_ref: NodeRef,
     is_image: bool,
     destination: String,
+    link_title: Option<String>,
     /// Byte offset of the destination in the source string (for line numbers).
     dest_byte_offset: Option<usize>,
 }
@@ -364,6 +365,7 @@ fn rewrite_graph_targets(
                     node_ref,
                     is_image: false,
                     destination: link.destination_str(&doc.source).to_string(),
+                    link_title: link.title().map(|title| title.str(&doc.source).to_string()),
                     dest_byte_offset: destination_byte_offset(link.destination()),
                 }),
                 KindData::Image(image) => Some(TargetInfo {
@@ -371,6 +373,7 @@ fn rewrite_graph_targets(
                     node_ref,
                     is_image: true,
                     destination: image.destination_str(&doc.source).to_string(),
+                    link_title: None,
                     dest_byte_offset: destination_byte_offset(image.destination()),
                 }),
                 _ => None,
@@ -391,6 +394,7 @@ fn rewrite_graph_targets(
             graph,
             info.doc_id,
             &info.destination,
+            info.link_title.as_deref(),
             info.is_image,
         ) {
             Ok(rewritten) => {
@@ -505,11 +509,16 @@ fn rewrite_target(
     graph: &mut DocumentGraph,
     source_doc_id: usize,
     raw_target: &str,
+    raw_title: Option<&str>,
     is_image: bool,
 ) -> std::result::Result<String, String> {
     let target = raw_target.trim();
     let wrapped = target.starts_with('<') && target.ends_with('>');
     let target = target.trim_matches(['<', '>']);
+    let title_fragment = raw_title
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .map(|title| generate_heading_id(title, &HashSet::new()));
 
     // Empty, external URLs, and mailto links pass through unchanged.
     if target.is_empty() || target.contains("://") || target.starts_with("mailto:") {
@@ -519,6 +528,24 @@ fn rewrite_target(
     // ── Fragment-only links (#anchor) — file-scoped ────────────────────
     if let Some(fragment) = target.strip_prefix('#') {
         if fragment.is_empty() {
+            if let Some(source_anchor) = title_fragment.as_deref() {
+                let final_id = graph
+                    .anchor_target(source_doc_id, source_anchor)
+                    .ok_or_else(|| {
+                        format!(
+                            "title '{}' resolved to '#{}', but this anchor was not found in {}",
+                            raw_title.unwrap_or_default(),
+                            source_anchor,
+                            graph.document(source_doc_id).path.display()
+                        )
+                    })?;
+                let rewritten = format!("#{final_id}");
+                return Ok(if wrapped {
+                    format!("<{rewritten}>")
+                } else {
+                    rewritten
+                });
+            }
             return Ok(raw_target.to_string());
         }
         return match graph.anchor_target(source_doc_id, fragment) {
@@ -546,11 +573,23 @@ fn rewrite_target(
         let target_doc_id = graph
             .resolve_markdown_target(source_doc_id, &resolved)
             .map_err(|e| format!("{e:#}"))?;
-        let rewritten = if let Some(fragment) = fragment {
+        let rewritten = if let Some(fragment) = fragment.filter(|fragment| !fragment.is_empty()) {
             let target_id = graph
                 .anchor_target(target_doc_id, fragment)
                 .ok_or_else(|| {
                     format!("anchor '#{fragment}' not found in {}", resolved.display())
+                })?;
+            format!("#{target_id}")
+        } else if let Some(source_anchor) = title_fragment.as_deref() {
+            let target_id = graph
+                .anchor_target(target_doc_id, source_anchor)
+                .ok_or_else(|| {
+                    format!(
+                        "title '{}' resolved to '#{}', but this anchor was not found in {}",
+                        raw_title.unwrap_or_default(),
+                        source_anchor,
+                        resolved.display()
+                    )
                 })?;
             format!("#{target_id}")
         } else {
