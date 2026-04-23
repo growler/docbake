@@ -352,6 +352,9 @@ $ docbake publish confluence -i doc/ru/index.md -b doc
 ключей (например, `confluence.path` при смене пространства) используется
 `--meta-drop`:
 
+Особенности Confluence-рендера (включая поведение TOC и предупреждений в начале
+страницы) описаны в разделе [Форматы вывода](formats.md#confluence).
+
 ~~~
 $ docbake publish confluence -i doc/ru/index.md -b doc \
     --meta-drop confluence.path \

@@ -244,3 +244,100 @@ fn user_unparseable_falls_back_to_base() {
     assert_eq!(svg_width_to_pixels(Some("auto"), Some(94)), 94);
     assert_eq!(svg_width_to_pixels(Some("auto"), None), 800);
 }
+
+#[test]
+fn render_starts_with_native_toc_macro() {
+    let tmp = TempDir::new().unwrap();
+    let base_dir = tmp.path().to_path_buf();
+    let source = base_dir.join("index.md");
+    write_text(&source, "# Title\n\nText\n");
+
+    let prepared = build_prepared(&base_dir, &source);
+    let rendered = render_document(&prepared, &base_dir);
+
+    assert!(rendered
+        .body
+        .starts_with("<ac:structured-macro ac:name=\"toc\"></ac:structured-macro>\n"));
+}
+
+#[test]
+fn leading_warning_admonition_renders_before_toc() {
+    let tmp = TempDir::new().unwrap();
+    let base_dir = tmp.path().to_path_buf();
+    let source = base_dir.join("index.md");
+    write_text(
+        &source,
+        ":::warning\n# Important\n\nRead first.\n:::\n\n# Title\n\nText\n",
+    );
+
+    let prepared = build_prepared(&base_dir, &source);
+    let rendered = render_document(&prepared, &base_dir);
+
+    let warning_pos = rendered
+        .body
+        .find("<ac:structured-macro ac:name=\"warning\">")
+        .unwrap();
+    let toc_pos = rendered
+        .body
+        .find("<ac:structured-macro ac:name=\"toc\"></ac:structured-macro>\n")
+        .unwrap();
+    assert!(warning_pos < toc_pos);
+}
+
+#[test]
+fn render_emits_anchors_for_non_heading_targets() {
+    let tmp = TempDir::new().unwrap();
+    let base_dir = tmp.path().to_path_buf();
+    let source = base_dir.join("index.md");
+    let image = base_dir.join("cat.png");
+    write_bytes(&image, b"png");
+    write_text(
+        &source,
+        r#"# Title
+
+table: Inline markup {#inline-markup}
+
+| A |
+| - |
+| B |
+
+[inline](#inline-markup)
+
+```rust {#code-id}
+fn main() {}
+```
+
+[code](#code-id)
+
+Listing: Example {#listing-id}
+
+```rust
+fn listed() {}
+```
+
+[listing](#listing-id)
+
+![Alt](cat.png){#cat}
+
+[cat](#cat)
+"#,
+    );
+
+    let prepared = build_prepared(&base_dir, &source);
+    let rendered = render_document(&prepared, &base_dir);
+
+    for id in ["inline-markup", "code-id", "listing-id", "cat"] {
+        assert!(
+            rendered.body.contains(&format!(
+                "<ac:structured-macro ac:name=\"anchor\"><ac:parameter ac:name=\"\">{id}</ac:parameter></ac:structured-macro>"
+            )),
+            "missing anchor macro for {id}"
+        );
+        assert!(
+            rendered
+                .body
+                .contains(&format!("<ac:link ac:anchor=\"{id}\"")),
+            "missing internal link for {id}"
+        );
+    }
+}

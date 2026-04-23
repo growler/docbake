@@ -11,12 +11,10 @@ confluence:
 google-docs:
   id: https://docs.google.com/document/d/GOOGLE_DOC_ID
 ---
-:::: {if-format="confluence"} :::::::::::
-:::warning
+::: {.warning if-format="confluence"}
 Эта страница сгенирирована автоматически. Ее исходник находится в [репозитории
 проекта](https://git.example.com/docbake/-/tree/main/doc)
 :::
-:::::::::::::::::::::::::::::::::::::::::
 
 # Назначение
 

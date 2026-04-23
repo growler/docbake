@@ -36,6 +36,7 @@ impl<'a> ConfluenceRenderer<'a> {
         let arena = context.arena;
         let source = context.source;
         let footnotes = context.footnotes;
+        self.render_anchor_if_node_has_id(out, arena, source, node_ref)?;
         match arena[node_ref].kind_data() {
             KindData::Text(text) => {
                 out.push_str(&xml_escape(text.str(source)));

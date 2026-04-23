@@ -21,6 +21,7 @@ impl<'a> ConfluenceRenderer<'a> {
         doc_id: usize,
         heading_shift: usize,
         footnotes: &[FootnoteEntry],
+        skip_first_rendered_block: &mut bool,
     ) -> Result<()> {
         let doc = prepared.graph().document(doc_id);
         for child in doc.arena[doc.doc_ref].children(&doc.arena) {
@@ -36,8 +37,13 @@ impl<'a> ConfluenceRenderer<'a> {
                         entry.doc_id,
                         heading_shift + entry.heading_shift,
                         footnotes,
+                        skip_first_rendered_block,
                     )?;
                 }
+                continue;
+            }
+            if *skip_first_rendered_block {
+                *skip_first_rendered_block = false;
                 continue;
             }
             let context = RenderContext {
@@ -61,6 +67,7 @@ impl<'a> ConfluenceRenderer<'a> {
     ) -> Result<()> {
         let arena = context.arena;
         let source = context.source;
+        self.render_anchor_if_node_has_id(out, arena, source, node_ref)?;
         match arena[node_ref].kind_data() {
             KindData::Paragraph(_) => {
                 out.push_str("<p>");
@@ -69,21 +76,7 @@ impl<'a> ConfluenceRenderer<'a> {
             }
             KindData::Heading(heading) => {
                 let level = (heading.level() as usize + context.heading_shift).min(6);
-                let id = arena[node_ref]
-                    .attributes()
-                    .get("id")
-                    .map(|v| v.str(source).to_string());
                 write!(out, "<h{level}>")?;
-                // Emit an anchor macro so internal links work.
-                if let Some(ref id) = id {
-                    write!(
-                        out,
-                        "<ac:structured-macro ac:name=\"anchor\">\
-                         <ac:parameter ac:name=\"\">{}</ac:parameter>\
-                         </ac:structured-macro>",
-                        xml_escape(id)
-                    )?;
-                }
                 self.render_inline_children(out, context, node_ref)?;
                 writeln!(out, "</h{level}>")?;
             }
@@ -425,6 +418,27 @@ impl<'a> ConfluenceRenderer<'a> {
             out.push_str("<p><em>");
             self.render_inline_children(out, context, ct)?;
             out.push_str("</em></p>\n");
+        }
+        Ok(())
+    }
+
+    pub(super) fn render_anchor_if_node_has_id(
+        &self,
+        out: &mut String,
+        arena: &Arena,
+        source: &str,
+        node_ref: NodeRef,
+    ) -> Result<()> {
+        if let Some(id) = arena[node_ref]
+            .attributes()
+            .get("id")
+            .map(|v| v.str(source))
+        {
+            write!(
+                out,
+                "<ac:structured-macro ac:name=\"anchor\"><ac:parameter ac:name=\"\">{}</ac:parameter></ac:structured-macro>",
+                xml_escape(&id)
+            )?;
         }
         Ok(())
     }
