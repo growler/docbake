@@ -11,6 +11,7 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 
 pub(crate) use self::types::{DocumentOccurrence, IncludeEntry, NodeLocation};
 use crate::cli::BrokenLinkMode;
+use crate::conditional::RenderProfile;
 use crate::DebugDumper;
 
 #[derive(Debug)]
@@ -63,14 +64,6 @@ impl DocumentGraph {
         self.first_heading_by_doc.get(&doc_id).map(String::as_str)
     }
 
-    pub(crate) fn anchor_count(&self) -> usize {
-        self.anchor_targets.len()
-    }
-
-    pub(crate) fn link_count(&self) -> usize {
-        self.link_targets.len()
-    }
-
     pub(crate) fn anchor_target(&self, doc_id: usize, fragment: &str) -> Option<&str> {
         self.anchor_targets
             .get(&(doc_id, fragment.to_string()))
@@ -109,6 +102,15 @@ impl DocumentGraph {
         &self,
     ) -> impl Iterator<Item = (usize, NodeRef, usize)> + '_ {
         self.rendered_nodes.iter().copied()
+    }
+
+    pub(crate) fn rendered_nodes_preorder_visible(
+        &self,
+        profile: &RenderProfile,
+    ) -> Result<Vec<(usize, NodeRef, usize)>> {
+        let mut nodes = Vec::new();
+        self.collect_document_children_visible(self.root_id, 0, profile, &mut nodes)?;
+        Ok(nodes)
     }
 
     /// Return all document IDs in DFS pre-order together with their
@@ -168,6 +170,20 @@ impl DocumentGraph {
         }
     }
 
+    fn collect_document_children_visible(
+        &self,
+        doc_id: usize,
+        heading_shift: usize,
+        profile: &RenderProfile,
+        out: &mut Vec<(usize, NodeRef, usize)>,
+    ) -> Result<()> {
+        let doc = self.document(doc_id);
+        for child in doc.arena[doc.doc_ref].children(&doc.arena) {
+            self.collect_rendered_node_visible(doc_id, child, heading_shift, profile, out)?;
+        }
+        Ok(())
+    }
+
     fn collect_rendered_node(
         &self,
         doc_id: usize,
@@ -191,6 +207,38 @@ impl DocumentGraph {
         for child in doc.arena[node_ref].children(&doc.arena) {
             self.collect_rendered_node(doc_id, child, heading_shift, out);
         }
+    }
+
+    fn collect_rendered_node_visible(
+        &self,
+        doc_id: usize,
+        node_ref: NodeRef,
+        heading_shift: usize,
+        profile: &RenderProfile,
+        out: &mut Vec<(usize, NodeRef, usize)>,
+    ) -> Result<()> {
+        let doc = self.document(doc_id);
+        if !crate::conditional::node_is_visible(&doc.arena, node_ref, &doc.source, profile)? {
+            return Ok(());
+        }
+
+        if let Some(entries) = self.include_entries(doc_id, node_ref) {
+            for entry in entries {
+                self.collect_document_children_visible(
+                    entry.doc_id,
+                    heading_shift + entry.heading_shift,
+                    profile,
+                    out,
+                )?;
+            }
+            return Ok(());
+        }
+
+        out.push((doc_id, node_ref, heading_shift));
+        for child in doc.arena[node_ref].children(&doc.arena) {
+            self.collect_rendered_node_visible(doc_id, child, heading_shift, profile, out)?;
+        }
+        Ok(())
     }
 }
 

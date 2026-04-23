@@ -5,6 +5,7 @@ use rushdown::as_extension_data;
 use rushdown::ast::{Arena, NodeRef};
 use rushdown_footnote::FootnoteReference;
 
+use crate::conditional::RenderProfile;
 use crate::graph::{DocumentGraph, NodeLocation};
 
 #[derive(Clone)]
@@ -23,6 +24,7 @@ pub(super) struct FootnotePlan {
 pub(super) fn build_page_footnote_plan(
     graph: &DocumentGraph,
     doc_id: usize,
+    profile: &RenderProfile,
 ) -> Result<FootnotePlan> {
     let doc = graph.document(doc_id);
     let mut refs = HashMap::new();
@@ -35,6 +37,7 @@ pub(super) fn build_page_footnote_plan(
         doc.doc_ref,
         graph,
         doc_id,
+        profile,
         &mut refs,
         &mut ordered,
         &mut by_label,
@@ -50,17 +53,22 @@ fn collect_footnote_refs(
     node_ref: NodeRef,
     graph: &DocumentGraph,
     doc_id: usize,
+    profile: &RenderProfile,
     refs: &mut HashMap<NodeLocation, (usize, usize)>,
     ordered: &mut Vec<FootnoteEntry>,
     by_label: &mut HashMap<String, usize>,
     next_ref_index: &mut usize,
 ) -> Result<()> {
+    let doc = graph.document(doc_id);
+    if !crate::conditional::node_is_visible(arena, node_ref, &doc.source, profile)? {
+        return Ok(());
+    }
+
     // Skip include blocks.
     if graph.include_entries(doc_id, node_ref).is_some() {
         return Ok(());
     }
 
-    let doc = graph.document(doc_id);
     if rushdown::matches_extension_kind!(arena, node_ref, FootnoteReference) {
         let footnote = as_extension_data!(arena, node_ref, FootnoteReference);
         let label = footnote.label().str(&doc.source).to_string();
@@ -95,6 +103,7 @@ fn collect_footnote_refs(
             child,
             graph,
             doc_id,
+            profile,
             refs,
             ordered,
             by_label,

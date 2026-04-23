@@ -10,11 +10,17 @@ use super::types::{FootnoteEntry, RenderContext, Scope};
 use super::ConfluenceRenderer;
 
 impl<'a> ConfluenceRenderer<'a> {
-    pub(super) fn collect_footnotes(&self, prepared: &PreparedDocument) -> Vec<FootnoteEntry> {
+    pub(super) fn collect_footnotes(
+        &self,
+        prepared: &PreparedDocument,
+    ) -> Result<Vec<FootnoteEntry>> {
         let mut entries = Vec::new();
         let mut seen = std::collections::HashSet::new();
         let mut index = 1usize;
-        for (doc_id, node_ref, _) in prepared.graph().rendered_nodes_preorder() {
+        let rendered = prepared
+            .graph()
+            .rendered_nodes_preorder_visible(&self.profile)?;
+        for (doc_id, node_ref, _) in rendered {
             let doc = prepared.graph().document(doc_id);
             if !rushdown::matches_extension_kind!(&doc.arena, node_ref, FootnoteReference) {
                 continue;
@@ -33,7 +39,7 @@ impl<'a> ConfluenceRenderer<'a> {
             });
             index += 1;
         }
-        entries
+        Ok(entries)
     }
 
     pub(super) fn render_footnotes_section(

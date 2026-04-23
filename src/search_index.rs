@@ -20,6 +20,7 @@
 use rushdown::ast::{self, Arena, CodeBlock, CodeBlockKind, KindData, NodeRef, WalkStatus};
 use serde::Serialize;
 
+use crate::conditional::RenderProfile;
 use crate::graph::{DocumentGraph, PreparedDocument};
 use crate::html_site::MultiPagePlan;
 
@@ -50,10 +51,13 @@ pub(crate) struct SearchEntry {
 ///
 /// Every ID-bearing node (heading, caption, named code block) starts a new
 /// chunk.  The `href` values are fragment-only (`#anchor-id`).
-pub(crate) fn build_search_index(prepared: &PreparedDocument) -> String {
+pub(crate) fn build_search_index(
+    prepared: &PreparedDocument,
+    profile: &RenderProfile,
+) -> anyhow::Result<String> {
     let graph = prepared.graph();
-    let entries = collect_entries(graph, None);
-    serde_json::to_string(&entries).expect("search index serialisation must not fail")
+    let entries = collect_entries(graph, profile, None)?;
+    Ok(serde_json::to_string(&entries).expect("search index serialisation must not fail"))
 }
 
 // ---------------------------------------------------------------------------
@@ -67,11 +71,12 @@ pub(crate) fn build_search_index(prepared: &PreparedDocument) -> String {
 /// side prepends `asset_prefix` when navigating from nested pages.
 pub(crate) fn build_search_index_multi(
     prepared: &PreparedDocument,
+    profile: &RenderProfile,
     plan: &MultiPagePlan,
-) -> String {
+) -> anyhow::Result<String> {
     let graph = prepared.graph();
-    let entries = collect_entries(graph, Some(plan));
-    serde_json::to_string(&entries).expect("search index serialisation must not fail")
+    let entries = collect_entries(graph, profile, Some(plan))?;
+    Ok(serde_json::to_string(&entries).expect("search index serialisation must not fail"))
 }
 
 // ---------------------------------------------------------------------------
@@ -82,7 +87,11 @@ pub(crate) fn build_search_index_multi(
 ///
 /// When `plan` is `Some`, href values include the page path (multi-page
 /// mode).  When `None`, href values are fragment-only (single-page mode).
-fn collect_entries(graph: &DocumentGraph, plan: Option<&MultiPagePlan>) -> Vec<SearchEntry> {
+fn collect_entries(
+    graph: &DocumentGraph,
+    profile: &RenderProfile,
+    plan: Option<&MultiPagePlan>,
+) -> anyhow::Result<Vec<SearchEntry>> {
     let mut entries: Vec<SearchEntry> = Vec::new();
 
     // Current chunk state — accumulates text between anchor points.
@@ -90,7 +99,7 @@ fn collect_entries(graph: &DocumentGraph, plan: Option<&MultiPagePlan>) -> Vec<S
     let mut current_href: Option<String> = None;
     let mut current_body = String::new();
 
-    for (doc_id, node_ref, _shift) in graph.rendered_nodes_preorder() {
+    for (doc_id, node_ref, _shift) in graph.rendered_nodes_preorder_visible(profile)? {
         let doc = graph.document(doc_id);
         let arena = &doc.arena;
         let source = &doc.source;
@@ -143,7 +152,7 @@ fn collect_entries(graph: &DocumentGraph, plan: Option<&MultiPagePlan>) -> Vec<S
     // Flush the last chunk.
     flush_entry(&mut entries, &current_title, &current_href, &current_body);
 
-    entries
+    Ok(entries)
 }
 
 /// Push a finished search entry (if it has a title and href).

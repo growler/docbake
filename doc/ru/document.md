@@ -45,6 +45,20 @@ _главным_.
    метаданных HTML документа. Может быть задана в формате `YYYY-MM-DD` или
    `YYYY-MM-DD HH:MM:SS`.
 
+`variants`
+
+:  Массив строковых вариантов документа. Используется для условной видимости fenced
+   div через атрибут `if-variant`.
+
+   Пример:
+
+   ~~~yaml
+   variants: ["enterprise", "internal"]
+   ~~~
+
+   Любой вариант также можно добавить через повторяющийся `--meta variants
+   <value>`.
+
 `confluence`
 
 :  Словарь параметров для публикации в Confluence. Содержит следующие ключи:
@@ -83,6 +97,7 @@ author:   Example
 lang:     ru-RU
 version:  0.1.0
 keywords: documentation, markdown, internal tools
+variants: ["enterprise"]
 confluence:
   server: https://confluence.example.com
   space:  PROJ

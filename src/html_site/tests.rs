@@ -5,6 +5,7 @@ use tempfile::TempDir;
 
 use crate::cache::Cache;
 use crate::cli::BrokenLinkMode;
+use crate::conditional::{EffectiveFormat, RenderProfile};
 use crate::diagram::DiagramThemes;
 use crate::graph::prepare_document;
 use crate::DebugDumper;
@@ -48,6 +49,10 @@ fn page_html<'a>(pages: &'a [RenderedPage], path: &str) -> &'a str {
         .find(|page| page.path == path)
         .map(|page| page.html.as_str())
         .unwrap()
+}
+
+fn html_profile() -> RenderProfile {
+    RenderProfile::from_metadata(EffectiveFormat::Html, &serde_json::Map::new()).unwrap()
 }
 
 #[test]
@@ -106,7 +111,8 @@ fn plan_handles_docs_outside_root_source_with_custom_base() {
     )
     .unwrap();
 
-    let plan = build_multi_page_plan(&prepared, &root_source_dir, &base_dir).unwrap();
+    let profile = html_profile();
+    let plan = build_multi_page_plan(&prepared, &profile, &root_source_dir, &base_dir).unwrap();
     let paths: Vec<PathBuf> = plan.pages.iter().map(|p| p.output_path.clone()).collect();
 
     assert!(paths.contains(&PathBuf::from("index.html")));
@@ -129,10 +135,12 @@ fn rewrites_absolute_markdown_links_with_custom_base() {
 
     let context = tera::Context::new();
     let cache = Cache::new(None, true).unwrap();
+    let profile = html_profile();
     let pages = build_multi_page_html(
         "{{ body }}",
         &context,
         &prepared,
+        &profile,
         &base_dir,
         &cache,
         &DiagramThemes::default(),
@@ -163,10 +171,12 @@ fn renders_page_footnotes_in_multi_page_output() {
         BrokenLinkMode::Error,
     )
     .unwrap();
+    let profile = html_profile();
     let pages = build_multi_page_html(
         "{{ body }}",
         &tera::Context::new(),
         &prepared,
+        &profile,
         root,
         &Cache::new(None, true).unwrap(),
         &DiagramThemes::default(),
@@ -197,10 +207,12 @@ fn builds_expanded_and_intra_page_toc_for_current_page() {
         BrokenLinkMode::Error,
     )
     .unwrap();
+    let profile = html_profile();
     let pages = build_multi_page_html(
         "{{ toc_expanded }}\n---\n{{ toc_page }}",
         &tera::Context::new(),
         &prepared,
+        &profile,
         root,
         &Cache::new(None, true).unwrap(),
         &DiagramThemes::default(),

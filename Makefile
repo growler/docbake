@@ -63,6 +63,31 @@ cross:
 	'
 
 # ---------------------------------------------------------------------------
+# Cross-compile all targets directly on macOS host
+# ---------------------------------------------------------------------------
+
+.PHONY: mac-cross
+mac-cross:
+	@set -eu; \
+	if [ "$$(uname -s)" != "Darwin" ]; then \
+		echo "mac-cross is intended for macOS hosts"; \
+		exit 1; \
+	fi; \
+	if ! command -v cargo-zigbuild >/dev/null 2>&1; then \
+		echo "cargo-zigbuild is required (run inside the nix devshell)"; \
+		exit 1; \
+	fi; \
+	export SDKROOT="$$(xcrun --sdk macosx --show-sdk-path)"; \
+	export CARGO_ZIGBUILD_CACHE_DIR="$(CURDIR)/target/.zigbuild-cache"; \
+	mkdir -p "$$CARGO_ZIGBUILD_CACHE_DIR/bin"; \
+	ln -sf "$$(which cargo-zigbuild)" "$$CARGO_ZIGBUILD_CACHE_DIR/bin/x86_64-w64-mingw32-dlltool"; \
+	export PATH="$$CARGO_ZIGBUILD_CACHE_DIR/bin:$$PATH"; \
+	for target in $(CROSS_TARGETS); do \
+		echo "--- building $$target ---"; \
+		cargo zigbuild --release --target "$$target"; \
+	done
+
+# ---------------------------------------------------------------------------
 # Build all (native + cross)
 # ---------------------------------------------------------------------------
 

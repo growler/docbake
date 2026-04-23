@@ -5,6 +5,7 @@ use tempfile::TempDir;
 
 use crate::cache::Cache;
 use crate::cli::BrokenLinkMode;
+use crate::conditional::{EffectiveFormat, RenderProfile};
 use crate::diagram::DiagramThemes;
 use crate::graph::prepare_document;
 use crate::DebugDumper;
@@ -60,7 +61,9 @@ fn render_document(
     let cache = Cache::new(None, true).unwrap();
     let themes = DiagramThemes::default();
     let logger = DebugDumper::new(false);
-    ConfluenceRenderer::new(&cache, &themes, &logger, base_dir)
+    let profile =
+        RenderProfile::from_metadata(EffectiveFormat::Confluence, &serde_json::Map::new()).unwrap();
+    ConfluenceRenderer::new(&cache, &themes, &logger, base_dir, profile)
         .render(prepared)
         .unwrap()
 }

@@ -9,6 +9,7 @@ use serde::Serialize;
 use crate::code_block_attribute::{
     code_block_attribute_html_renderer_extension, CodeBlockAttributeHtmlRendererOptions,
 };
+use crate::conditional::RenderProfile;
 use crate::diagram::{diagram_html_renderer_extension, DiagramHtmlRendererOptions, DiagramThemes};
 use crate::graph::PreparedDocument;
 
@@ -37,6 +38,7 @@ pub(crate) fn build_multi_page_html(
     template: &str,
     context: &tera::Context,
     prepared: &PreparedDocument,
+    profile: &RenderProfile,
     base_dir: &Path,
     cache: &crate::cache::Cache,
     diagram_themes: &DiagramThemes,
@@ -48,7 +50,7 @@ pub(crate) fn build_multi_page_html(
         .parent()
         .ok_or_else(|| anyhow::anyhow!("root document has no parent directory"))?;
 
-    let plan = build_multi_page_plan(prepared, root_source_dir, base_dir)?;
+    let plan = build_multi_page_plan(prepared, profile, root_source_dir, base_dir)?;
 
     let mut pages = Vec::new();
 
@@ -61,7 +63,7 @@ pub(crate) fn build_multi_page_html(
         let asset_prefix = compute_asset_prefix(&page_info.output_path);
 
         // Build body HTML.
-        let footnotes = build_page_footnote_plan(graph, doc_id)?;
+        let footnotes = build_page_footnote_plan(graph, doc_id, profile)?;
         let mut body = String::new();
         let renderer = html::Renderer::with_extensions(
             html::Options::default(),
@@ -72,7 +74,7 @@ pub(crate) fn build_multi_page_html(
                 .and(definition_list_html_renderer_extension())
                 .and(crate::bracketed_span::bracketed_span_html_renderer_extension())
                 .and(crate::caption::caption_html_renderer_extension())
-                .and(multi_format_fenced_div_renderer())
+                .and(multi_format_fenced_div_renderer(profile.clone()))
                 .and(diagram_html_renderer_extension(
                     DiagramHtmlRendererOptions {
                         themes: diagram_themes.clone(),
@@ -82,6 +84,7 @@ pub(crate) fn build_multi_page_html(
                 ))
                 .and(multi_page_renderer_extension(
                     graph,
+                    profile.clone(),
                     &plan,
                     page_idx,
                     base_dir,
@@ -95,8 +98,9 @@ pub(crate) fn build_multi_page_html(
 
         // Build TOC variants.
         let toc = build_page_toc(&plan, page_idx, &page_info.output_path);
-        let toc_expanded = build_page_toc_expanded(&plan, page_idx, graph, &page_info.output_path);
-        let toc_page = build_intra_page_toc(graph, page_info.doc_id);
+        let toc_expanded =
+            build_page_toc_expanded(&plan, page_idx, graph, profile, &page_info.output_path)?;
+        let toc_page = build_intra_page_toc(graph, page_info.doc_id, profile)?;
 
         // Build nav links.
         let prev = page_info.prev_index.map(|i| {

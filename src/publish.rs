@@ -8,6 +8,7 @@ use serde_json::Value as JsonValue;
 
 use crate::cache::Cache;
 use crate::cli::BrokenLinkMode;
+use crate::conditional::{EffectiveFormat, RenderProfile};
 use crate::confluence::ConfluenceClient;
 use crate::graph::prepare_document;
 use crate::render_confluence::ConfluenceRenderer;
@@ -41,10 +42,18 @@ pub(crate) fn publish_confluence_command(
     ));
 
     // ── prepare document graph ──────────────────────────────────────────
-    let build = prepare_document(logger, &base_dir, &source, Some(&doc_name), broken_links)?;
+    let build = prepare_document(
+        logger,
+        &base_dir,
+        &source,
+        Some(&doc_name),
+        BrokenLinkMode::Warn,
+    )?;
     let mut metadata = build.document_metadata();
     crate::apply_meta_drops(&mut metadata, meta_drops);
     crate::apply_meta_overrides(&mut metadata, meta_overrides)?;
+    let render_profile = RenderProfile::from_metadata(EffectiveFormat::Confluence, &metadata)?;
+    crate::enforce_visible_target_policy(build.graph(), &render_profile, broken_links)?;
 
     // ── resolve publish parameters ──────────────────────────────────────
     let (server, space, parents, name) = resolve_publish_params(&metadata)?;
@@ -67,7 +76,8 @@ pub(crate) fn publish_confluence_command(
     };
 
     // ── render to Confluence Storage Format ─────────────────────────────
-    let renderer = ConfluenceRenderer::new(cache, &diagram_themes, logger, &base_dir);
+    let renderer =
+        ConfluenceRenderer::new(cache, &diagram_themes, logger, &base_dir, render_profile);
     let doc = renderer.render(&build)?;
 
     logger.log(format!(
@@ -406,10 +416,18 @@ pub(crate) fn publish_gdoc_command(
     ));
 
     // ── prepare document graph ──────────────────────────────────────────
-    let build = prepare_document(logger, &base_dir, &source, Some(&doc_name), broken_links)?;
+    let build = prepare_document(
+        logger,
+        &base_dir,
+        &source,
+        Some(&doc_name),
+        BrokenLinkMode::Warn,
+    )?;
     let mut metadata = build.document_metadata();
     crate::apply_meta_drops(&mut metadata, meta_drops);
     crate::apply_meta_overrides(&mut metadata, meta_overrides)?;
+    let render_profile = RenderProfile::from_metadata(EffectiveFormat::Docx, &metadata)?;
+    crate::enforce_visible_target_policy(build.graph(), &render_profile, broken_links)?;
 
     // ── resolve publish parameters ──────────────────────────────────────
     let (doc_id, folder_id, name) = resolve_gdoc_params(&metadata, &doc_name)?;
@@ -436,6 +454,7 @@ pub(crate) fn publish_gdoc_command(
         logger,
         &base_dir,
         logo_asset,
+        render_profile,
     );
     let docx_bytes = renderer.render(&build)?;
 

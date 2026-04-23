@@ -39,8 +39,8 @@ docbake serve -f html -i doc/ru/index.md
 # Live-rebuild сервер (удобнее для PDF)
 docbake watch -f pdf -i doc/ru/index.md -o output.pdf
 
-Валидация документа (ссылки + диаграммы)
-docbake check -i doc/ru/index.md
+Валидация документа (ссылки + диаграммы) для конкретного профиля
+docbake check -f html -i doc/ru/index.md
 
 # Форматирование markdown-файла или каталога
 docbake fmt doc/ru
@@ -51,6 +51,18 @@ docbake fmt --check doc/ru
 
 Флаг `-b/--base` задаёт корневой каталог для разрешения абсолютных путей
 в include и ссылках. По умолчанию — каталог входного файла.
+
+## Кросс-сборка
+
+- `make cross` — кросс-сборка в Linux-контейнере через `deb-ostree`.
+- `make mac-cross` — кросс-сборка напрямую на macOS-хосте (через `cargo-zigbuild`, без контейнера).
+
+Обе команды собирают цели:
+
+- `x86_64-unknown-linux-musl`
+- `x86_64-pc-windows-gnu`
+- `aarch64-apple-darwin`
+- `x86_64-apple-darwin`
 
 ## Темы
 

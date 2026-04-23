@@ -2,9 +2,13 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use rushdown::ast::{KindData, NodeRef};
+use rushdown_footnote::FootnoteDefinition;
 
+use crate::conditional::RenderProfile;
 use crate::graph::resolve::heading_text;
 use crate::graph::{DocumentGraph, PreparedDocument};
+use crate::html::is_admonition_title_heading;
 
 /// Information about a single page in the multi-page output.
 #[derive(Debug, Clone)]
@@ -54,11 +58,24 @@ impl MultiPagePlan {
 /// with shift < N, exactly like headings nest in the single-page TOC.
 pub(crate) fn build_multi_page_plan(
     prepared: &PreparedDocument,
+    profile: &RenderProfile,
     root_source_dir: &Path,
     base_dir: &Path,
 ) -> Result<MultiPagePlan> {
     let graph = prepared.graph();
-    let dfs_order = graph.page_order_with_shift();
+    let mut dfs_order: Vec<(usize, usize)> = Vec::new();
+    for (doc_id, shift) in graph.page_order_with_shift() {
+        if document_has_visible_page_content(graph, doc_id, profile)? {
+            dfs_order.push((doc_id, shift));
+        }
+    }
+
+    if dfs_order.is_empty() {
+        return Ok(MultiPagePlan {
+            pages: Vec::new(),
+            doc_id_to_page: HashMap::new(),
+        });
+    }
 
     // Build flat page list (tree links filled in the second pass).
     let mut pages: Vec<PageInfo> = dfs_order
@@ -67,15 +84,12 @@ pub(crate) fn build_multi_page_plan(
         .map(|(i, &(doc_id, _shift))| -> Result<PageInfo> {
             let doc = graph.document(doc_id);
             let output_path = compute_output_path(&doc.path, root_source_dir, base_dir)?;
-            let title = graph
-                .first_heading_id(doc_id)
-                .and_then(|_| first_heading_text(graph, doc_id))
-                .unwrap_or_else(|| {
-                    output_path
-                        .file_stem()
-                        .map(|s| s.to_string_lossy().to_string())
-                        .unwrap_or_default()
-                });
+            let title = first_visible_heading_text(graph, doc_id, profile)?.unwrap_or_else(|| {
+                output_path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            });
             let prev_index = if i > 0 { Some(i - 1) } else { None };
             let next_index = if i + 1 < dfs_order.len() {
                 Some(i + 1)
@@ -147,15 +161,86 @@ fn compute_output_path(
 }
 
 /// Get the plain-text title of a document's first heading.
-fn first_heading_text(graph: &DocumentGraph, doc_id: usize) -> Option<String> {
+fn first_visible_heading_text(
+    graph: &DocumentGraph,
+    doc_id: usize,
+    profile: &RenderProfile,
+) -> Result<Option<String>> {
     let doc = graph.document(doc_id);
     for child in doc.arena[doc.doc_ref].children(&doc.arena) {
-        if let rushdown::ast::KindData::Heading(_) = doc.arena[child].kind_data() {
-            let text = heading_text(&doc.arena, child, &doc.source);
+        if graph.include_entries(doc_id, child).is_some() {
+            continue;
+        }
+        if let Some(text) = first_visible_heading_text_in_subtree(graph, doc_id, child, profile)? {
+            return Ok(Some(text));
+        }
+    }
+    Ok(None)
+}
+
+fn first_visible_heading_text_in_subtree(
+    graph: &DocumentGraph,
+    doc_id: usize,
+    node_ref: NodeRef,
+    profile: &RenderProfile,
+) -> Result<Option<String>> {
+    let doc = graph.document(doc_id);
+    if !crate::conditional::node_is_visible(&doc.arena, node_ref, &doc.source, profile)? {
+        return Ok(None);
+    }
+    if graph.include_entries(doc_id, node_ref).is_some() {
+        return Ok(None);
+    }
+
+    if let KindData::Heading(_) = doc.arena[node_ref].kind_data() {
+        if !is_admonition_title_heading(&doc.arena, node_ref, &doc.source) {
+            let text = heading_text(&doc.arena, node_ref, &doc.source);
             if !text.is_empty() {
-                return Some(text);
+                return Ok(Some(text));
             }
         }
     }
-    None
+
+    for child in doc.arena[node_ref].children(&doc.arena) {
+        if let Some(text) = first_visible_heading_text_in_subtree(graph, doc_id, child, profile)? {
+            return Ok(Some(text));
+        }
+    }
+    Ok(None)
+}
+
+fn document_has_visible_page_content(
+    graph: &DocumentGraph,
+    doc_id: usize,
+    profile: &RenderProfile,
+) -> Result<bool> {
+    let doc = graph.document(doc_id);
+    for child in doc.arena[doc.doc_ref].children(&doc.arena) {
+        if graph.include_entries(doc_id, child).is_some() {
+            continue;
+        }
+        if has_visible_page_content_node(graph, doc_id, child, profile)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn has_visible_page_content_node(
+    graph: &DocumentGraph,
+    doc_id: usize,
+    node_ref: NodeRef,
+    profile: &RenderProfile,
+) -> Result<bool> {
+    let doc = graph.document(doc_id);
+    if !crate::conditional::node_is_visible(&doc.arena, node_ref, &doc.source, profile)? {
+        return Ok(false);
+    }
+    if graph.include_entries(doc_id, node_ref).is_some() {
+        return Ok(false);
+    }
+    if rushdown::matches_extension_kind!(&doc.arena, node_ref, FootnoteDefinition) {
+        return Ok(false);
+    }
+    Ok(true)
 }

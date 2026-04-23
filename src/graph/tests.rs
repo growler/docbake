@@ -1,4 +1,3 @@
-
 use std::fs;
 use std::path::Path;
 
@@ -9,6 +8,7 @@ use tempfile::TempDir;
 
 use super::*;
 use crate::build::markdown_parser;
+use crate::conditional::{EffectiveFormat, RenderProfile};
 
 fn write(path: &Path, text: &str) {
     if let Some(parent) = path.parent() {
@@ -257,6 +257,7 @@ fn renders_typst_footnotes_from_definition_nodes() {
         None,
         None,
         None,
+        RenderProfile::from_metadata(EffectiveFormat::Pdf, &serde_json::Map::new()).unwrap(),
     )
     .render_document(&prepared, &DebugDumper::new(false))
     .unwrap();
@@ -360,6 +361,7 @@ fn renders_typst_definition_lists() {
         None,
         None,
         None,
+        RenderProfile::from_metadata(EffectiveFormat::Pdf, &serde_json::Map::new()).unwrap(),
     )
     .render_document(&prepared, &DebugDumper::new(false))
     .unwrap();
@@ -1129,6 +1131,7 @@ fn figure_caption_with_regular_image_renders_typst() {
         None,
         None,
         None,
+        RenderProfile::from_metadata(EffectiveFormat::Pdf, &serde_json::Map::new()).unwrap(),
     )
     .render_document(&prepared, &DebugDumper::new(false))
     .unwrap();

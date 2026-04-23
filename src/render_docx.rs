@@ -29,6 +29,7 @@ use rushdown_fenced_div::FencedDiv;
 
 use crate::cache::Cache;
 use crate::caption::{Caption, CaptionText};
+use crate::conditional::RenderProfile;
 use crate::diagram::DiagramThemes;
 use crate::graph::{DocumentGraph, PreparedDocument};
 use crate::DebugDumper;
@@ -99,6 +100,7 @@ pub(crate) struct DocxRenderer<'a> {
     diagram_counter: RefCell<u32>,
     toc_heading_keys: RefCell<VecDeque<String>>,
     bookmark_counter: RefCell<usize>,
+    profile: RenderProfile,
 }
 
 #[derive(Clone, Copy)]
@@ -117,6 +119,7 @@ impl<'a> DocxRenderer<'a> {
         logger: &'a DebugDumper,
         base_dir: &'a Path,
         logo_asset: Option<(Vec<u8>, String)>,
+        profile: RenderProfile,
     ) -> Self {
         Self {
             cache,
@@ -127,6 +130,7 @@ impl<'a> DocxRenderer<'a> {
             diagram_counter: RefCell::new(0),
             toc_heading_keys: RefCell::new(VecDeque::new()),
             bookmark_counter: RefCell::new(0),
+            profile,
         }
     }
 
@@ -431,7 +435,7 @@ impl<'a> DocxRenderer<'a> {
             );
         }
 
-        let toc_entries = self.collect_toc_entries(graph);
+        let toc_entries = self.collect_toc_entries(graph)?;
         *self.toc_heading_keys.borrow_mut() = toc_entries
             .iter()
             .map(|entry| entry.key.clone())
@@ -493,6 +497,10 @@ impl<'a> DocxRenderer<'a> {
     ) -> Result<()> {
         let doc = graph.document(doc_id);
         for child in doc.arena[doc.doc_ref].children(&doc.arena) {
+            if !crate::conditional::node_is_visible(&doc.arena, child, &doc.source, &self.profile)?
+            {
+                continue;
+            }
             if let Some(entries) = graph.include_entries(doc_id, child) {
                 for entry in entries {
                     self.render_graph_document(
@@ -516,11 +524,13 @@ impl<'a> DocxRenderer<'a> {
         Ok(())
     }
 
-    fn collect_toc_entries(&self, graph: &DocumentGraph) -> Vec<TocEntry> {
+    fn collect_toc_entries(&self, graph: &DocumentGraph) -> Result<Vec<TocEntry>> {
         let mut entries = Vec::new();
         let mut idx = 0usize;
 
-        for (doc_id, node_ref, heading_shift) in graph.rendered_nodes_preorder() {
+        for (doc_id, node_ref, heading_shift) in
+            graph.rendered_nodes_preorder_visible(&self.profile)?
+        {
             let doc = graph.document(doc_id);
             let arena = &doc.arena;
             let source = &doc.source;
@@ -551,7 +561,7 @@ impl<'a> DocxRenderer<'a> {
             });
         }
 
-        entries
+        Ok(entries)
     }
 
     /// Generate a static table of contents from headings in the graph.
@@ -565,7 +575,10 @@ impl<'a> DocxRenderer<'a> {
         *docx = std::mem::take(docx).add_paragraph(toc_header);
 
         // Collect headings from the rendered node preorder walk.
-        for (doc_id, node_ref, heading_shift) in graph.rendered_nodes_preorder() {
+        let rendered = graph
+            .rendered_nodes_preorder_visible(&self.profile)
+            .unwrap_or_default();
+        for (doc_id, node_ref, heading_shift) in rendered {
             let doc = graph.document(doc_id);
             let arena = &doc.arena;
             let source = &doc.source;
@@ -748,6 +761,9 @@ impl<'a> DocxRenderer<'a> {
     ) -> Result<()> {
         let arena = context.arena;
         let source = context.source;
+        if !crate::conditional::fenced_div_is_visible(arena, node_ref, source, &self.profile)? {
+            return Ok(());
+        }
         let classes = arena[node_ref]
             .attributes()
             .get("class")

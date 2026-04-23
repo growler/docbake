@@ -23,7 +23,7 @@ Markdown - это простой язык текстовой разметки, �
 - [инлайн-спаны с атрибутами](markdown/links.md#метки) (`[текст]{#id .class}`)
 - [огороженные
   блоки](builder/formats.md#блоки-для-использования-в-конкретном-формате)
-  (`:::block`)
+  (`:::{if-format="html"}`, `:::{if-variant="enterprise"}`)
 - [специальные блоки](markdown/admonitions.md) (`:::note`, `:::warning`, `:::tip`,
   `:::important`, `:::caution`, `:::related`)
 - [включение файлов](document.md#include) (`:::include`)

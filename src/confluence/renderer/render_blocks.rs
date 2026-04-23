@@ -24,6 +24,10 @@ impl<'a> ConfluenceRenderer<'a> {
     ) -> Result<()> {
         let doc = prepared.graph().document(doc_id);
         for child in doc.arena[doc.doc_ref].children(&doc.arena) {
+            if !crate::conditional::node_is_visible(&doc.arena, child, &doc.source, &self.profile)?
+            {
+                continue;
+            }
             if let Some(entries) = prepared.graph().include_entries(doc_id, child) {
                 for entry in entries {
                     self.render_graph_document(
@@ -187,21 +191,19 @@ impl<'a> ConfluenceRenderer<'a> {
             KindData::Extension(_)
                 if rushdown::matches_extension_kind!(arena, node_ref, FencedDiv) =>
             {
+                if !crate::conditional::fenced_div_is_visible(
+                    arena,
+                    node_ref,
+                    source,
+                    &self.profile,
+                )? {
+                    return Ok(());
+                }
                 let classes = arena[node_ref]
                     .attributes()
                     .get("class")
                     .map(|v| v.str(source))
                     .unwrap_or_default();
-
-                // Format-gating: skip blocks not targeting confluence.
-                let known_formats = crate::KNOWN_OUTPUT_FORMATS;
-                let present_formats = classes
-                    .split_whitespace()
-                    .filter(|c| known_formats.contains(c))
-                    .collect::<Vec<_>>();
-                if !present_formats.is_empty() && !present_formats.contains(&"confluence") {
-                    return Ok(());
-                }
 
                 if let Some(adm_type) = crate::admonition_type(&classes) {
                     self.render_admonition(out, context, node_ref, adm_type)?;

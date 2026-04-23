@@ -12,6 +12,7 @@ use rushdown_definition_list::{DefinitionList, Term, TermDefinition};
 use rushdown_fenced_div::FencedDiv;
 use rushdown_footnote::FootnoteReference;
 
+use crate::conditional::RenderProfile;
 use crate::graph::PreparedDocument;
 use crate::DebugDumper;
 
@@ -30,6 +31,7 @@ pub struct TypstRenderer {
     mermaid_theme: Option<String>,
     /// D2 theme content (prepended before diagram source).
     d2_theme: Option<String>,
+    profile: RenderProfile,
 }
 
 #[derive(Clone, Copy)]
@@ -55,6 +57,7 @@ impl TypstRenderer {
         plantuml_theme: Option<String>,
         mermaid_theme: Option<String>,
         d2_theme: Option<String>,
+        profile: RenderProfile,
     ) -> Self {
         Self {
             output_root,
@@ -63,6 +66,7 @@ impl TypstRenderer {
             plantuml_theme,
             mermaid_theme,
             d2_theme,
+            profile,
         }
     }
 
@@ -72,7 +76,7 @@ impl TypstRenderer {
         logger: &DebugDumper,
     ) -> Result<String> {
         let mut out = String::new();
-        let known_labels = collect_labels(prepared);
+        let known_labels = collect_labels(prepared, &self.profile)?;
         self.render_graph_document(
             &mut out,
             prepared,
@@ -95,6 +99,10 @@ impl TypstRenderer {
     ) -> Result<()> {
         let doc = prepared.graph().document(doc_id);
         for child in doc.arena[doc.doc_ref].children(&doc.arena) {
+            if !crate::conditional::node_is_visible(&doc.arena, child, &doc.source, &self.profile)?
+            {
+                continue;
+            }
             if let Some(entries) = prepared.graph().include_entries(doc_id, child) {
                 for entry in entries {
                     self.render_graph_document(
@@ -259,19 +267,19 @@ impl TypstRenderer {
             KindData::Extension(_)
                 if rushdown::matches_extension_kind!(arena, node_ref, FencedDiv) =>
             {
+                if !crate::conditional::fenced_div_is_visible(
+                    arena,
+                    node_ref,
+                    source,
+                    &self.profile,
+                )? {
+                    return Ok(());
+                }
                 let classes = arena[node_ref]
                     .attributes()
                     .get("class")
                     .map(|value| value.str(source))
                     .unwrap_or_default();
-                let known_formats = crate::KNOWN_OUTPUT_FORMATS;
-                let present_formats = classes
-                    .split_whitespace()
-                    .filter(|class_name| known_formats.contains(class_name))
-                    .collect::<Vec<_>>();
-                if !present_formats.is_empty() && !present_formats.contains(&"pdf") {
-                    return Ok(());
-                }
                 if let Some(adm_type) = crate::admonition_type(&classes) {
                     self.render_admonition(out, context, node_ref, adm_type)?;
                 } else {
@@ -977,13 +985,13 @@ fn escape_typst_markup(value: &str) -> String {
     out
 }
 
-fn collect_labels(prepared: &PreparedDocument) -> HashSet<String> {
+fn collect_labels(prepared: &PreparedDocument, profile: &RenderProfile) -> Result<HashSet<String>> {
     let mut labels = HashSet::new();
-    for (doc_id, node_ref, _) in prepared.graph().rendered_nodes_preorder() {
+    for (doc_id, node_ref, _) in prepared.graph().rendered_nodes_preorder_visible(profile)? {
         let doc = prepared.graph().document(doc_id);
         if let Some(id) = doc.arena[node_ref].attributes().get("id") {
             labels.insert(id.str(&doc.source).to_string());
         }
     }
-    labels
+    Ok(labels)
 }

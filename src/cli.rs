@@ -40,6 +40,15 @@ pub enum OutputFormat {
     DocxGdoc,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum CheckFormat {
+    Html,
+    Pdf,
+    Docx,
+    Confluence,
+    Markdown,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum BrokenLinkMode {
     /// Report broken links as warnings and continue.
@@ -188,6 +197,10 @@ pub enum Command {
 
     /// Validate the document: check all links and render all diagrams.
     Check {
+        /// Effective output format for conditional visibility.
+        #[arg(short = 'f', long)]
+        format: CheckFormat,
+
         /// Root markdown file.
         #[arg(short = 'i', long)]
         input: PathBuf,
@@ -196,6 +209,16 @@ pub enum Command {
         /// Defaults to the parent directory of the input file.
         #[arg(short = 'b', long)]
         base: Option<PathBuf>,
+
+        /// Override a front-matter value.  Repeatable.
+        /// Key may use dot-notation (e.g. "confluence.server").
+        #[arg(long = "meta", value_names = ["KEY", "VALUE"], num_args = 2)]
+        meta: Vec<String>,
+
+        /// Remove a front-matter key before applying --meta overrides.
+        /// Repeatable.  Key may use dot-notation (e.g. "confluence.path").
+        #[arg(long = "meta-drop", value_name = "KEY")]
+        meta_drop: Vec<String>,
     },
 
     /// Format markdown files in place.

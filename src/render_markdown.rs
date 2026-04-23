@@ -10,11 +10,13 @@ use rushdown_definition_list::{DefinitionList, Term, TermDefinition};
 use rushdown_fenced_div::FencedDiv;
 use rushdown_footnote::{FootnoteDefinition, FootnoteReference};
 
+use crate::conditional::RenderProfile;
 use crate::graph::PreparedDocument;
 
 pub struct MarkdownRenderer<'a> {
     base_dir: &'a Path,
     output_dir: &'a Path,
+    profile: RenderProfile,
 }
 
 #[derive(Clone, Copy)]
@@ -46,10 +48,11 @@ struct FootnoteEntry {
 }
 
 impl<'a> MarkdownRenderer<'a> {
-    pub fn new(base_dir: &'a Path, output_dir: &'a Path) -> Self {
+    pub fn new(base_dir: &'a Path, output_dir: &'a Path, profile: RenderProfile) -> Self {
         Self {
             base_dir,
             output_dir,
+            profile,
         }
     }
 
@@ -71,6 +74,10 @@ impl<'a> MarkdownRenderer<'a> {
     ) -> Result<()> {
         let doc = prepared.graph().document(doc_id);
         for child in doc.arena[doc.doc_ref].children(&doc.arena) {
+            if !crate::conditional::node_is_visible(&doc.arena, child, &doc.source, &self.profile)?
+            {
+                continue;
+            }
             if let Some(entries) = prepared.graph().include_entries(doc_id, child) {
                 for entry in entries {
                     self.render_graph_document(
@@ -237,6 +244,14 @@ impl<'a> MarkdownRenderer<'a> {
             KindData::Extension(_)
                 if rushdown::matches_extension_kind!(arena, node_ref, FencedDiv) =>
             {
+                if !crate::conditional::fenced_div_is_visible(
+                    arena,
+                    node_ref,
+                    source,
+                    &self.profile,
+                )? {
+                    return Ok(());
+                }
                 // Skip include divs — they are handled by the graph.
                 let classes = arena[node_ref]
                     .attributes()
@@ -244,15 +259,6 @@ impl<'a> MarkdownRenderer<'a> {
                     .map(|value| value.str(source))
                     .unwrap_or_default();
                 if classes.split_whitespace().any(|c| c == "include") {
-                    return Ok(());
-                }
-                // Format-gating: if the div has classes matching known output
-                // format names, only render when "markdown" is among them.
-                let present_formats: Vec<&str> = classes
-                    .split_whitespace()
-                    .filter(|c| crate::KNOWN_OUTPUT_FORMATS.contains(c))
-                    .collect();
-                if !present_formats.is_empty() && !present_formats.contains(&"markdown") {
                     return Ok(());
                 }
                 for child in arena[node_ref].children(arena) {

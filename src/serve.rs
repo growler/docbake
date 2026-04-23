@@ -12,6 +12,7 @@ use tiny_http::{Header, Response, Server, StatusCode};
 use crate::build::{build_template_context, copy_assets};
 use crate::cache::Cache;
 use crate::cli::{BrokenLinkMode, OutputFormat};
+use crate::conditional::{EffectiveFormat, RenderProfile};
 use crate::diagram::DiagramThemes;
 use crate::graph::prepare_document;
 use crate::html_page::{build_html_document, build_toc};
@@ -80,10 +81,10 @@ pub(crate) fn serve_command(
         .map_err(|e| anyhow::anyhow!("failed to start HTTP server on {}: {}", bind_addr, e))?;
     let server = Arc::new(server);
 
-    let addr = match server.server_addr() {
-        tiny_http::ListenAddr::IP(addr) => addr,
-        _ => unreachable!("TCP server always has an IP address"),
-    };
+    let addr = server
+        .server_addr()
+        .to_ip()
+        .context("failed to get local server address")?;
 
     eprintln!("Serving on http://{addr}");
 
@@ -230,17 +231,28 @@ fn rebuild(
         format
     ));
 
-    let build = prepare_document(logger, base_dir, source, Some(&doc_name), broken_links)?;
+    let build = prepare_document(
+        logger,
+        base_dir,
+        source,
+        Some(&doc_name),
+        BrokenLinkMode::Warn,
+    )?;
     fs::create_dir_all(output_dir)
         .with_context(|| format!("failed to create output dir {}", output_dir.display()))?;
-
-    let document_assets = build.asset_targets().clone();
-    copy_assets(base_dir, output_dir, &document_assets, logger)?;
-    theme.copy_assets_to(output_dir)?;
 
     let mut metadata = build.document_metadata();
     crate::apply_meta_drops(&mut metadata, meta_drops);
     crate::apply_meta_overrides(&mut metadata, meta_overrides)?;
+    let render_profile =
+        RenderProfile::from_metadata(EffectiveFormat::from_output_format(format), &metadata)?;
+    crate::enforce_visible_target_policy(build.graph(), &render_profile, broken_links)?;
+
+    let document_assets =
+        crate::visible_asset_targets_for_profile(build.graph(), base_dir, &render_profile)?;
+    copy_assets(base_dir, output_dir, &document_assets, logger)?;
+    theme.copy_assets_to(output_dir)?;
+
     let style = theme.style_css()?;
     let mut template_context = build_template_context(&metadata, style.as_deref())?;
     template_context.insert("live_update", LIVE_UPDATE_JS);
@@ -254,13 +266,14 @@ fn rebuild(
     match format {
         OutputFormat::Html => {
             let template = theme.template_for(format)?;
-            let toc = build_toc(build.graph());
-            let search_json = crate::search_index::build_search_index(&build);
+            let toc = build_toc(build.graph(), &render_profile)?;
+            let search_json = crate::search_index::build_search_index(&build, &render_profile)?;
             template_context.insert("search_index", &search_json);
             let html = build_html_document(
                 &template,
                 &template_context,
                 &build,
+                &render_profile,
                 &toc,
                 cache,
                 &diagram_themes,
@@ -278,13 +291,20 @@ fn rebuild(
                 .path
                 .parent()
                 .ok_or_else(|| anyhow::anyhow!("root document has no parent directory"))?;
-            let plan = crate::html_site::build_multi_page_plan(&build, root_source_dir, base_dir)?;
-            let search_json = crate::search_index::build_search_index_multi(&build, &plan);
+            let plan = crate::html_site::build_multi_page_plan(
+                &build,
+                &render_profile,
+                root_source_dir,
+                base_dir,
+            )?;
+            let search_json =
+                crate::search_index::build_search_index_multi(&build, &render_profile, &plan)?;
             template_context.insert("search_index", &search_json);
             let pages = build_multi_page_html(
                 &template,
                 &template_context,
                 &build,
+                &render_profile,
                 base_dir,
                 cache,
                 &diagram_themes,

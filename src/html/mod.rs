@@ -13,6 +13,8 @@ use rushdown::util::{escape_html, escape_url, EscapeUrlOptions};
 use rushdown_fenced_div::FencedDiv;
 use rushdown_footnote::FootnoteDefinition;
 
+use crate::conditional::RenderProfile;
+
 /// Returns `true` when the image at `node_ref` is not the sole child of a
 /// `Paragraph` — i.e. it appears inline alongside other content.
 pub(crate) fn is_inline_image(arena: &Arena, node_ref: NodeRef) -> bool {
@@ -315,6 +317,7 @@ pub(crate) struct SharedFormatFencedDivHtmlRenderer<W: TextWrite> {
     writer: html::Writer,
     skip_heading_key: ContextKey<NodeRefValue>,
     skip_include_blocks: bool,
+    profile: RenderProfile,
 }
 
 impl<W: TextWrite> SharedFormatFencedDivHtmlRenderer<W> {
@@ -322,12 +325,14 @@ impl<W: TextWrite> SharedFormatFencedDivHtmlRenderer<W> {
         options: html::Options,
         skip_heading_key: ContextKey<NodeRefValue>,
         skip_include_blocks: bool,
+        profile: RenderProfile,
     ) -> Self {
         Self {
             _phantom: std::marker::PhantomData,
             writer: html::Writer::with_options(options),
             skip_heading_key,
             skip_include_blocks,
+            profile,
         }
     }
 }
@@ -343,6 +348,13 @@ impl<W: TextWrite> RenderNode<W> for SharedFormatFencedDivHtmlRenderer<W> {
         ctx: &mut renderer::Context,
     ) -> rushdown::Result<WalkStatus> {
         let _ = as_extension_data!(arena, node_ref, FencedDiv);
+        let visible =
+            crate::conditional::fenced_div_is_visible(arena, node_ref, source, &self.profile)
+                .map_err(|error| rushdown::Error::io(format!("{error:#}"), None))?;
+        if !visible {
+            return Ok(WalkStatus::SkipChildren);
+        }
+
         let classes = arena[node_ref]
             .attributes()
             .get("class")
@@ -357,15 +369,6 @@ impl<W: TextWrite> RenderNode<W> for SharedFormatFencedDivHtmlRenderer<W> {
             return Ok(WalkStatus::SkipChildren);
         }
 
-        let known_formats = crate::KNOWN_OUTPUT_FORMATS;
-        let present_formats = classes
-            .split_whitespace()
-            .filter(|class_name| known_formats.contains(class_name))
-            .collect::<Vec<_>>();
-        if !present_formats.is_empty() && !present_formats.contains(&"html") {
-            return Ok(WalkStatus::SkipChildren);
-        }
-
         let is_admonition = crate::admonition_type(&classes).is_some();
 
         if entering {
@@ -375,7 +378,7 @@ impl<W: TextWrite> RenderNode<W> for SharedFormatFencedDivHtmlRenderer<W> {
                 w.write_str(std::str::from_utf8(&escaped).unwrap_or_default())?;
                 w.write_str("\"")?;
                 for (key, value) in arena[node_ref].attributes().iter() {
-                    if key == "class" {
+                    if key == "class" || key == "if-format" || key == "if-variant" {
                         continue;
                     }
                     w.write_str(" ")?;
@@ -398,7 +401,17 @@ impl<W: TextWrite> RenderNode<W> for SharedFormatFencedDivHtmlRenderer<W> {
                 }
             } else {
                 self.writer.write_safe_str(w, "<div")?;
-                html::render_attributes(w, source, arena[node_ref].attributes(), None)?;
+                for (key, value) in arena[node_ref].attributes().iter() {
+                    if key == "if-format" || key == "if-variant" {
+                        continue;
+                    }
+                    w.write_str(" ")?;
+                    w.write_str(key)?;
+                    w.write_str("=\"")?;
+                    let escaped = escape_html(value.bytes(source));
+                    w.write_str(std::str::from_utf8(&escaped).unwrap_or_default())?;
+                    w.write_str("\"")?;
+                }
                 self.writer.write_safe_str(w, ">")?;
             }
         } else {

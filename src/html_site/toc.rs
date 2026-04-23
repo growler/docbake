@@ -1,7 +1,9 @@
 use std::path::Path;
 
+use anyhow::Result;
 use rushdown::ast::{KindData, NodeRef};
 
+use crate::conditional::RenderProfile;
 use crate::graph::DocumentGraph;
 use crate::html::{heading_text_html, html_escape, is_admonition_title_heading};
 
@@ -73,8 +75,9 @@ pub(super) fn build_page_toc_expanded(
     plan: &MultiPagePlan,
     current_page: usize,
     graph: &DocumentGraph,
+    profile: &RenderProfile,
     current_output_path: &Path,
-) -> String {
+) -> Result<String> {
     let mut html = String::new();
     html.push_str("<ul>\n");
     for page in &plan.pages {
@@ -85,12 +88,13 @@ pub(super) fn build_page_toc_expanded(
                 page.doc_id,
                 current_page,
                 graph,
+                profile,
                 current_output_path,
-            );
+            )?;
         }
     }
     html.push_str("</ul>\n");
-    html
+    Ok(html)
 }
 
 fn build_expanded_toc_node(
@@ -99,8 +103,9 @@ fn build_expanded_toc_node(
     doc_id: usize,
     current_page: usize,
     graph: &DocumentGraph,
+    profile: &RenderProfile,
     current_output_path: &Path,
-) {
+) -> Result<()> {
     let page_idx = plan
         .page_index_for_doc(doc_id)
         .expect("document must be present in multi-page plan");
@@ -118,7 +123,7 @@ fn build_expanded_toc_node(
 
     // Render internal headings for this page.
     // Skip the first heading — it duplicates the page-level entry above.
-    let all_headings = collect_page_headings(graph, doc_id);
+    let all_headings = collect_page_headings(graph, doc_id, profile)?;
     let headings: Vec<_> = all_headings.into_iter().skip(1).collect();
     let has_headings = !headings.is_empty();
     let has_children = !page.children_indices.is_empty();
@@ -178,8 +183,9 @@ fn build_expanded_toc_node(
             child_doc_id,
             current_page,
             graph,
+            profile,
             current_output_path,
-        );
+        )?;
     }
 
     if has_headings || has_children {
@@ -187,18 +193,23 @@ fn build_expanded_toc_node(
     }
 
     html.push_str("</li>\n");
+    Ok(())
 }
 
 /// Build the intra-page TOC: headings within the current page only,
 /// excluding the page's own title heading (the first one).
 /// Returns a nested `<ul>/<li>/<a>` HTML string suitable for a right-side
 /// "on this page" sidebar.
-pub(super) fn build_intra_page_toc(graph: &DocumentGraph, doc_id: usize) -> String {
-    let all_headings = collect_page_headings(graph, doc_id);
+pub(super) fn build_intra_page_toc(
+    graph: &DocumentGraph,
+    doc_id: usize,
+    profile: &RenderProfile,
+) -> Result<String> {
+    let all_headings = collect_page_headings(graph, doc_id, profile)?;
     // Skip the first heading — it is the page title.
     let headings: Vec<_> = all_headings.into_iter().skip(1).collect();
     if headings.is_empty() {
-        return String::new();
+        return Ok(String::new());
     }
 
     let mut html = String::new();
@@ -248,37 +259,46 @@ pub(super) fn build_intra_page_toc(graph: &DocumentGraph, doc_id: usize) -> Stri
     }
 
     html.push_str("</ul>\n");
-    html
+    Ok(html)
 }
 
 /// Collect headings for a single page (not recursing into includes).
 /// Returns `(level, id, text_html)` tuples.
-fn collect_page_headings(graph: &DocumentGraph, doc_id: usize) -> Vec<(usize, String, String)> {
+fn collect_page_headings(
+    graph: &DocumentGraph,
+    doc_id: usize,
+    profile: &RenderProfile,
+) -> Result<Vec<(usize, String, String)>> {
     let doc = graph.document(doc_id);
     let mut headings = Vec::new();
     for child in doc.arena[doc.doc_ref].children(&doc.arena) {
-        collect_headings_recursive(graph, doc_id, child, &mut headings);
+        collect_headings_recursive(graph, doc_id, child, profile, &mut headings)?;
     }
-    headings
+    Ok(headings)
 }
 
 fn collect_headings_recursive(
     graph: &DocumentGraph,
     doc_id: usize,
     node_ref: NodeRef,
+    profile: &RenderProfile,
     headings: &mut Vec<(usize, String, String)>,
-) {
+) -> Result<()> {
     let doc = graph.document(doc_id);
+
+    if !crate::conditional::node_is_visible(&doc.arena, node_ref, &doc.source, profile)? {
+        return Ok(());
+    }
 
     // Skip include fenced divs entirely.
     if graph.include_entries(doc_id, node_ref).is_some() {
-        return;
+        return Ok(());
     }
 
     if let KindData::Heading(heading) = doc.arena[node_ref].kind_data() {
         // Skip headings used as admonition titles.
         if is_admonition_title_heading(&doc.arena, node_ref, &doc.source) {
-            return;
+            return Ok(());
         }
         let classes = doc.arena[node_ref]
             .attributes()
@@ -301,6 +321,7 @@ fn collect_headings_recursive(
     }
 
     for child in doc.arena[node_ref].children(&doc.arena) {
-        collect_headings_recursive(graph, doc_id, child, headings);
+        collect_headings_recursive(graph, doc_id, child, profile, headings)?;
     }
+    Ok(())
 }

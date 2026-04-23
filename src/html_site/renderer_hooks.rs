@@ -16,6 +16,7 @@ use rushdown::renderer::{
 };
 use rushdown_footnote::FootnoteReference;
 
+use crate::conditional::RenderProfile;
 use crate::graph::resolve::resolve_base_path;
 use crate::graph::{DocumentGraph, NodeLocation};
 use crate::html::{
@@ -49,6 +50,7 @@ impl MultiRenderKeys {
 /// skipping :::include fenced divs.
 struct MultiPageRenderHook<'a> {
     graph: &'a DocumentGraph,
+    profile: RenderProfile,
     doc_id: usize,
     keys: MultiRenderKeys,
 }
@@ -66,6 +68,12 @@ impl<'a, W: TextWrite> PreRender<W> for MultiPageRenderHook<'a> {
         let doc = self.graph.document(self.doc_id);
         context.insert(self.keys.current_doc_id, self.doc_id);
         for child in doc.arena[doc.doc_ref].children(&doc.arena) {
+            let visible =
+                crate::conditional::node_is_visible(&doc.arena, child, &doc.source, &self.profile)
+                    .map_err(|error| rushdown::Error::io(format!("{error:#}"), None))?;
+            if !visible {
+                continue;
+            }
             // Skip include blocks.
             if self.graph.include_entries(self.doc_id, child).is_some() {
                 continue;
@@ -363,17 +371,24 @@ impl<'a, W: TextWrite> PostRender<W> for MultiFootnotePostRenderHook<'a> {
     }
 }
 
-pub(super) fn multi_format_fenced_div_renderer<'cb, W>() -> impl RendererExtension<'cb, W>
+pub(super) fn multi_format_fenced_div_renderer<'cb, W>(
+    profile: RenderProfile,
+) -> impl RendererExtension<'cb, W>
 where
     W: TextWrite + 'cb,
 {
     RendererExtensionFn::new(move |renderer: &mut Renderer<'cb, W>| {
         renderer.add_node_renderer(
-            |options: html::Options, reg: Rc<RefCell<ContextKeyRegistry>>| {
+            move |options: html::Options, reg: Rc<RefCell<ContextKeyRegistry>>| {
                 let skip_heading_key = reg
                     .borrow_mut()
                     .get_or_create::<NodeRefValue>(MULTI_SKIP_ADMONITION_HEADING);
-                SharedFormatFencedDivHtmlRenderer::with_options(options, skip_heading_key, true)
+                SharedFormatFencedDivHtmlRenderer::with_options(
+                    options,
+                    skip_heading_key,
+                    true,
+                    profile.clone(),
+                )
             },
             rushdown::renderer::NoRendererOptions,
         );
@@ -382,6 +397,7 @@ where
 
 pub(super) fn multi_page_renderer_extension<'cb, W>(
     graph: &'cb DocumentGraph,
+    profile: RenderProfile,
     plan: &'cb MultiPagePlan,
     current_page: usize,
     base_dir: &'cb Path,
@@ -394,11 +410,13 @@ where
     let doc_id = plan.pages[current_page].doc_id;
     let ref_footnotes = footnotes.clone();
     let post_footnotes = footnotes.clone();
+    let hook_profile = profile.clone();
 
     RendererExtensionFn::new(move |renderer: &mut Renderer<'cb, W>| {
         renderer.add_pre_render_hook(
             move |reg: Rc<RefCell<ContextKeyRegistry>>| MultiPageRenderHook {
                 graph,
+                profile: hook_profile.clone(),
                 doc_id,
                 keys: MultiRenderKeys::new(reg),
             },

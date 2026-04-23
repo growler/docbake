@@ -14,6 +14,7 @@ use std::path::Path;
 use anyhow::Result;
 
 use crate::cache::Cache;
+use crate::conditional::RenderProfile;
 use crate::diagram::DiagramThemes;
 use crate::graph::PreparedDocument;
 use crate::DebugDumper;
@@ -43,6 +44,7 @@ pub(crate) struct ConfluenceRenderer<'a> {
     diagram_themes: &'a DiagramThemes,
     logger: &'a DebugDumper,
     base_dir: &'a Path,
+    profile: RenderProfile,
     attachments: RefCell<Vec<ConfluenceAttachment>>,
     /// Maps (original absolute path) -> filename already added, to avoid
     /// uploading duplicates.
@@ -56,12 +58,14 @@ impl<'a> ConfluenceRenderer<'a> {
         diagram_themes: &'a DiagramThemes,
         logger: &'a DebugDumper,
         base_dir: &'a Path,
+        profile: RenderProfile,
     ) -> Self {
         Self {
             cache,
             diagram_themes,
             logger,
             base_dir,
+            profile,
             attachments: RefCell::new(Vec::new()),
             attachment_names: RefCell::new(HashMap::new()),
             diagram_counter: RefCell::new(0),
@@ -72,7 +76,7 @@ impl<'a> ConfluenceRenderer<'a> {
         let mut out = String::new();
 
         // Collect footnotes across the entire document graph.
-        let footnotes = self.collect_footnotes(prepared);
+        let footnotes = self.collect_footnotes(prepared)?;
 
         self.render_graph_document(&mut out, prepared, prepared.graph().root_id, 0, &footnotes)?;
 

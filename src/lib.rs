@@ -4,6 +4,7 @@ pub(crate) mod cache;
 pub(crate) mod caption;
 pub mod cli;
 pub(crate) mod code_block_attribute;
+pub(crate) mod conditional;
 pub(crate) mod confluence;
 pub(crate) mod credentials;
 pub(crate) mod diagram;
@@ -31,7 +32,8 @@ use std::path::{Path, PathBuf};
 
 use crate::build::{build_template_context, compile_typst, copy_assets, render_pdf_template};
 use crate::cache::Cache;
-use crate::cli::{BrokenLinkMode, Cli, OutputFormat};
+use crate::cli::{BrokenLinkMode, CheckFormat, Cli, OutputFormat};
+use crate::conditional::{EffectiveFormat, RenderProfile};
 use crate::graph::prepare_document;
 use crate::html_page::{build_html_document, build_toc};
 use crate::html_site::build_multi_page_html;
@@ -142,9 +144,24 @@ pub fn run(cli: Cli) -> Result<()> {
             )
         }
         cli::Command::Check {
+            format,
             ref input,
             ref base,
-        } => check_command(&logger, &cache, &theme, input, base.as_deref()),
+            ref meta,
+            ref meta_drop,
+        } => {
+            let meta_overrides = parse_meta_pairs(meta)?;
+            check_command(
+                &logger,
+                &cache,
+                &theme,
+                format,
+                input,
+                base.as_deref(),
+                meta_drop,
+                &meta_overrides,
+            )
+        }
         cli::Command::Fmt { check, ref path } => fmt::fmt_command(path, check),
         cli::Command::InitTheme { ref target } => {
             Theme::export_to(target)?;
@@ -353,6 +370,17 @@ pub(crate) fn apply_meta_overrides(
     overrides: &[(String, String)],
 ) -> Result<()> {
     for (key, value) in overrides {
+        if key == "variants" {
+            match metadata
+                .entry("variants".to_string())
+                .or_insert_with(|| JsonValue::Array(Vec::new()))
+            {
+                JsonValue::Array(items) => items.push(JsonValue::String(value.clone())),
+                _ => bail!("--meta: 'variants' is not an array"),
+            }
+            continue;
+        }
+
         let parts: Vec<&str> = key.split('.').collect();
         let mut target = &mut *metadata;
         for &part in &parts[..parts.len() - 1] {
@@ -525,13 +553,30 @@ pub(crate) fn build_command(
         format
     ));
 
-    let build = prepare_document(logger, &base_dir, &source, Some(&doc_name), broken_links)?;
+    let build = prepare_document(
+        logger,
+        &base_dir,
+        &source,
+        Some(&doc_name),
+        BrokenLinkMode::Warn,
+    )?;
     fs::create_dir_all(&output_dir)
         .with_context(|| format!("failed to create output dir {}", output_dir.display()))?;
 
+    let effective_format = EffectiveFormat::from_output_format(format);
+
+    // ── Build template context from front matter ────────────────────────
+    let mut metadata = build.document_metadata();
+    apply_meta_drops(&mut metadata, meta_drops);
+    apply_meta_overrides(&mut metadata, meta_overrides)?;
+    let render_profile = RenderProfile::from_metadata(effective_format, &metadata)?;
+
+    enforce_visible_target_policy(build.graph(), &render_profile, broken_links)?;
+
     // ── Markdown format (no theme needed) ───────────────────────────────
     if matches!(format, OutputFormat::Markdown) {
-        let renderer = render_markdown::MarkdownRenderer::new(&base_dir, &output_dir);
+        let renderer =
+            render_markdown::MarkdownRenderer::new(&base_dir, &output_dir, render_profile.clone());
         let markdown = renderer.render_document(&build)?;
         fs::write(&output_file, markdown)
             .with_context(|| format!("failed to write {}", output_file.display()))?;
@@ -549,8 +594,14 @@ pub(crate) fn build_command(
             d2: theme.d2_theme()?,
         };
         let logo_asset = theme.logo_asset()?;
-        let renderer =
-            render_docx::DocxRenderer::new(cache, &diagram_themes, logger, &base_dir, logo_asset);
+        let renderer = render_docx::DocxRenderer::new(
+            cache,
+            &diagram_themes,
+            logger,
+            &base_dir,
+            logo_asset,
+            render_profile.clone(),
+        );
         let docx_bytes = renderer.render(&build)?;
         fs::write(&output_file, docx_bytes)
             .with_context(|| format!("failed to write {}", output_file.display()))?;
@@ -575,14 +626,11 @@ pub(crate) fn build_command(
     };
 
     // ── Collect and copy assets ─────────────────────────────────────────
-    let document_assets = build.asset_targets().clone();
+    let document_assets =
+        visible_asset_targets_for_profile(build.graph(), &base_dir, &render_profile)?;
     copy_assets(&base_dir, &work_dir, &document_assets, logger)?;
     theme.copy_assets_to(&work_dir)?;
 
-    // ── Build template context from front matter ────────────────────────
-    let mut metadata = build.document_metadata();
-    apply_meta_drops(&mut metadata, meta_drops);
-    apply_meta_overrides(&mut metadata, meta_overrides)?;
     let style = theme.style_css()?;
     let mut template_context = build_template_context(&metadata, style.as_deref())?;
 
@@ -596,13 +644,14 @@ pub(crate) fn build_command(
     match format {
         OutputFormat::Html => {
             let template = theme.template_for(format)?;
-            let toc = build_toc(build.graph());
-            let search_json = search_index::build_search_index(&build);
+            let toc = build_toc(build.graph(), &render_profile)?;
+            let search_json = search_index::build_search_index(&build, &render_profile)?;
             template_context.insert("search_index", &search_json);
             let html = build_html_document(
                 &template,
                 &template_context,
                 &build,
+                &render_profile,
                 &toc,
                 cache,
                 &diagram_themes,
@@ -619,13 +668,20 @@ pub(crate) fn build_command(
                 .path
                 .parent()
                 .ok_or_else(|| anyhow!("root document has no parent directory"))?;
-            let plan = crate::html_site::build_multi_page_plan(&build, root_source_dir, &base_dir)?;
-            let search_json = search_index::build_search_index_multi(&build, &plan);
+            let plan = crate::html_site::build_multi_page_plan(
+                &build,
+                &render_profile,
+                root_source_dir,
+                &base_dir,
+            )?;
+            let search_json =
+                search_index::build_search_index_multi(&build, &render_profile, &plan)?;
             template_context.insert("search_index", &search_json);
             let pages = build_multi_page_html(
                 &template,
                 &template_context,
                 &build,
+                &render_profile,
                 &base_dir,
                 cache,
                 &diagram_themes,
@@ -649,6 +705,7 @@ pub(crate) fn build_command(
                 diagram_themes.plantuml.clone(),
                 diagram_themes.mermaid.clone(),
                 diagram_themes.d2.clone(),
+                render_profile.clone(),
             );
             let body = renderer.render_document(&build, logger)?;
             let typst = render_pdf_template(&template, &template_context, &body)?;
@@ -670,6 +727,7 @@ pub(crate) fn build_command(
                 diagram_themes.plantuml.clone(),
                 diagram_themes.mermaid.clone(),
                 diagram_themes.d2.clone(),
+                render_profile.clone(),
             );
             let body = renderer.render_document(&build, logger)?;
             let typst = render_pdf_template(&template, &template_context, &body)?;
@@ -683,19 +741,163 @@ pub(crate) fn build_command(
     Ok(())
 }
 
+fn normalize_target(target: &str) -> &str {
+    target.trim().trim_matches(['<', '>'])
+}
+
+fn is_resolved_internal_target(target: &str) -> bool {
+    let target = normalize_target(target);
+    target.is_empty()
+        || target.starts_with('#')
+        || target.contains("://")
+        || target.starts_with("mailto:")
+        || target.starts_with("static/")
+}
+
+pub(crate) fn enforce_visible_target_policy(
+    graph: &crate::graph::DocumentGraph,
+    profile: &RenderProfile,
+    mode: BrokenLinkMode,
+) -> Result<()> {
+    let mut issues = Vec::new();
+    for (doc_id, node_ref, _) in graph.rendered_nodes_preorder_visible(profile)? {
+        let doc = graph.document(doc_id);
+        let location = format!("{}:{}", doc.path.display(), node_ref);
+
+        if let rushdown::ast::KindData::Link(link) = doc.arena[node_ref].kind_data() {
+            let target = graph
+                .link_target(doc_id, node_ref)
+                .unwrap_or_else(|| link.destination_str(&doc.source));
+            if !is_resolved_internal_target(target) {
+                issues.push(format!(
+                    "{location}: unresolved visible link target `{}`",
+                    normalize_target(target)
+                ));
+            }
+        }
+
+        if let rushdown::ast::KindData::Image(image) = doc.arena[node_ref].kind_data() {
+            let target = graph
+                .image_target(doc_id, node_ref)
+                .unwrap_or_else(|| image.destination_str(&doc.source));
+            if !is_resolved_internal_target(target) {
+                issues.push(format!(
+                    "{location}: unresolved visible image target `{}`",
+                    normalize_target(target)
+                ));
+            }
+        }
+    }
+
+    if issues.is_empty() {
+        return Ok(());
+    }
+
+    for issue in &issues {
+        eprintln!("{issue}");
+    }
+
+    if mode == BrokenLinkMode::Error {
+        bail!(
+            "aborting due to {} visible broken target{}",
+            issues.len(),
+            if issues.len() == 1 { "" } else { "s" }
+        );
+    }
+
+    Ok(())
+}
+
+pub(crate) fn visible_asset_targets_for_profile(
+    graph: &crate::graph::DocumentGraph,
+    base_dir: &Path,
+    profile: &RenderProfile,
+) -> Result<std::collections::HashSet<PathBuf>> {
+    let mut by_static: std::collections::HashMap<String, PathBuf> =
+        std::collections::HashMap::new();
+    for asset in graph.asset_targets() {
+        let static_path = crate::graph::resolve::static_asset_path(base_dir, asset)?;
+        by_static.insert(
+            static_path.to_string_lossy().replace('\\', "/"),
+            asset.clone(),
+        );
+    }
+
+    let mut visible_assets = std::collections::HashSet::new();
+    for (doc_id, node_ref, _) in graph.rendered_nodes_preorder_visible(profile)? {
+        let doc = graph.document(doc_id);
+        if matches!(
+            doc.arena[node_ref].kind_data(),
+            rushdown::ast::KindData::Link(_)
+        ) {
+            if let Some(target) = graph.link_target(doc_id, node_ref) {
+                let normalized = normalize_target(target);
+                if normalized.starts_with("static/") {
+                    if let Some(asset) = by_static.get(normalized) {
+                        visible_assets.insert(asset.clone());
+                    }
+                }
+            }
+        }
+        if matches!(
+            doc.arena[node_ref].kind_data(),
+            rushdown::ast::KindData::Image(_)
+        ) {
+            if let Some(target) = graph.image_target(doc_id, node_ref) {
+                let normalized = normalize_target(target);
+                if normalized.starts_with("static/") {
+                    if let Some(asset) = by_static.get(normalized) {
+                        visible_assets.insert(asset.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(visible_assets)
+}
+
 fn check_command(
     logger: &DebugDumper,
     cache: &Cache,
     theme: &Theme,
+    format: CheckFormat,
     input: &Path,
     base: Option<&Path>,
+    meta_drops: &[String],
+    meta_overrides: &[(String, String)],
 ) -> Result<()> {
     let (source, base_dir) = resolve_input_and_base(input, base)?;
-    let build = prepare_document(logger, &base_dir, &source, None, BrokenLinkMode::Error)?;
-    let graph = build.graph();
+    let build = prepare_document(logger, &base_dir, &source, None, BrokenLinkMode::Warn)?;
 
-    let anchor_count = graph.anchor_count();
-    let link_count = graph.link_count();
+    let mut metadata = build.document_metadata();
+    apply_meta_drops(&mut metadata, meta_drops);
+    apply_meta_overrides(&mut metadata, meta_overrides)?;
+    let render_profile =
+        RenderProfile::from_metadata(EffectiveFormat::from_check_format(format), &metadata)?;
+
+    enforce_visible_target_policy(build.graph(), &render_profile, BrokenLinkMode::Error)?;
+
+    let graph = build.graph();
+    let visible_nodes = graph.rendered_nodes_preorder_visible(&render_profile)?;
+
+    let anchor_count = visible_nodes
+        .iter()
+        .filter(|(doc_id, node_ref, _)| {
+            graph.document(*doc_id).arena[*node_ref]
+                .attributes()
+                .contains_key("id")
+        })
+        .count();
+    let link_count = visible_nodes
+        .iter()
+        .filter(|(doc_id, node_ref, _)| {
+            matches!(
+                graph.document(*doc_id).arena[*node_ref].kind_data(),
+                rushdown::ast::KindData::Link(_)
+            )
+        })
+        .count();
 
     // ── Diagram themes ──────────────────────────────────────────────────
     let diagram_themes = crate::diagram::DiagramThemes {
@@ -708,7 +910,7 @@ fn check_command(
     let mut diagram_count: usize = 0;
     let mut diagram_errors: Vec<String> = Vec::new();
 
-    for (doc_id, node_ref, _) in graph.rendered_nodes_preorder() {
+    for (doc_id, node_ref, _) in visible_nodes {
         let doc = graph.document(doc_id);
         if !rushdown::matches_extension_kind!(&doc.arena, node_ref, crate::diagram::Diagram) {
             continue;
@@ -800,10 +1002,6 @@ fn check_command(
     Ok(())
 }
 
-/// Output format names recognised by the format-gating fenced-div logic.
-/// Both `html` and `html-multi` output share the `"html"` gate.
-pub(crate) const KNOWN_OUTPUT_FORMATS: &[&str] = &["html", "pdf", "markdown", "confluence"];
-
 /// Fenced-div class names recognised as admonitions (callout blocks).
 pub(crate) const ADMONITION_TYPES: &[&str] =
     &["note", "warning", "important", "caution", "tip", "related"];
@@ -835,6 +1033,8 @@ impl DebugDumper {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::{Map as JsonMap, Value as JsonValue};
+
     use rushdown::ast::{Arena, KindData, NodeRef};
     use rushdown::parser::{self, ParserExtension};
     use rushdown::text::BasicReader;
@@ -898,6 +1098,27 @@ mod tests {
         assert!(
             is_inline_image(&arena, img),
             "image with user class mixed with text should be detected as inline"
+        );
+    }
+
+    #[test]
+    fn repeated_meta_variants_are_collected_as_array() {
+        let mut metadata = JsonMap::new();
+        crate::apply_meta_overrides(
+            &mut metadata,
+            &[
+                ("variants".to_string(), "mts".to_string()),
+                ("variants".to_string(), "foo".to_string()),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(
+            metadata.get("variants"),
+            Some(&JsonValue::Array(vec![
+                JsonValue::String("mts".to_string()),
+                JsonValue::String("foo".to_string()),
+            ]))
         );
     }
 }

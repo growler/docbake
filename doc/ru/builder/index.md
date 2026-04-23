@@ -7,6 +7,8 @@
 - **HTML** — single-page HTML документ с встроенными стилями и таблицей содержания
 - **HTML Multi** — multi-page HTML с навигацией между страницами
 - **PDF** — документ на базе Typst
+- **Typst** — промежуточный `.typ` файл
+- **DOCX (docx-gdoc)** — DOCX в том же формате, что используется в `publish gdoc`
 - **Markdown** — единый Markdown-файл, полученный после раскрытия всех `include`,
   переписывания ссылок и сборки сносок
 
@@ -30,6 +32,7 @@ Commands:
   fmt         Format markdown files in place
   init-theme  Export the default theme to a directory for customisation
   publish     Publish a document to an external platform
+  auth        Manage authentication credentials for external platforms
   help        Print this message or the help of the given subcommand(s)
 
 Options:
@@ -51,7 +54,8 @@ Usage: docbake build [OPTIONS] --format <FORMAT> --input <INPUT>
 
 Options:
   -f, --format <FORMAT>          Output format [possible values: html,
-                                 html-multi, pdf, typst, markdown]
+                                 html-multi, pdf, typst, markdown,
+                                 docx-gdoc]
   -i, --input <INPUT>            Root markdown file
   -o, --output <OUTPUT>          Output file or directory
   -b, --base <BASE>              Base directory for absolute path resolution.
@@ -140,6 +144,16 @@ $ docbake build -f html -i doc.md -o out.html \
 Если промежуточный объект не существует, он будет создан автоматически.
 Переопределение действует только на текущую сборку и не изменяет исходный файл.
 
+Для ключа `variants` повторяющийся `--meta` формирует массив значений:
+
+~~~
+$ docbake build -f html -i doc.md -o out.html \
+    --meta variants enterprise \
+    --meta variants foo
+~~~
+
+Это используется условием `if-variant` в fenced div.
+
 Флаг `--meta-drop KEY` удаляет указанный ключ из метаданных **до** применения
 `--meta`. Это полезно для удаления массивов и вложенных объектов, которые
 невозможно переопределить через `--meta`. Ключ также поддерживает точечную
@@ -164,8 +178,8 @@ $ docbake publish confluence -i doc.md \
     --meta confluence.space "NEWSPACE"
 ~~~
 
-Флаги `--meta` и `--meta-drop` доступны в командах `build`, `serve`, `watch` и
-`publish confluence`.
+Флаги `--meta` и `--meta-drop` доступны в командах `build`, `serve`, `watch`,
+`check`, `publish confluence` и `publish gdoc`.
 
 ## Предварительный просмотр {.unnumbered}
 
@@ -212,12 +226,16 @@ $ docbake watch -f html -i doc/ru/index.md -o target/doc-out/builder.html -b doc
 
 ## Проверка документа {.unnumbered}
 
-Команда `check` загружает документ, проверяет все ссылки и рендерит все
-диаграммы, не находящиеся в кеше. В отличие от `build`, команда не создаёт
-выходных файлов — она предназначена исключительно для валидации.
+Команда `check` загружает документ, проверяет ссылки и рендерит диаграммы для
+выбранного профиля вывода. В отличие от `build`, команда не создаёт выходных
+файлов — она предназначена исключительно для валидации.
+
+Флаг `-f/--format` обязателен и определяет профиль видимости условных fenced div
+(см. [Форматы вывода](formats.md#блоки-для-использования-в-конкретном-формате)).
+Поддерживаемые профили: `html`, `pdf`, `docx`, `confluence`, `markdown`.
 
 ~~~
-$ docbake check -i doc/ru/index.md -b doc
+$ docbake check -f html -i doc/ru/index.md -b doc
 ~~~
 
 При успешной проверке выводится статистика:
@@ -226,8 +244,9 @@ $ docbake check -i doc/ru/index.md -b doc
 check passed: 95 anchors, 82 links, 7 diagrams
 ~~~
 
-Если обнаружена битая ссылка или ошибка рендеринга диаграммы, команда
-завершается с ненулевым кодом возврата и выводит все ошибки.
+Если обнаружена битая ссылка или ошибка рендеринга диаграммы в **видимом** для
+профиля содержимом, команда завершается с ненулевым кодом возврата и выводит все
+ошибки. Скрытые условные блоки не влияют на результат проверки.
 
 Диаграммы рендерятся так же, как при сборке PDF: PlantUML, Mermaid, D2, Draw.io
 и Typst-диаграммы проходят через соответствующие внешние инструменты. Это

@@ -22,6 +22,7 @@ use rushdown_definition_list::definition_list_html_renderer_extension;
 use rushdown_fenced_div::FencedDivHtmlRendererOptions;
 use rushdown_footnote::FootnoteReference;
 
+use crate::conditional::RenderProfile;
 use crate::graph::{DocumentGraph, NodeLocation, PreparedDocument};
 use crate::html::{
     heading_text_html, html_escape, is_admonition_title_heading, render_footnote_reference,
@@ -64,13 +65,16 @@ struct FootnotePlan {
     ordered: Vec<FootnoteEntry>,
 }
 
-fn build_footnote_plan(prepared: &PreparedDocument) -> Result<FootnotePlan> {
+fn build_footnote_plan(
+    prepared: &PreparedDocument,
+    profile: &RenderProfile,
+) -> Result<FootnotePlan> {
     let mut refs = HashMap::new();
     let mut ordered = Vec::<FootnoteEntry>::new();
     let mut by_key = HashMap::<(usize, String), usize>::new();
     let mut next_ref_index = 1usize;
 
-    for (doc_id, node_ref, _) in prepared.graph().rendered_nodes_preorder() {
+    for (doc_id, node_ref, _) in prepared.graph().rendered_nodes_preorder_visible(profile)? {
         let doc = prepared.graph().document(doc_id);
         if !rushdown::matches_extension_kind!(&doc.arena, node_ref, FootnoteReference) {
             continue;
@@ -109,6 +113,7 @@ pub fn build_html_document(
     template: &str,
     context: &tera::Context,
     prepared: &PreparedDocument,
+    profile: &RenderProfile,
     toc: &str,
     cache: &crate::cache::Cache,
     diagram_themes: &DiagramThemes,
@@ -120,7 +125,7 @@ pub fn build_html_document(
     };
 
     let mut body = String::new();
-    let footnotes = build_footnote_plan(prepared)?;
+    let footnotes = build_footnote_plan(prepared, profile)?;
     let renderer = html::Renderer::with_extensions(
         html::Options::default(),
         rushdown_fenced_div::fenced_div_html_renderer_extension(FencedDivHtmlRendererOptions)
@@ -130,9 +135,13 @@ pub fn build_html_document(
             .and(definition_list_html_renderer_extension())
             .and(crate::bracketed_span::bracketed_span_html_renderer_extension())
             .and(crate::caption::caption_html_renderer_extension())
-            .and(format_specific_fenced_div_renderer())
+            .and(format_specific_fenced_div_renderer(profile.clone()))
             .and(diagram_html_renderer_extension(diagram_opts))
-            .and(graph_html_renderer_extension(prepared, footnotes)),
+            .and(graph_html_renderer_extension(
+                prepared,
+                profile.clone(),
+                footnotes,
+            )),
     );
     let root = prepared.graph().root_document();
     renderer
@@ -145,9 +154,9 @@ pub fn build_html_document(
     tera::Tera::one_off(template, &page, false).context("failed to render HTML template")
 }
 
-pub fn build_toc(graph: &DocumentGraph) -> String {
+pub fn build_toc(graph: &DocumentGraph, profile: &RenderProfile) -> Result<String> {
     let mut headings = Vec::new();
-    for (doc_id, node_ref, shift) in graph.rendered_nodes_preorder() {
+    for (doc_id, node_ref, shift) in graph.rendered_nodes_preorder_visible(profile)? {
         let doc = graph.document(doc_id);
         let KindData::Heading(heading) = doc.arena[node_ref].kind_data() else {
             continue;
@@ -228,11 +237,12 @@ pub fn build_toc(graph: &DocumentGraph) -> String {
             html.push_str("</li>\n");
         }
     }
-    html
+    Ok(html)
 }
 
 struct GraphRenderHook<'a> {
     prepared: &'a PreparedDocument,
+    profile: RenderProfile,
     keys: GraphRenderKeys,
 }
 
@@ -261,6 +271,12 @@ impl<'a> GraphRenderHook<'a> {
     ) -> rushdown::Result<()> {
         let doc = self.prepared.graph().document(doc_id);
         for child in doc.arena[doc.doc_ref].children(&doc.arena) {
+            let visible =
+                crate::conditional::node_is_visible(&doc.arena, child, &doc.source, &self.profile)
+                    .map_err(|error| rushdown::Error::io(format!("{error:#}"), None))?;
+            if !visible {
+                continue;
+            }
             if let Some(entries) = self.prepared.graph().include_entries(doc_id, child) {
                 for entry in entries {
                     self.render_document(
@@ -548,17 +564,24 @@ where
     }
 }
 
-fn format_specific_fenced_div_renderer<'cb, W>() -> impl RendererExtension<'cb, W>
+fn format_specific_fenced_div_renderer<'cb, W>(
+    profile: RenderProfile,
+) -> impl RendererExtension<'cb, W>
 where
     W: TextWrite + 'cb,
 {
     RendererExtensionFn::new(move |renderer: &mut Renderer<'cb, W>| {
         renderer.add_node_renderer(
-            |options: html::Options, reg: Rc<RefCell<ContextKeyRegistry>>| {
+            move |options: html::Options, reg: Rc<RefCell<ContextKeyRegistry>>| {
                 let skip_heading_key = reg
                     .borrow_mut()
                     .get_or_create::<NodeRefValue>(SKIP_ADMONITION_HEADING);
-                SharedFormatFencedDivHtmlRenderer::with_options(options, skip_heading_key, false)
+                SharedFormatFencedDivHtmlRenderer::with_options(
+                    options,
+                    skip_heading_key,
+                    false,
+                    profile.clone(),
+                )
             },
             rushdown::renderer::NoRendererOptions,
         );
@@ -567,6 +590,7 @@ where
 
 fn graph_html_renderer_extension<'cb, W>(
     prepared: &'cb PreparedDocument,
+    profile: RenderProfile,
     footnotes: FootnotePlan,
 ) -> impl RendererExtension<'cb, W>
 where
@@ -575,9 +599,11 @@ where
     RendererExtensionFn::new(move |renderer: &mut Renderer<'cb, W>| {
         let ref_footnotes = footnotes.clone();
         let post_footnotes = footnotes.clone();
+        let hook_profile = profile.clone();
         renderer.add_pre_render_hook(
             move |reg: Rc<RefCell<ContextKeyRegistry>>| GraphRenderHook {
                 prepared,
+                profile: hook_profile.clone(),
                 keys: GraphRenderKeys::new(reg),
             },
             rushdown::renderer::NoRendererOptions,
@@ -649,6 +675,7 @@ mod tests {
     use super::{build_html_document, build_toc};
     use crate::cache::Cache;
     use crate::cli::BrokenLinkMode;
+    use crate::conditional::{EffectiveFormat, RenderProfile};
     use crate::diagram::DiagramThemes;
     use crate::graph::prepare_document;
     use crate::DebugDumper;
@@ -658,6 +685,10 @@ mod tests {
             fs::create_dir_all(parent).unwrap();
         }
         fs::write(path, text).unwrap();
+    }
+
+    fn html_profile() -> RenderProfile {
+        RenderProfile::from_metadata(EffectiveFormat::Html, &serde_json::Map::new()).unwrap()
     }
 
     #[test]
@@ -686,7 +717,8 @@ mod tests {
         )
         .unwrap();
 
-        let toc = build_toc(prepared.graph());
+        let profile = html_profile();
+        let toc = build_toc(prepared.graph(), &profile).unwrap();
         assert!(toc.contains("Root"));
         assert!(toc.contains("Visible"));
         assert!(!toc.contains("Hidden Admonition Heading"));
@@ -709,10 +741,12 @@ mod tests {
             Some("test"),
             BrokenLinkMode::Error,
         )?;
+        let profile = html_profile();
         let html = build_html_document(
             "{{ body }}",
             &tera::Context::new(),
             &prepared,
+            &profile,
             "",
             &Cache::new(None, true)?,
             &DiagramThemes::default(),
