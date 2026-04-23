@@ -1,3 +1,20 @@
+docbake (0.1.9) unstable; urgency=medium
+
+  * feat: Google Docs publishing support with OAuth2
+    authentication and document formatting
+  * feat: new `fmt` command for Markdown reformatting
+  * feat: doc server site generation (html-multi)
+  * fix: harden OAuth randomness, enforce HTTPS-only
+    for Confluence
+  * fix: harden path resolution and attachment identity
+  * fix: preserve ordered list delimiters in fmt
+  * fix: keep spaced destinations wrapped in fmt
+  * fix: use rushdown-footnotes to collect links
+  * refactor: split diagram module into submodules,
+    consolidate renderer context structs
+
+ -- Alexey Naidyonov <alexey.naidyonov@gmail.com>  Thu, 23 Apr 2026 11:37:53 +0200
+
 docbake (0.1.8) unstable; urgency=medium
 
   * fix: make PDF tables and code blocks breakable 
