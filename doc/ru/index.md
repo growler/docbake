@@ -4,10 +4,20 @@ lang:    ru-RU
 version: 0.1.0
 confluence: 
   server: https://confluence.example.com
-  space: ~growler
+  space: SA
+  path:
+    - id:204837448
+    - "Система публикации документации"
 google-docs:
   id: https://docs.google.com/document/d/GOOGLE_DOC_ID
 ---
+:::: {if-format="confluence"} :::::::::::
+:::warning
+Эта страница сгенирирована автоматически. Ее исходник находится в [репозитории
+проекта](https://git.example.com/docbake/-/tree/main/doc)
+:::
+:::
+
 # Назначение
 
 Цель проекта состоит в валидации технической документации, написанной в Markdown
