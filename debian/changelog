@@ -1,3 +1,16 @@
+docbake (0.1.11) unstable; urgency=medium
+
+  * feat: add --meta-file YAML metadata overlays for build/serve/watch/check and
+    publish flows, with deterministic precedence (front matter -> --meta-file ->
+    --meta-drop -> --meta)
+  * refactor: route markdown export through graph-aware fmt and isolate rewrite
+    policy in render_markdown with stable base-relative asset paths
+  * fix: keep critical warning blocks before Confluence TOC and restore anchor
+    fidelity for non-heading IDs
+  * fix: resolve title-based markdown link shortcuts across graph include targets
+
+ -- Alexey Naidyonov <alexey.naidyonov@gmail.com>  Thu, 23 Apr 2026 22:27:45 +0200
+
 docbake (0.1.10) unstable; urgency=high
 
   * fix: wrong tagging 
