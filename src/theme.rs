@@ -9,14 +9,14 @@ use crate::cli::OutputFormat;
 // Embedded default theme
 // ============================================================================
 
-const DEFAULT_TEMPLATE_HTML: &str = include_str!("../default_theme/template.html");
-const DEFAULT_TEMPLATE_MULTIPAGE: &str = include_str!("../default_theme/template-multipage.html");
-const DEFAULT_TEMPLATE_TYP: &str = include_str!("../default_theme/template.typ");
-const DEFAULT_STYLE_CSS: &str = include_str!("../default_theme/style.css");
-const DEFAULT_THEME_PUML: &str = include_str!("../default_theme/theme.puml");
-const DEFAULT_THEME_MMD: &str = include_str!("../default_theme/theme.mmd");
-const DEFAULT_THEME_D2: &str = include_str!("../default_theme/theme.d2");
-const DEFAULT_LOGO_SVG: &[u8] = include_bytes!("../default_theme/assets/logo.svg");
+const DEFAULT_TEMPLATE_HTML: &str = include_str!("../themes/default/template.html");
+const DEFAULT_TEMPLATE_MULTIPAGE: &str = include_str!("../themes/default/template-multipage.html");
+const DEFAULT_TEMPLATE_TYP: &str = include_str!("../themes/default/template.typ");
+const DEFAULT_STYLE_CSS: &str = include_str!("../themes/default/style.css");
+const DEFAULT_THEME_PUML: &str = include_str!("../themes/default/theme.puml");
+const DEFAULT_THEME_MMD: &str = include_str!("../themes/default/theme.mmd");
+const DEFAULT_THEME_D2: &str = include_str!("../themes/default/theme.d2");
+const DEFAULT_LOGO_SVG: &[u8] = include_bytes!("../themes/default/assets/logo.svg");
 
 /// Files included in the default theme for export via `init-theme`.
 const DEFAULT_THEME_FILES: &[(&str, &str)] = &[

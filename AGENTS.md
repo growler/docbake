@@ -97,7 +97,7 @@ theme-dir/
   assets/                    # Static files referenced by templates
 ```
 
-The default theme is embedded in the binary (`default_theme/` directory,
+The default theme is embedded in the binary (`themes/default/` directory,
 compiled via `include_str!`). Use `init-theme` to export it for customisation.
 
 Template context variables are documented in comments at the top of each default
