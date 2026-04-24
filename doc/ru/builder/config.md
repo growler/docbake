@@ -22,8 +22,8 @@ theme-dir/
 
 ## Тема по умолчанию
 
-Если флаг `-t`/`--theme` не указан, Сборщик использует встроенную тему по
-умолчанию, скомпилированную в исполняемый файл. Тема по умолчанию использует
+Если флаг `-t`/`--theme` не указан, Сборщик использует встроенную тему
+`blank`, скомпилированную в исполняемый файл. Тема по умолчанию использует
 шрифты ParaType:
 
 - **PT Sans** — основной шрифт HTML и диаграмм
@@ -44,6 +44,17 @@ template.typ  theme.d2  theme.mmd  theme.puml
 
 ~~~
 $ docbake -t my-theme build -f page -i doc/ru/index.md -o target/out.html -b doc
+~~~
+
+Флаг `-t`/`--theme` разрешается в следующем порядке:
+
+1. Имя встроенной темы (`blank`, `blank`, `digitaltide`)
+2. Путь к локальному каталогу темы
+
+Например, команда ниже явно выбирает встроенную тему `digitaltide`:
+
+~~~
+$ docbake -t digitaltide build -f page -i doc/ru/index.md -o target/out.html -b doc
 ~~~
 
 ## Базовый каталог {#base-dir}

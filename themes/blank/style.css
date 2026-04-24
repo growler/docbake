@@ -1,0 +1,1206 @@
+/* ══════════════════════════════════════════════════════════════════════════
+   docbake default theme stylesheet
+   ══════════════════════════════════════════════════════════════════════════
+   This file is auto-injected into HTML templates as {{ style | safe }}.
+   To customise, run `docbake init-theme <dir>` and edit the copy.
+
+   Design tokens (CSS custom properties) are defined in :root so that
+   downstream themes can override colours and spacing in one place.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+@media only screen {
+
+/* ── Design tokens ──────────────────────────────────────────────────────── */
+:root {
+    /* Typography */
+    --font-sans:  "PT Sans", "Segoe UI", -apple-system, sans-serif;
+    --font-mono:  "PT Mono", "JetBrains Mono", "Fira Code", "Cascadia Code", ui-monospace,
+                  "SF Mono", "Consolas", monospace;
+    --font-size-base: 16px;
+    --line-height:    1.6;
+
+    /* Colour palette — neutral slate base with blue accent */
+    --c-bg:           #ffffff;
+    --c-surface:      #f6f9fc;
+    --c-surface-alt:  #edf3f9;
+    --c-border:       #d6e0ea;
+    --c-border-light: #eef3f8;
+
+    --c-text:         #162335;
+    --c-text-secondary: #3e5169;
+    --c-text-tertiary:  #7487a0;
+
+    --c-accent:       #0f5fbc;
+    --c-accent-hover: #0b4c97;
+    --c-accent-bg:    #e7f0fc;
+
+    /* Layout */
+    --content-max-w:  104rem;
+    --nav-width:      16.5rem;
+    --toc-page-width: 14.25rem;
+    --header-offset:  4.35rem;
+    --anchor-offset:  var(--header-offset);
+    --radius:         6px;
+    --radius-lg:      8px;
+}
+
+
+/* ── Base reset & typography ────────────────────────────────────────────── */
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+}
+
+body {
+    max-width: var(--content-max-w);
+    margin: 0 auto;
+    padding: var(--header-offset) 0 0;
+    font-family: var(--font-sans);
+    font-size: var(--font-size-base);
+    line-height: var(--line-height);
+    color: var(--c-text);
+    background: var(--c-bg);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+main :where([id]) {
+    scroll-margin-top: var(--anchor-offset);
+}
+
+code, pre, kbd, samp {
+    font-family: var(--font-mono);
+}
+
+
+/* ── Inline images (emoji-sized icons in text) ──────────────────────────── */
+.inline-image {
+    height: 0.85em;
+    vertical-align: -0.1em;
+}
+
+
+/* ── Document header / title block ──────────────────────────────────────── */
+#title-block-header {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 70;
+    padding: 0.7rem 1.1rem;
+    margin-bottom: 0;
+    border-bottom: 1px solid var(--c-border);
+    background: color-mix(in srgb, var(--c-bg) 95%, var(--c-surface));
+    backdrop-filter: blur(8px);
+    box-shadow: 0 1px 0 rgba(22, 35, 53, 0.03);
+}
+
+#title-block-header .title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.85rem;
+    max-width: var(--content-max-w);
+    margin: 0 auto;
+}
+
+#title-block-header .title-brand {
+    display: flex;
+    align-items: center;
+    gap: 0.68rem;
+    min-width: 0;
+}
+
+#title-block-header .title-logo {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    line-height: 0;
+}
+
+#title-block-header .site-logo {
+    display: block;
+    height: 1.38rem;
+    width: auto;
+}
+
+#title-block-header .title-meta {
+    min-width: 0;
+}
+
+#title-block-header .title {
+    font-size: 1.2rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+    margin: 0;
+    color: var(--c-text);
+}
+
+/* In multi-page mode the title is a link back to root — keep it dark
+   and only reveal the link affordance on hover.                        */
+#title-block-header .title a {
+    color: inherit;
+    text-decoration: none;
+}
+
+#title-block-header .title a:hover {
+    color: var(--c-accent);
+}
+
+#title-block-header .subtitle {
+    font-size: 0.88rem;
+    color: var(--c-text-secondary);
+    margin: 0.2rem 0 0;
+}
+
+#title-block-header .author {
+    font-size: 0.9rem;
+    color: var(--c-text-secondary);
+    margin: 0.75rem 0 0;
+}
+
+#title-block-header .date {
+    font-size: 0.85rem;
+    color: var(--c-text-tertiary);
+    margin: 0.25rem 0 0;
+}
+
+/* Abstract block inside the header */
+#title-block-header .abstract {
+    margin-top: 1.5rem;
+    padding: 1.25rem 1.5rem;
+    background: var(--c-surface);
+    border: 1px solid var(--c-border);
+    border-radius: var(--radius-lg);
+}
+
+#title-block-header .abstract-title {
+    font-weight: 600;
+    font-size: 0.9rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--c-text-secondary);
+    margin-bottom: 0.5rem;
+}
+
+main {
+    padding: 0.65rem 0.95rem var(--anchor-offset);
+    text-wrap: pretty;
+}
+
+
+/* ── Content headings ───────────────────────────────────────────────────── */
+/* All content headings share a consistent weight and colour system.
+   Bottom borders on h1/h2 provide visual section separation.          */
+
+main h1, main h2, main h3, main h4, main h5, main h6 {
+    color: var(--c-text);
+    font-weight: 600;
+    line-height: 1.3;
+    margin-top: 1.35rem;
+    margin-bottom: 0.55rem;
+}
+
+main h1 {
+    font-size: 2.05rem;
+    padding-bottom: 0.42rem;
+    border-bottom: 2px solid var(--c-border);
+    letter-spacing: -0.02em;
+}
+
+main h2 {
+    font-size: 1.5rem;
+    padding-bottom: 0.28rem;
+    border-bottom: 1px solid var(--c-border);
+}
+
+main h3 { font-size: 1.25rem; }
+main h4 { font-size: 1.15rem; }
+main h5 { font-size: 1rem; }
+main h6 { font-size: 0.9rem; color: var(--c-text-secondary); }
+
+main > .breadcrumbs + h1 {
+    margin-top: 0.55rem;
+}
+
+/* First heading in main should not have excessive top margin */
+main > h1:first-child,
+main > h2:first-child,
+main > h3:first-child {
+    margin-top: 0;
+}
+
+
+/* ── Paragraphs ─────────────────────────────────────────────────────────── */
+p {
+    margin: 0 0 0.72rem;
+}
+
+
+/* ── Links ──────────────────────────────────────────────────────────────── */
+a {
+    color: var(--c-accent);
+    text-decoration: none;
+}
+
+a:hover {
+    color: var(--c-accent-hover);
+    text-decoration: underline;
+}
+
+
+/* ── Inline code ────────────────────────────────────────────────────────── */
+/* Subtle background and border to distinguish code from prose without
+   being distracting.  Slightly smaller font to optically match text.  */
+
+:not(pre) > code {
+    font-size: 0.875em;
+    padding: 0.15em 0.4em;
+    background: var(--c-surface);
+    border: 1px solid var(--c-border);
+    border-radius: 4px;
+    word-break: break-word;
+}
+
+
+/* ── Code blocks ────────────────────────────────────────────────────────── */
+pre {
+    border: 1px solid var(--c-border);
+    border-radius: var(--radius);
+    padding: 1rem 1.25rem !important;
+    overflow-x: auto;
+    font-size: 0.875em;
+    line-height: 1.55;
+    background-color: var(--c-surface) !important;
+    margin: 1.25rem 0;
+}
+
+pre code {
+    background: none;
+    border: none;
+    padding: 0;
+    font-size: inherit;
+}
+
+/* ── Line-numbered code blocks ──────────────────────────────────────────── */
+/* Activated by the `start=N` attribute on fenced code blocks.
+   Line numbers are rendered via CSS counters on per-line wrapper spans.   */
+
+pre.line-numbers .code-line {
+    display: block;
+}
+
+pre.line-numbers .code-line::before {
+    counter-increment: line-number;
+    content: counter(line-number);
+    display: inline-block;
+    min-width: 2em;
+    padding-right: 1em;
+    text-align: right;
+    color: var(--c-text-tertiary);
+    user-select: none;
+    -webkit-user-select: none;
+    border-right: 1px solid var(--c-border);
+    margin-right: 1em;
+}
+
+/* Mermaid diagrams render as SVG — remove code-block chrome */
+pre.mermaid {
+    border: none;
+    border-radius: 0;
+    padding: 0 !important;
+    background-color: transparent !important;
+}
+
+
+/* ── Blockquotes ────────────────────────────────────────────────────────── */
+/* Left accent bar with a subtle background tint.  Nested quotes get a
+   slightly different border colour to maintain visual hierarchy.        */
+
+blockquote {
+    margin: 1.25rem 0;
+    padding: 0.75rem 1.25rem;
+    border-left: 3px solid var(--c-accent);
+    background: var(--c-accent-bg);
+    color: var(--c-text-secondary);
+    border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+blockquote > p:last-child {
+    margin-bottom: 0;
+}
+
+blockquote blockquote {
+    border-left-color: var(--c-border);
+    background: var(--c-surface);
+}
+
+
+/* ── Admonitions (callout blocks) ────────────────────────────────────────── */
+/* Fenced divs with classes: note, warning, important, caution, tip, related.
+   Inspired by Quarto callout blocks — coloured left border, tinted
+   background, and an optional heading used as the callout title.          */
+
+/* -- Design tokens per type -------------------------------------------- */
+.admonition { --adm-color: var(--c-accent);      --adm-bg: #eff6ff; }
+.admonition.note      { --adm-color: #2563eb; --adm-bg: #eff6ff; }
+.admonition.tip       { --adm-color: #16a34a; --adm-bg: #f0fdf4; }
+.admonition.warning   { --adm-color: #d97706; --adm-bg: #fffbeb; }
+.admonition.caution   { --adm-color: #ea580c; --adm-bg: #fff7ed; }
+.admonition.important { --adm-color: #dc2626; --adm-bg: #fef2f2; }
+.admonition.related   { --adm-color: #64748b; --adm-bg: #f8fafc; }
+
+/* -- Base box ---------------------------------------------------------- */
+.admonition {
+    margin: 1.25rem 0;
+    padding: 0;
+    border-left: 4px solid var(--adm-color);
+    background: var(--adm-bg);
+    border-radius: 0 var(--radius) var(--radius) 0;
+    overflow: hidden;
+}
+
+/* -- Title: explicit .admonition-title element ------------------------- */
+.admonition > .admonition-title {
+    margin: 0;
+    padding: 0.6rem 1rem;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--adm-color);
+    background: color-mix(in srgb, var(--adm-color) 10%, transparent);
+    border-bottom: none;
+    letter-spacing: 0;
+}
+
+/* -- Default title via ::before when no explicit title is present ------ */
+.admonition:not(:has(> .admonition-title))::before {
+    display: block;
+    padding: 0.6rem 1rem;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--adm-color);
+    background: color-mix(in srgb, var(--adm-color) 10%, transparent);
+}
+.admonition.note:not(:has(> .admonition-title))::before      { content: "Note"; }
+.admonition.warning:not(:has(> .admonition-title))::before   { content: "Warning"; }
+.admonition.important:not(:has(> .admonition-title))::before { content: "Important"; }
+.admonition.caution:not(:has(> .admonition-title))::before   { content: "Caution"; }
+.admonition.tip:not(:has(> .admonition-title))::before       { content: "Tip"; }
+.admonition.related:not(:has(> .admonition-title))::before   { content: "Related"; }
+
+/* -- Body content padding ---------------------------------------------- */
+/* Direct children after the title (or all if no title). */
+.admonition > *:not(.admonition-title) {
+    margin-left: 1rem;
+    margin-right: 1rem;
+}
+
+/* First body element after the title gets top spacing. */
+.admonition > .admonition-title + * {
+    margin-top: 0.75rem;
+}
+
+/* When there's no title, the first element needs top padding. */
+.admonition > :first-child:not(.admonition-title) {
+    margin-top: 0.75rem;
+}
+
+/* Last body element gets bottom spacing. */
+.admonition > :last-child {
+    margin-bottom: 0.75rem;
+}
+
+/* Paragraphs inside admonitions shouldn't have excessive bottom margin. */
+.admonition > p:last-child {
+    margin-bottom: 0.75rem;
+}
+
+
+/* ── Horizontal rules ───────────────────────────────────────────────────── */
+hr {
+    border: none;
+    border-top: 1px solid var(--c-border);
+    margin: 2rem 0;
+}
+
+
+/* ── Lists ──────────────────────────────────────────────────────────────── */
+ul, ol {
+    margin: 1rem 0;
+    padding-left: 1.75em;
+}
+
+li {
+    margin: 0.25rem 0;
+}
+
+li > p {
+    margin: 0.5rem 0;
+}
+
+/* Task list checkboxes */
+li input[type="checkbox"] {
+    margin-right: 0.4em;
+}
+
+
+/* ── Definition lists ───────────────────────────────────────────────────── */
+dl {
+    margin: 1.25rem 0;
+}
+
+dt {
+    font-weight: 600;
+    margin-top: 1rem;
+    color: var(--c-text);
+}
+
+dd {
+    margin-left: 1.5em;
+    margin-top: 0.25em;
+    margin-bottom: 0.5em;
+    padding-left: 1em;
+    border-left: 3px solid var(--c-border);
+}
+
+dd > p {
+    margin-bottom: 0.5rem;
+}
+
+dd > pre {
+    margin-top: 0.5rem;
+}
+
+
+/* ── Tables ─────────────────────────────────────────────────────────────── */
+/* Clean, bordered tables with alternating row stripes.  Slightly rounded
+   outer corners via overflow clipping on the wrapper.                   */
+
+table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1.5rem 0;
+    font-size: 0.9em;
+}
+
+th, td {
+    border: 1px solid var(--c-border);
+    padding: 0.6rem 1rem;
+    text-align: left;
+}
+
+th {
+    background-color: var(--c-surface-alt);
+    font-weight: 600;
+    color: var(--c-text);
+}
+
+tbody tr:nth-child(even) {
+    background-color: var(--c-surface);
+}
+
+tbody tr:hover {
+    background-color: var(--c-accent-bg);
+}
+
+
+/* ── Figures & captions ─────────────────────────────────────────────────── */
+figure {
+    margin: 1.75rem 0;
+    text-align: center;
+}
+
+figure img,
+figure svg {
+    max-width: 100%;
+    height: auto;
+}
+
+figcaption {
+    font-size: 0.875em;
+    font-style: italic;
+    color: var(--c-text-secondary);
+    margin-top: 0.5rem;
+    margin-bottom: 0.25rem;
+}
+
+/* Listing (code block) captions — left-aligned, caption above. */
+figure.listing {
+    text-align: left;
+}
+
+figure.listing figcaption {
+    margin-top: 0;
+    margin-bottom: 0.5rem;
+}
+
+figure.listing > pre {
+    margin-top: 0;
+}
+
+
+/* ── Images ─────────────────────────────────────────────────────────────── */
+main img {
+    max-width: 100%;
+    height: auto;
+}
+
+
+/* ── Footnotes ──────────────────────────────────────────────────────────── */
+/* Footnote section is visually separated from the body.  Footnote refs
+   are rendered as superscript links.                                    */
+
+.footnotes {
+    margin-top: 3rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--c-border);
+    font-size: 0.875em;
+    color: var(--c-text-secondary);
+}
+
+sup a {
+    font-size: 0.75em;
+    text-decoration: none;
+    padding: 0 0.15em;
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════
+   LAYOUT — sidebar navigation + main content
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* ── Small screens: hide the sidebars ──────────────────────────────────── */
+} /* close @media only screen */
+
+@media only screen and (max-width: 60em) {
+    #title-block-header .title-row {
+        flex-wrap: wrap;
+        align-items: stretch;
+    }
+
+    #title-block-header .title-search {
+        width: 100%;
+    }
+
+    #title-block-header .site-logo {
+        height: 1.2rem;
+    }
+
+    body {
+        padding-top: 0;
+    }
+
+    #title-block-header {
+        position: sticky;
+        left: auto;
+        right: auto;
+    }
+
+    #sidebar {
+        display: none;
+    }
+    .toc-page {
+        display: none;
+    }
+}
+
+/* ── Large screens: sidebar + content flex layout ───────────────────────── */
+@media only screen and (min-width: 60em) {
+    .content-wrap {
+        display: flex;
+        align-items: flex-start;
+        gap: 0;
+        padding: 0 0.9rem;
+    }
+
+    main {
+        flex: 1;
+        min-width: 0;           /* prevent flex children from overflowing  */
+        padding: 0.6rem 1.1rem var(--anchor-offset) 1.1rem;
+    }
+
+    /* ── Sidebar navigation ─────────────────────────────────────────────── */
+    /* Fixed-width sidebar that sticks to the top on scroll.  The content
+       is scrollable independently when it overflows the viewport.       */
+
+    #sidebar {
+        position: sticky;
+        top: var(--header-offset);
+        width: var(--nav-width);
+        flex-shrink: 0;
+        max-height: calc(100vh - var(--header-offset));
+        padding: 0.72rem 0.8rem 0.72rem 0;
+        border-right: 1px solid var(--c-border);
+        overflow-y: auto;
+        font-size: 0.89rem;
+        line-height: 1.5;
+        background: linear-gradient(180deg, color-mix(in srgb, var(--c-surface) 72%, white), transparent 28%);
+    }
+
+    /* Custom scrollbar for the nav (WebKit) */
+    #sidebar::-webkit-scrollbar {
+        width: 4px;
+    }
+
+    #sidebar::-webkit-scrollbar-thumb {
+        background: var(--c-border);
+        border-radius: 4px;
+    }
+
+    #sidebar::-webkit-scrollbar-track {
+        background: transparent;
+    }
+
+    /* ── TOC list structure ─────────────────────────────────────────────── */
+    #sidebar ul {
+        list-style-type: none;
+        padding-left: 0;
+        margin: 0;
+    }
+
+    /* Nested levels use a guide rail + offset to keep hierarchy obvious. */
+    #sidebar ul ul {
+        padding-left: 0;
+    }
+
+    #sidebar > li > ul,
+    #sidebar > ul > li > ul {
+        margin: 0.08rem 0 0.28rem 0.95rem;
+        padding-left: 0.62rem;
+        border-left: 1px solid var(--c-border);
+    }
+
+    #sidebar > li > ul > li > ul,
+    #sidebar > ul > li > ul > li > ul {
+        margin: 0.06rem 0 0.16rem 0.72rem;
+        padding-left: 0.54rem;
+        border-left: 1px solid var(--c-border-light);
+    }
+
+    #sidebar li {
+        margin: 0;
+    }
+
+    #sidebar a {
+        display: block;
+        padding: 0.22rem 0.55rem;
+        color: var(--c-text-secondary);
+        text-decoration: none;
+        border-radius: 4px;
+        transition: color 0.15s, background-color 0.15s;
+    }
+
+    #sidebar a:hover {
+        color: var(--c-accent);
+        background-color: var(--c-accent-bg);
+        text-decoration: none;
+    }
+
+    /* Multipage: mark current page in nav */
+    #sidebar .current > a {
+        font-weight: 600;
+        color: var(--c-accent-hover);
+        background-color: color-mix(in srgb, var(--c-accent-bg) 70%, white);
+        box-shadow: inset 2px 0 0 var(--c-accent);
+    }
+
+    /* Top-level TOC items are slightly bolder for hierarchy.
+       Extra top margin creates visual section grouping.        */
+    #sidebar > li,
+    #sidebar > ul > li {
+        margin-top: 0.24rem;
+    }
+
+    #sidebar > li:first-child,
+    #sidebar > ul > li:first-child {
+        margin-top: 0;
+    }
+
+    #sidebar > li > a,
+    #sidebar > ul > li > a,
+    #sidebar > li > .toc-link-row > a,
+    #sidebar > ul > li > .toc-link-row > a {
+        font-weight: 600;
+        color: var(--c-text);
+        padding: 0.28rem 0.55rem;
+    }
+
+    #sidebar > li > ul > li > .toc-link-row > a,
+    #sidebar > li > ul > li > a,
+    #sidebar > ul > li > ul > li > .toc-link-row > a,
+    #sidebar > ul > li > ul > li > a {
+        font-size: 0.845rem;
+        color: var(--c-text-secondary);
+        padding-left: 0.5rem;
+    }
+
+    #sidebar > li > a:hover,
+    #sidebar > ul > li > a:hover,
+    #sidebar > li > .toc-link-row > a:hover,
+    #sidebar > ul > li > .toc-link-row > a:hover {
+        color: var(--c-accent);
+    }
+
+    /* ── Collapsible TOC sections ──────────────────────────────────────── */
+    /* Items with children are collapsible.  The nested <ul> is hidden by
+       default; adding .toc-expanded reveals it.  A small toggle chevron
+       button is injected by JavaScript.                                  */
+
+    #sidebar li.toc-collapsible > ul {
+        display: none;
+    }
+
+    #sidebar li.toc-collapsible.toc-expanded > ul {
+        display: block;
+    }
+
+    /* Toggle chevron button — inline before the link */
+    #sidebar .toc-toggle {
+        appearance: none;
+        background: none;
+        border: none;
+        cursor: pointer;
+        padding: 0;
+        margin: 0;
+        width: 1rem;
+        height: 1rem;
+        flex-shrink: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--c-text-tertiary);
+        transition: transform 0.15s ease, color 0.15s;
+        vertical-align: middle;
+    }
+
+    #sidebar .toc-toggle:hover {
+        color: var(--c-accent);
+    }
+
+    #sidebar .toc-toggle svg {
+        width: 0.55rem;
+        height: 0.55rem;
+    }
+
+    /* Rotate chevron when expanded */
+    #sidebar li.toc-expanded > .toc-link-row > .toc-toggle {
+        transform: rotate(90deg);
+    }
+
+    /* Wrap each TOC entry's toggle + link in a flex row */
+    #sidebar .toc-link-row {
+        display: flex;
+        align-items: baseline;
+        gap: 0.1rem;
+    }
+
+    /* The <a> inside a link-row should grow to fill available space */
+    #sidebar .toc-link-row > a {
+        flex: 1;
+        min-width: 0;
+    }
+
+    /* ── Sidebar collapse button ───────────────────────────────────────── */
+    .sidebar-collapse {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 100%;
+        padding: 0.4rem 0;
+        margin-top: 0.5rem;
+        background: none;
+        border: 1px solid var(--c-border);
+        border-radius: var(--radius);
+        cursor: pointer;
+        color: var(--c-text-tertiary);
+        font-size: 0.75rem;
+        letter-spacing: 0.05em;
+        transition: background-color 0.15s, color 0.15s;
+    }
+
+    .sidebar-collapse:hover {
+        background-color: var(--c-surface-alt);
+        color: var(--c-text-secondary);
+    }
+
+    .sidebar-collapse svg {
+        width: 1rem;
+        height: 1rem;
+    }
+
+    /* Collapsed state: sidebar shrinks to just the expand button */
+    .content-wrap.sidebar-hidden #sidebar {
+        width: auto;
+        padding: 1.5rem 0.5rem;
+        border-right: 1px solid var(--c-border);
+        overflow: visible;
+    }
+
+    .content-wrap.sidebar-hidden #sidebar > *:not(.sidebar-collapse) {
+        display: none;
+    }
+
+    .content-wrap.sidebar-hidden .sidebar-collapse {
+        width: 2rem;
+        height: 2rem;
+        padding: 0;
+        margin-top: 0;
+        border: none;
+    }
+
+    /* ── Right sidebar: intra-page TOC ("On this page") ────────────────── */
+    /* Sticky aside on the right showing the current page's headings.
+       Mirrors the Docusaurus-style on-this-page navigation.              */
+
+    .toc-page {
+        position: sticky;
+        top: var(--header-offset);
+        width: var(--toc-page-width);
+        flex-shrink: 0;
+        max-height: calc(100vh - var(--header-offset));
+        padding: 0.72rem 0 0.72rem 0.78rem;
+        border-left: 1px solid var(--c-border);
+        overflow-y: auto;
+        font-size: 0.84rem;
+        line-height: 1.5;
+        background: color-mix(in srgb, var(--c-surface) 65%, white);
+    }
+
+    /* Custom scrollbar for the right sidebar (WebKit) */
+    .toc-page::-webkit-scrollbar {
+        width: 4px;
+    }
+
+    .toc-page::-webkit-scrollbar-thumb {
+        background: var(--c-border);
+        border-radius: 4px;
+    }
+
+    .toc-page::-webkit-scrollbar-track {
+        background: transparent;
+    }
+
+    .toc-page-title {
+        font-size: 0.68rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--c-text-tertiary);
+        margin-bottom: 0.42rem;
+    }
+
+    .toc-page ul {
+        list-style-type: none;
+        padding-left: 0;
+        margin: 0;
+    }
+
+    .toc-page ul ul {
+        padding-left: 0.75rem;
+    }
+
+    .toc-page li {
+        margin: 0;
+    }
+
+    .toc-page a {
+        display: block;
+        padding: 0.2rem 0.46rem;
+        color: var(--c-text-secondary);
+        text-decoration: none;
+        border-left: 2px solid transparent;
+        border-radius: 0 4px 4px 0;
+        transition: color 0.15s, border-color 0.15s, background-color 0.15s;
+    }
+
+    .toc-page a:hover {
+        color: var(--c-accent);
+        background-color: var(--c-accent-bg);
+    }
+
+    /* Scroll-spy active state */
+    .toc-page a.active {
+        color: var(--c-accent-hover);
+        border-left-color: var(--c-accent);
+        font-weight: 500;
+        background-color: color-mix(in srgb, var(--c-accent-bg) 58%, white);
+    }
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════
+   Breadcrumbs
+   ════════════════════════════════════════════════════════════════════════ */
+@media only screen {
+    .breadcrumbs {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.08rem;
+        font-size: 0.84rem;
+        line-height: 1.3;
+        color: var(--c-text-secondary);
+        margin: 0;
+        padding: 0;
+        width: auto;
+        max-height: none;
+        overflow: visible;
+        border: none;
+        background: none;
+        box-shadow: none;
+        position: static;
+    }
+
+    .breadcrumbs a {
+        display: inline-block;
+        padding: 0.03rem 0.1rem;
+        color: var(--c-text-secondary);
+        text-decoration: none;
+        border-radius: 0.2rem;
+        transition: color 0.15s;
+    }
+
+    .breadcrumbs a:hover {
+        color: var(--c-accent);
+        text-decoration: none;
+    }
+
+    .breadcrumb-sep {
+        margin: 0 0.1rem;
+        color: var(--c-text-tertiary);
+        user-select: none;
+        font-size: 0.64rem;
+    }
+
+    .breadcrumb-current {
+        display: inline-block;
+        padding: 0.03rem 0.1rem;
+        color: var(--c-accent-hover);
+        font-weight: 600;
+        background-color: transparent;
+        border-radius: 0.2rem;
+    }
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════
+   Multipage navigation bar (prev / up / next)
+   ════════════════════════════════════════════════════════════════════════ */
+@media only screen {
+    .page-nav {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0.6rem;
+        margin: 1.15rem 0 0.55rem;
+        padding-top: 0.75rem;
+        border-top: 1px solid var(--c-border-light);
+    }
+
+    .page-nav a,
+    .page-nav a:link,
+    .page-nav a:visited {
+        display: flex;
+        flex-direction: column;
+        padding: 0.62rem 0.72rem;
+        border: 1px solid var(--c-border);
+        border-radius: var(--radius);
+        color: var(--c-text-secondary) !important;
+        text-decoration: none;
+        font-weight: 600;
+        font-size: 0.95rem;
+        background: color-mix(in srgb, var(--c-surface) 38%, white);
+        transition: border-color 0.15s, background-color 0.15s, color 0.15s;
+    }
+
+    .page-nav a:hover {
+        border-color: var(--c-border);
+        background-color: color-mix(in srgb, var(--c-surface) 55%, white);
+        color: var(--c-text);
+        text-decoration: none;
+    }
+
+    .page-nav a::before {
+        display: block;
+        font-size: 0.66rem;
+        font-weight: 400;
+        color: var(--c-text-secondary);
+        margin-bottom: 0.1rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+
+    .page-nav .prev { grid-column: 1; text-align: left; }
+    .page-nav .prev::before { content: "Previous"; }
+
+    .page-nav .next { grid-column: 2; text-align: right; }
+    .page-nav .next::before { content: "Next"; align-self: flex-end; }
+
+    .page-nav .prev,
+    .page-nav .next {
+        color: var(--c-text-secondary) !important;
+    }
+
+    .page-nav .prev::before,
+    .page-nav .next::before,
+    .page-nav .up::before {
+        color: var(--c-text-tertiary);
+    }
+
+    .page-nav .up { grid-column: 1 / -1; text-align: center; }
+    .page-nav .up::before { content: "Up"; }
+}
+
+
+/* ════════════════════════════════════════════════════════════════════════
+   Search box and results dropdown
+   ════════════════════════════════════════════════════════════════════════ */
+@media only screen {
+
+    /* ── Search container ───────────────────────────────────────────────── */
+    /* Wraps the input and results dropdown.  `position: relative` anchors
+       the absolutely-positioned results list.                             */
+
+    .search-wrap {
+        position: relative;
+        margin-bottom: 0;
+    }
+
+    .title-search {
+        width: min(25rem, 42vw);
+        margin-left: auto;
+    }
+
+    /* ── Search input ───────────────────────────────────────────────────── */
+    .search-input {
+        width: 100%;
+        padding: 0.45rem 0.62rem 0.45rem 2rem;
+        font-family: var(--font-sans);
+        font-size: 0.845rem;
+        line-height: 1.4;
+        color: var(--c-text);
+        background: color-mix(in srgb, var(--c-surface) 42%, white);
+        border: 1px solid var(--c-border);
+        border-radius: var(--radius);
+        outline: none;
+        transition: border-color 0.15s, box-shadow 0.15s;
+    }
+
+    .search-input:focus {
+        border-color: var(--c-accent);
+        box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+    }
+
+    .search-input::placeholder {
+        color: var(--c-text-tertiary);
+    }
+
+    /* Magnifying-glass icon (CSS-only, positioned inside the input) */
+    .search-icon {
+        position: absolute;
+        left: 0.55rem;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 14px;
+        height: 14px;
+        pointer-events: none;
+        color: var(--c-text-tertiary);
+    }
+
+    /* Keyboard shortcut badge shown inside the input */
+    .search-shortcut {
+        position: absolute;
+        right: 0.45rem;
+        top: 50%;
+        transform: translateY(-50%);
+        font-family: var(--font-sans);
+        font-size: 0.65rem;
+        line-height: 1;
+        color: var(--c-text-tertiary);
+        border: 1px solid var(--c-border);
+        border-radius: 3px;
+        padding: 0.15rem 0.35rem;
+        pointer-events: none;
+    }
+
+    /* ── Results dropdown ───────────────────────────────────────────────── */
+    .search-results {
+        display: none;
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        z-index: 100;
+        margin-top: 6px;
+        max-height: 60vh;
+        overflow-y: auto;
+        background: var(--c-bg);
+        border: 1px solid var(--c-border);
+        border-radius: var(--radius);
+        box-shadow: 0 10px 28px rgba(16, 30, 48, 0.14);
+    }
+
+    .title-search .search-results {
+        right: 0;
+        left: auto;
+        width: min(34rem, calc(100vw - 2rem));
+    }
+
+    .search-results.is-open {
+        display: block;
+    }
+
+    .search-results a {
+        display: block;
+        padding: 0.5rem 0.75rem;
+        text-decoration: none;
+        border-bottom: 1px solid var(--c-border-light);
+        transition: background-color 0.1s;
+    }
+
+    .search-results a:last-child {
+        border-bottom: none;
+    }
+
+    .search-results a:hover {
+        background-color: var(--c-accent-bg);
+    }
+
+    /* Keyboard-selected item gets a stronger highlight so it is clearly
+       distinguishable from the default white background.                */
+    .search-results a.is-selected {
+        background-color: #dbeafe;   /* blue-100 — noticeably stronger  */
+    }
+
+    .search-results a.is-selected .search-title {
+        color: var(--c-accent);
+    }
+
+    .search-results .search-title {
+        display: block;
+        font-size: 0.8125rem;
+        font-weight: 500;
+        color: var(--c-text);
+        line-height: 1.3;
+    }
+
+    .search-results .search-snippet {
+        display: block;
+        font-size: 0.75rem;
+        color: var(--c-text-secondary);
+        line-height: 1.4;
+        margin-top: 0.15rem;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .search-results .search-empty {
+        padding: 0.75rem;
+        font-size: 0.8125rem;
+        color: var(--c-text-tertiary);
+        text-align: center;
+    }
+}

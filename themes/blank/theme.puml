@@ -1,0 +1,8 @@
+' PlantUML theme for docbake.
+' Lines below are inserted into every PlantUML diagram right after
+' the @start* directive.
+'
+' To customise, run `docbake init-theme <dir>` and edit the copy.
+
+skinparam defaultFontName "PT Sans"
+skinparam defaultMonospacedFontName "PT Mono"

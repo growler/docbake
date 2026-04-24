@@ -12,7 +12,13 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub debug_dump: bool,
 
-    /// Theme directory.  When omitted the built-in default theme is used.
+    /// Theme name or directory.
+    ///
+    /// Resolution order:
+    /// 1. built-in embedded theme name (`blank`, `blank`, `digitaltide`)
+    /// 2. local filesystem directory
+    ///
+    /// When omitted the built-in `blank` theme is used.
     #[arg(short = 't', long, global = true)]
     pub theme: Option<PathBuf>,
 
@@ -253,7 +259,9 @@ pub enum Command {
         path: PathBuf,
     },
 
-    /// Export the default theme to a directory for customisation.
+    /// Export the selected theme to a directory for customisation.
+    ///
+    /// Without `-t/--theme`, exports the built-in `blank` theme.
     InitTheme {
         /// Target directory to create (must not already exist).
         target: PathBuf,

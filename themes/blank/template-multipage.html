@@ -1,0 +1,399 @@
+{# ──────────────────────────────────────────────────────────────────────────
+   Multi-page HTML template for docbake.
+
+   Each page of the multi-page output is rendered with this template.
+
+   Available template variables (injected by the tool):
+
+     style          — CSS content from style.css (use {{ style | safe }})
+     body           — rendered document body HTML for this page
+     toc            — page-tree table of contents (pages only, no headings)
+     toc_expanded   — full TOC: page tree with current page's headings
+                      expanded inline (for themes using a single sidebar)
+     toc_page       — intra-page headings TOC (current page only,
+                      excluding the page title heading)
+     search_index   — JSON array of search entries for Fuse.js
+     page_title     — title of the current page
+     root_href      — relative link back to the root/index page
+     asset_prefix   — relative path prefix to reach the output root
+                      (e.g. "" for root, "../" for one level deep, etc.)
+     breadcrumbs    — array of {href, title} from root to current page
+                      (last entry has empty href = current page)
+     prev           — previous page navigation (object with .href, .title)
+     next           — next page navigation (object with .href, .title)
+     up             — parent page navigation (object with .href, .title)
+
+   Front-matter metadata (from the root Markdown file):
+
+     title          — document title
+     subtitle       — document subtitle
+     date           — document date
+     author         — author name(s) as a single string
+     authors        — author name(s) as an array
+     version        — document version
+     lang           — document language (default: "en")
+     front_matter   — full front-matter object for custom fields
+
+   All front-matter keys are optional.
+   ────────────────────────────────────────────────────────────────────────── #}
+<!DOCTYPE html>
+<html lang="{{ lang }}">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>{% if page_title %}{{ page_title }} — {% endif %}{{ title }}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=PT+Mono&family=PT+Sans:ital,wght@0,400;0,700;1,400;1,700&display=swap&" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/fuse.js@6.6.2/dist/fuse.min.js"></script>
+  <style>{{ style | safe }}</style>
+</head>
+<body>
+
+  {% if title %}
+  <header id="title-block-header">
+    <div class="title-row">
+      <div class="title-brand">
+        <a class="title-logo" href="{{ root_href }}" aria-label="{{ title }}">
+          <img class="site-logo" src="{{ asset_prefix }}assets/logo.svg" alt="" />
+        </a>
+        <div class="title-meta">
+          <h1 class="title"><a href="{{ root_href }}">{{ title }}</a></h1>
+          {% if subtitle is defined %}<p class="subtitle">{{ subtitle }}</p>{% endif %}
+        </div>
+      </div>
+      {% if search_index is defined %}
+      <div class="search-wrap title-search">
+        <svg class="search-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="8.5" cy="8.5" r="5.5"/><line x1="13" y1="13" x2="18" y2="18"/>
+        </svg>
+        <input id="doc-search" name="doc-search" class="search-input" type="search" placeholder="Search…" aria-label="Search documentation" autocomplete="off" />
+        <kbd class="search-shortcut">/</kbd>
+        <div class="search-results" role="listbox"></div>
+      </div>
+      {% endif %}
+    </div>
+  </header>
+  {% endif %}
+
+  <div class="content-wrap">
+    {# ── Left sidebar: page-tree navigation ──────────────────────────── #}
+    <nav id="sidebar" class="sidebar" role="navigation" aria-label="Pages">
+      {{ toc | safe }}
+      <button class="sidebar-collapse" aria-label="Collapse sidebar" title="Collapse sidebar">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 4l-6 6 6 6"/><line x1="5" y1="4" x2="5" y2="16"/></svg>
+      </button>
+    </nav>
+
+    {# ── Main content ────────────────────────────────────────────────── #}
+    <main>
+      {% if breadcrumbs | length > 1 %}
+      <nav class="breadcrumbs" aria-label="Breadcrumbs">
+        {% for crumb in breadcrumbs %}
+          {% if not loop.last %}
+            <a href="{{ crumb.href }}">{{ crumb.title }}</a>
+            <span class="breadcrumb-sep">/</span>
+          {% else %}
+            <span class="breadcrumb-current">{{ crumb.title }}</span>
+          {% endif %}
+        {% endfor %}
+      </nav>
+      {% endif %}
+
+      {{ body | safe }}
+
+      <div class="page-nav">
+        {% if prev %}
+          <a class="prev" href="{{ prev.href }}">{{ prev.title }}</a>
+        {% endif %}
+        {% if next %}
+          <a class="next" href="{{ next.href }}">{{ next.title }}</a>
+        {% endif %}
+      </div>
+    </main>
+
+    {# ── Right sidebar: intra-page headings TOC ──────────────────────── #}
+    {% if toc_page %}
+    <aside id="toc-page" class="toc-page" role="doc-toc" aria-label="On this page">
+      <div class="toc-page-title">On this page</div>
+      {{ toc_page | safe }}
+    </aside>
+    {% endif %}
+  </div>
+
+{# ── Search script ───────────────────────────────────────────────────── #}
+{% if search_index is defined %}
+<script>
+(function() {
+  var SEARCH_DATA = {{ search_index | safe }};
+  /* Multi-page: hrefs in the index are relative to the output root.
+     Prepend asset_prefix so links resolve correctly from nested pages. */
+  var ASSET_PREFIX = '{{ asset_prefix }}';
+
+  var input = document.querySelector('.search-input');
+  var results = document.querySelector('.search-results');
+  var shortcutBadge = document.querySelector('.search-shortcut');
+  if (!input || !results) return;
+
+  var fuse = new Fuse(SEARCH_DATA, {
+    keys: [
+      { name: 'title', weight: 2 },
+      { name: 'body',  weight: 1 }
+    ],
+    threshold: 0.35,
+    ignoreLocation: true,
+    includeMatches: true,
+    minMatchCharLength: 2
+  });
+
+  var selectedIdx = -1;
+
+  /* ── Render results ──────────────────────────────────────────────── */
+  function render(hits) {
+    selectedIdx = -1;
+    if (hits.length === 0) {
+      results.innerHTML = '<div class="search-empty">No results</div>';
+      results.classList.add('is-open');
+      return;
+    }
+    var html = '';
+    var limit = Math.min(hits.length, 12);
+    for (var i = 0; i < limit; i++) {
+      var item = hits[i].item;
+      var href = ASSET_PREFIX + item.href;
+      html += '<a href="' + escapeAttr(href) + '" role="option" data-idx="' + i + '">'
+            + '<span class="search-title">' + escapeHtml(item.title) + '</span>'
+            + '<span class="search-snippet">' + escapeHtml(item.snippet) + '</span>'
+            + '</a>';
+    }
+    results.innerHTML = html;
+    results.classList.add('is-open');
+
+    /* Close the dropdown when a result link is clicked */
+    var links = results.querySelectorAll('a');
+    for (var j = 0; j < links.length; j++) {
+      links[j].addEventListener('click', function() { close(); });
+    }
+  }
+
+  function close() {
+    results.classList.remove('is-open');
+    selectedIdx = -1;
+  }
+
+  /* ── Input handler ───────────────────────────────────────────────── */
+  var debounceTimer;
+  input.addEventListener('input', function() {
+    clearTimeout(debounceTimer);
+    var q = input.value.trim();
+    if (q.length < 2) { close(); return; }
+    debounceTimer = setTimeout(function() {
+      var hits = fuse.search(q);
+      render(hits);
+    }, 80);
+  });
+
+  /* ── Keyboard navigation ─────────────────────────────────────────── */
+  input.addEventListener('keydown', function(e) {
+    var items = results.querySelectorAll('a');
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      selectedIdx = Math.min(selectedIdx + 1, items.length - 1);
+      updateSelection(items);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      selectedIdx = Math.max(selectedIdx - 1, 0);
+      updateSelection(items);
+    } else if (e.key === 'Enter' && selectedIdx >= 0 && items[selectedIdx]) {
+      e.preventDefault();
+      var href = items[selectedIdx].getAttribute('href');
+      close();
+      window.location.href = href;
+    } else if (e.key === 'Escape') {
+      input.value = '';
+      close();
+      input.blur();
+    }
+  });
+
+  function updateSelection(items) {
+    for (var i = 0; i < items.length; i++) {
+      items[i].classList.toggle('is-selected', i === selectedIdx);
+    }
+    if (items[selectedIdx]) {
+      var itemTop = items[selectedIdx].offsetTop;
+      var itemBottom = itemTop + items[selectedIdx].offsetHeight;
+      var viewTop = results.scrollTop;
+      var viewBottom = viewTop + results.clientHeight;
+      if (itemTop < viewTop) {
+        results.scrollTop = itemTop;
+      } else if (itemBottom > viewBottom) {
+        results.scrollTop = itemBottom - results.clientHeight;
+      }
+    }
+  }
+
+  /* ── Click outside closes ────────────────────────────────────────── */
+  document.addEventListener('click', function(e) {
+    if (!e.target.closest('.search-wrap')) close();
+  });
+
+  /* ── Global keyboard shortcut: / or Ctrl+K ───────────────────────── */
+  document.addEventListener('keydown', function(e) {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' ||
+        e.target.isContentEditable) return;
+    if (e.key === '/' || (e.key === 'k' && (e.metaKey || e.ctrlKey))) {
+      e.preventDefault();
+      input.focus();
+      input.select();
+    }
+  });
+
+  /* Hide the shortcut badge when input has focus */
+  input.addEventListener('focus', function() { if (shortcutBadge) shortcutBadge.style.display = 'none'; });
+  input.addEventListener('blur',  function() { if (shortcutBadge) shortcutBadge.style.display = ''; });
+
+  /* ── Helpers ─────────────────────────────────────────────────────── */
+  function escapeHtml(s) {
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+  function escapeAttr(s) {
+    return s.replace(/&/g,'&amp;').replace(/"/g,'&quot;');
+  }
+})();
+</script>
+{% endif %}
+{# ── Left sidebar collapse/expand ─────────────────────────────────────── #}
+<script>
+(function() {
+  var CHEVRON = '<svg viewBox="0 0 6 10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 1l4 4-4 4"/></svg>';
+  var nav = document.getElementById('sidebar');
+  if (!nav) return;
+
+  /* Find the current page's <li> */
+  var currentLi = nav.querySelector('li.current');
+
+  /* Collect the set of ancestor <li>s of the current page */
+  var ancestorSet = new Set();
+  if (currentLi) {
+    var p = currentLi.parentElement;
+    while (p && p !== nav) {
+      if (p.tagName === 'LI') ancestorSet.add(p);
+      p = p.parentElement;
+    }
+  }
+
+  /* Find all <li> that contain a child <ul> (i.e. have children) */
+  var items = nav.querySelectorAll('li');
+  for (var i = 0; i < items.length; i++) {
+    var li = items[i];
+    var childUl = null;
+    for (var c = 0; c < li.children.length; c++) {
+      if (li.children[c].tagName === 'UL') { childUl = li.children[c]; break; }
+    }
+    if (!childUl) continue;
+
+    /* Mark as collapsible */
+    li.classList.add('toc-collapsible');
+
+    /* Expand if this is the current page or an ancestor of it */
+    if (li === currentLi || ancestorSet.has(li)) {
+      li.classList.add('toc-expanded');
+    }
+
+    /* Wrap the <a> and a toggle button in a .toc-link-row */
+    var link = li.querySelector(':scope > a');
+    if (!link) continue;
+
+    var row = document.createElement('span');
+    row.className = 'toc-link-row';
+
+    var btn = document.createElement('button');
+    btn.className = 'toc-toggle';
+    btn.setAttribute('aria-label', 'Toggle section');
+    btn.innerHTML = CHEVRON;
+
+    li.insertBefore(row, link);
+    row.appendChild(btn);
+    row.appendChild(link);
+
+    /* Toggle on button click */
+    btn.addEventListener('click', (function(target) {
+      return function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        target.classList.toggle('toc-expanded');
+      };
+    })(li));
+  }
+})();
+</script>
+
+{# ── Right sidebar scroll-spy ───────────────────────────────────────── #}
+<script>
+(function() {
+  var aside = document.getElementById('toc-page');
+  if (!aside) return;
+  var links = aside.querySelectorAll('a[href^="#"]');
+  if (!links.length) return;
+
+  /* Build array of {id, link} pairs */
+  var sections = [];
+  for (var i = 0; i < links.length; i++) {
+    var id = links[i].getAttribute('href').slice(1);
+    var el = document.getElementById(id);
+    if (el) sections.push({ el: el, link: links[i] });
+  }
+  if (!sections.length) return;
+
+  var activeLink = null;
+  var OFFSET = 80; /* px from top to trigger activation */
+
+  function update() {
+    var scrollY = window.scrollY || window.pageYOffset;
+    var current = null;
+    for (var i = 0; i < sections.length; i++) {
+      if (sections[i].el.getBoundingClientRect().top <= OFFSET) {
+        current = sections[i].link;
+      }
+    }
+    if (current !== activeLink) {
+      if (activeLink) activeLink.classList.remove('active');
+      activeLink = current;
+      if (activeLink) activeLink.classList.add('active');
+    }
+  }
+
+  window.addEventListener('scroll', update, { passive: true });
+  update();
+})();
+</script>
+
+{# ── Sidebar collapse/expand toggle ──────────────────────────────────── #}
+<script>
+(function() {
+  var COLLAPSE_SVG = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 4l-6 6 6 6"/><line x1="5" y1="4" x2="5" y2="16"/></svg>';
+  var EXPAND_SVG = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4l6 6-6 6"/><line x1="15" y1="4" x2="15" y2="16"/></svg>';
+  var KEY = 'docbake-sidebar-hidden';
+  var wrap = document.querySelector('.content-wrap');
+  var btn = wrap && wrap.querySelector('.sidebar-collapse');
+  if (!wrap || !btn) return;
+
+  /* Restore state from localStorage */
+  if (localStorage.getItem(KEY) === '1') {
+    wrap.classList.add('sidebar-hidden');
+    btn.innerHTML = EXPAND_SVG;
+    btn.title = 'Expand sidebar';
+  }
+
+  btn.addEventListener('click', function() {
+    var hidden = wrap.classList.toggle('sidebar-hidden');
+    btn.innerHTML = hidden ? EXPAND_SVG : COLLAPSE_SVG;
+    btn.title = hidden ? 'Expand sidebar' : 'Collapse sidebar';
+    localStorage.setItem(KEY, hidden ? '1' : '0');
+  });
+})();
+</script>
+{{ live_update | safe }}
+</body>
+</html>

@@ -45,18 +45,7 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 pub fn run(cli: Cli) -> Result<()> {
     let logger = DebugDumper::new(cli.debug_dump);
     let cache = Cache::new(cli.cache.clone(), cli.no_cache)?;
-    let theme = match cli.theme {
-        Some(ref dir) => {
-            let dir = dir
-                .canonicalize()
-                .with_context(|| format!("failed to resolve theme directory {}", dir.display()))?;
-            if !dir.is_dir() {
-                bail!("theme path is not a directory: {}", dir.display());
-            }
-            Theme::Custom(dir)
-        }
-        None => Theme::Default,
-    };
+    let theme = Theme::resolve(cli.theme.as_deref())?;
 
     match cli.command {
         cli::Command::Build {
@@ -172,8 +161,8 @@ pub fn run(cli: Cli) -> Result<()> {
         }
         cli::Command::Fmt { check, ref path } => fmt::fmt_command(path, check),
         cli::Command::InitTheme { ref target } => {
-            Theme::export_to(target)?;
-            eprintln!("Default theme exported to {}", target.display());
+            theme.export_to(target)?;
+            eprintln!("Theme '{}' exported to {}", theme.id(), target.display());
             Ok(())
         }
         cli::Command::Publish { ref target } => match target {

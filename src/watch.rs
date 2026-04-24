@@ -96,10 +96,10 @@ pub(crate) fn watch_command(
             .watch(base_dir.as_ref(), RecursiveMode::Recursive)
             .with_context(|| format!("failed to watch {}", base_dir.display()))?;
 
-        if let Theme::Custom(ref theme_dir) = *theme {
+        if let Some(theme_dir) = theme.watch_directory() {
             debouncer
                 .watcher()
-                .watch(theme_dir.as_ref(), RecursiveMode::Recursive)
+                .watch(theme_dir, RecursiveMode::Recursive)
                 .with_context(|| {
                     format!("failed to watch theme directory {}", theme_dir.display())
                 })?;

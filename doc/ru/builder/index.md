@@ -30,15 +30,16 @@ Commands:
   watch       Watch source files and rebuild on changes
   check       Validate the document: check all links and render all diagrams
   fmt         Format markdown files in place
-  init-theme  Export the default theme to a directory for customisation
+  init-theme  Export the selected theme to a directory for customisation
   publish     Publish a document to an external platform
   auth        Manage authentication credentials for external platforms
   help        Print this message or the help of the given subcommand(s)
 
 Options:
       --debug-dump
-  -t, --theme <THEME>  Theme directory. When omitted the built-in default
-                        theme is used
+  -t, --theme <THEME>  Theme name or directory. Embedded names: blank,
+                        blank, digitaltide. When omitted the built-in
+                        blank theme is used
       --cache <CACHE>  Override the default cache directory for rendered
                         artifacts
       --no-cache       Disable artifact caching entirely
