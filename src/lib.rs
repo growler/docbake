@@ -533,7 +533,7 @@ fn resolve_output(output: &Path, input: &Path, format: OutputFormat) -> Result<(
 
     match format {
         OutputFormat::HtmlMulti => {
-            // html-multi always produces a directory of pages.
+            // site always produces a directory of pages.
             let dir = output.to_path_buf();
             let file = dir.join("index.html"); // sentinel; actual pages are written individually
             Ok((file, dir))

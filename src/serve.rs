@@ -49,7 +49,7 @@ pub(crate) fn serve_command(
 ) -> Result<()> {
     match format {
         OutputFormat::Html | OutputFormat::HtmlMulti => {}
-        _ => bail!("serve only supports html and html-multi formats"),
+        _ => bail!("serve only supports page and site formats"),
     }
 
     let (source, base_dir) = crate::resolve_input_and_base(input, base)?;
@@ -326,7 +326,7 @@ fn rebuild(
                 logger.log(format!("wrote {}", target.display()));
             }
         }
-        _ => unreachable!("serve only handles html and html-multi"),
+        _ => unreachable!("serve only handles page and site"),
     }
 
     Ok(())

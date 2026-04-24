@@ -30,7 +30,9 @@ pub struct Cli {
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum OutputFormat {
+    #[value(name = "page", alias = "html")]
     Html,
+    #[value(name = "site", alias = "html-multi")]
     HtmlMulti,
     Pdf,
     Typst,
@@ -131,7 +133,7 @@ pub enum Command {
 
     /// Serve a document with live-reload on file changes.
     Serve {
-        /// Output format (only html and html-multi are supported).
+        /// Output format (only page and site are supported).
         #[arg(short = 'f', long)]
         format: OutputFormat,
 

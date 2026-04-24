@@ -2,11 +2,11 @@
 
 Сборщик поддерживает несколько форматов:
 
-`html`
+`page`
 
 :  Линейная HTML-страница со всем содержимым.
 
-`html-multi`
+`site`
 
 :  Набор HTML-страниц, отображающий структуру исходного документа (каждый `.md`
    документ станет отдельной страницей)
@@ -81,7 +81,7 @@ div:
 
 Эти имена соответствуют командам следующим образом:
 
-- `build -f html` и `build -f html-multi` → `html`
+- `build -f page` и `build -f site` → `html`
 - `build -f pdf` и `build -f typst` → `pdf`
 - `build -f docx-gdoc` → `docx`
 - `publish confluence` → `confluence`
@@ -100,7 +100,7 @@ variants: ["enterprise", "foo"]
 Варианты можно задавать и через CLI:
 
 ~~~bash
-docbake build -f html -i doc.md -o out.html \
+docbake build -f page -i doc.md -o out.html \
   --meta variants enterprise \
   --meta variants foo
 ~~~

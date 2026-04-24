@@ -43,7 +43,7 @@ template.typ  theme.d2  theme.mmd  theme.puml
 После этого тему можно использовать при сборке:
 
 ~~~
-$ docbake -t my-theme build -f html -i doc/ru/index.md -o target/out.html -b doc
+$ docbake -t my-theme build -f page -i doc/ru/index.md -o target/out.html -b doc
 ~~~
 
 ## Базовый каталог {#base-dir}
@@ -56,7 +56,7 @@ $ docbake -t my-theme build -f html -i doc/ru/index.md -o target/out.html -b doc
 Если флаг не указан, базовым каталогом считается каталог входного файла.
 
 ~~~
-$ docbake build -f html -i doc/ru/index.md -o out.html -b doc
+$ docbake build -f page -i doc/ru/index.md -o out.html -b doc
 ~~~
 
 В этом примере базовым каталогом является `doc/`, а абсолютный путь

@@ -4,8 +4,8 @@
 Его задача состоит в валидации Markdown-документации проекта и в генерации
 результатов сборки. Поддерживаемые форматы вывода:
 
-- **HTML** — single-page HTML документ с встроенными стилями и таблицей содержания
-- **HTML Multi** — multi-page HTML с навигацией между страницами
+- **page** — single-page HTML документ с встроенными стилями и таблицей содержания
+- **site** — multi-page HTML с навигацией между страницами
 - **PDF** — документ на базе Typst
 - **Typst** — промежуточный `.typ` файл
 - **DOCX (docx-gdoc)** — DOCX в том же формате, что используется в `publish gdoc`
@@ -53,8 +53,8 @@ Usage: docbake build [OPTIONS] --format <FORMAT> --input <INPUT>
                          --output <OUTPUT>
 
 Options:
-  -f, --format <FORMAT>          Output format [possible values: html,
-                                 html-multi, pdf, typst, markdown,
+  -f, --format <FORMAT>          Output format [possible values: page,
+                                 site, pdf, typst, markdown,
                                  docx-gdoc]
   -i, --input <INPUT>            Root markdown file
   -o, --output <OUTPUT>          Output file or directory
@@ -80,9 +80,9 @@ Serve a document with live-reload on file changes
 Usage: docbake serve [OPTIONS] --format <FORMAT> --input <INPUT>
 
 Options:
-  -f, --format <FORMAT>          Output format (only html and html-multi
-                                 are supported) [possible values: html,
-                                 html-multi, pdf, typst, markdown]
+  -f, --format <FORMAT>          Output format (only page and site
+                                 are supported) [possible values: page,
+                                 site, pdf, typst, markdown]
   -i, --input <INPUT>            Root markdown file
   -b, --base <BASE>              Base directory for absolute path resolution.
                                  Defaults to the parent directory of the
@@ -112,13 +112,13 @@ $ docbake build -f pdf -i doc/ru/index.md -o target/doc-out/builder.pdf -b doc
 Для сборки документа в формате HTML:
 
 ~~~
-$ docbake build -f html -i doc/ru/index.md -o target/doc-out/builder.html -b doc
+$ docbake build -f page -i doc/ru/index.md -o target/doc-out/builder.html -b doc
 ~~~
 
 Для сборки multi-page HTML:
 
 ~~~
-$ docbake build -f html-multi -i doc/ru/index.md -o target/doc-out/builder -b doc
+$ docbake build -f site -i doc/ru/index.md -o target/doc-out/builder -b doc
 ~~~
 
 Для сборки объединённого Markdown-файла:
@@ -130,7 +130,7 @@ $ docbake build -f markdown -i doc/ru/index.md -o target/doc-out/builder.md -b d
 Флаг `-o` определяет файл или каталог вывода. Если `-o` указывает на файл с
 расширением `.html`, `.pdf` или `.md`, результат записывается в этот файл. Иначе
 `-o` интерпретируется как каталог, а имя файла определяется из имени входного
-файла. Для формата `html-multi` `-o` всегда является каталогом.
+файла. Для формата `site` `-o` всегда является каталогом.
 
 Флаг `-b` задаёт базовый каталог для разрешения абсолютных путей (по умолчанию —
 каталог входного файла). Флаг `-t` позволяет указать каталог собственной темы.
@@ -142,7 +142,7 @@ $ docbake build -f markdown -i doc/ru/index.md -o target/doc-out/builder.md -b d
 точечную нотацию для обращения к вложенным объектам.
 
 ~~~
-$ docbake build -f html -i doc.md -o out.html \
+$ docbake build -f page -i doc.md -o out.html \
     --meta title "Новый заголовок" \
     --meta confluence.server "https://other.example.com"
 ~~~
@@ -153,7 +153,7 @@ $ docbake build -f html -i doc.md -o out.html \
 Для ключа `variants` повторяющийся `--meta` формирует массив значений:
 
 ~~~
-$ docbake build -f html -i doc.md -o out.html \
+$ docbake build -f page -i doc.md -o out.html \
     --meta variants enterprise \
     --meta variants foo
 ~~~
@@ -201,25 +201,25 @@ $ docbake publish confluence -i doc.md \
 При изменении любого файла в базовом каталоге документ автоматически
 пересобирается, а страница в браузере перезагружается.
 
-Поддерживаются только HTML-форматы: `html` и `html-multi`.
+Поддерживаются только HTML-форматы: `page` и `site`.
 
 Для single-page HTML:
 
 ~~~
-$ docbake serve -f html -i doc/ru/index.md -b doc
+$ docbake serve -f page -i doc/ru/index.md -b doc
 ~~~
 
 Для multi-page HTML:
 
 ~~~
-$ docbake serve -f html-multi -i doc/ru/index.md -b doc
+$ docbake serve -f site -i doc/ru/index.md -b doc
 ~~~
 
 Сервер автоматически выбирает свободный порт, печатает URL и открывает его в
 браузере. Конкретный порт можно задать флагом `-p`:
 
 ~~~
-$ docbake serve -f html -i doc/ru/index.md -b doc -p 3000
+$ docbake serve -f page -i doc/ru/index.md -b doc -p 3000
 ~~~
 
 Сервер работает на `127.0.0.1` (loopback) и доступен только локально. Для
@@ -233,7 +233,7 @@ $ docbake serve -f html -i doc/ru/index.md -b doc -p 3000
 записывает результат в файл или каталог.
 
 ~~~
-$ docbake watch -f html -i doc/ru/index.md -o target/doc-out/builder.html -b doc
+$ docbake watch -f page -i doc/ru/index.md -o target/doc-out/builder.html -b doc
 ~~~
 
 Для завершения работы нажмите `Ctrl+C`.

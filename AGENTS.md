@@ -47,12 +47,12 @@ cargo build                          # build the tool
 cargo test                           # run tests
 
 # Build a document
-cargo run -- build -f html -i doc/ru/index.md -o target/doc-out/builder.html
+cargo run -- build -f page -i doc/ru/index.md -o target/doc-out/builder.html
 cargo run -- build -f pdf -i doc/ru/index.md -o target/doc-out/builder.pdf
-cargo run -- build -f html-multi -i doc/ru/index.md -o target/doc-out/builder
+cargo run -- build -f site -i doc/ru/index.md -o target/doc-out/builder
 
 # With a custom theme
-cargo run -- -t my-theme build -f html -i doc/ru/index.md -o target/out.html
+cargo run -- -t my-theme build -f page -i doc/ru/index.md -o target/out.html
 
 # Export default theme for customisation
 cargo run -- init-theme my-theme
@@ -66,7 +66,7 @@ cargo run -- parse doc/ru/index.md       # dump parsed AST
 
 Global: `--debug-dump`, `-t/--theme <dir>`, `--cache <dir>`, `--no-cache`
 
-Build: `-f/--format <html|html-multi|pdf|markdown>`, `-i/--input <file.md>`,
+Build: `-f/--format <page|site|pdf|markdown>`, `-i/--input <file.md>`,
 `-o/--output <target>`, `-b/--base <dir>`
 
 No custom lint, fmt, or CI config exists — standard `cargo fmt`, `cargo clippy`,

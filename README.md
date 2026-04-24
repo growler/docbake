@@ -10,7 +10,7 @@ Gitlab CI сервер для сборки и публикации докуме�
 
 ## Возможности
 
-- **Форматы вывода:** `html`, `html-multi`, `pdf`, `typst`, `markdown`
+- **Форматы вывода:** `page`, `site`, `pdf`, `typst`, `markdown`
 - **Диаграммы:** PlantUML, Mermaid, D2, Typst, DrawIO — рендерятся в SVG, результат кешируется
 - **Темы:** встроенная тема по умолчанию + поддержка пользовательских тем
 - **Live-reload:** команда `serve` с автоматической пересборкой при изменении файлов
@@ -22,10 +22,10 @@ Gitlab CI сервер для сборки и публикации докуме�
 
 ```bash
 # Single-page HTML
-docbake build -f html -i doc/ru/index.md -o target/doc/output.html
+docbake build -f page -i doc/ru/index.md -o target/doc/output.html
 
 # Multi-page HTML
-docbake build -f html-multi -i doc/ru/index.md -o target/doc/html
+docbake build -f site -i doc/ru/index.md -o target/doc/html
 
 # PDF
 docbake build -f pdf -i doc/ru/index.md -o target/doc/output.pdf
@@ -34,7 +34,7 @@ docbake build -f pdf -i doc/ru/index.md -o target/doc/output.pdf
 docbake build -f markdown -i doc/ru/index.md -o target/doc/output.md
 
 # Live-reload сервер
-docbake serve -f html -i doc/ru/index.md
+docbake serve -f page -i doc/ru/index.md
 
 # Live-rebuild сервер (удобнее для PDF)
 docbake watch -f pdf -i doc/ru/index.md -o output.pdf
@@ -130,7 +130,7 @@ Personal Access Token.
 build:docs:html:
   stage: build
   script:
-    - docbake build -f html -b doc -i doc/ru/index.md -o public/index.html
+    - docbake build -f page -b doc -i doc/ru/index.md -o public/index.html
   artifacts:
     paths:
       - public/
@@ -138,7 +138,7 @@ build:docs:html:
 build:docs:html-multi:
   stage: build
   script:
-    - docbake build -f html-multi -b doc -i doc/ru/index.md -o public
+    - docbake build -f site -b doc -i doc/ru/index.md -o public
   artifacts:
     paths:
       - public/
