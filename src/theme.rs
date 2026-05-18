@@ -148,7 +148,8 @@ impl Theme {
         let target_dir = output_dir.join(ASSETS_DIR);
         match self {
             Theme::Embedded(name) => {
-                if let Some(src) = embedded_theme_dir(name)?.get_dir(ASSETS_DIR) {
+                let assets_path = format!("{name}/{ASSETS_DIR}");
+                if let Some(src) = embedded_theme_dir(name)?.get_dir(assets_path) {
                     copy_embedded_dir_recursive(src, &target_dir)?;
                 }
             }
@@ -196,7 +197,7 @@ impl Theme {
         match self {
             Theme::Embedded(name) => {
                 let dir = embedded_theme_dir(name)?;
-                match dir.get_file(rel) {
+                match dir.get_file(format!("{name}/{rel}")) {
                     Some(file) => {
                         let text = file.contents_utf8().ok_or_else(|| {
                             anyhow!("embedded theme '{}' file {} is not UTF-8", name, rel)
@@ -223,7 +224,7 @@ impl Theme {
         match self {
             Theme::Embedded(name) => {
                 let dir = embedded_theme_dir(name)?;
-                Ok(dir.get_file(rel).map(|file| file.contents().to_vec()))
+                Ok(dir.get_file(format!("{name}/{rel}")).map(|file| file.contents().to_vec()))
             }
             Theme::Custom(dir) => {
                 let path = dir.join(rel);
