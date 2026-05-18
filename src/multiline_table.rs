@@ -67,7 +67,8 @@ use rushdown::parser::{
 };
 use rushdown::text::{self, Reader as _, Segment};
 use rushdown::util::{
-    indent_width, is_blank, is_space, trim_left_space_length, trim_right_space_length,
+    indent_position, indent_width, is_blank, is_space, trim_left_space_length,
+    trim_right_space_length,
 };
 
 // ============================================================================
@@ -178,6 +179,55 @@ fn parse_column_rule(line: &[u8], offset: usize) -> Option<Vec<(usize, usize)>> 
 /// ≥ 2 groups).
 fn is_any_dash_rule(line: &[u8], offset: usize) -> bool {
     is_solid_rule(line, offset) || parse_column_rule(line, offset).is_some()
+}
+
+/// Outcome of [`strip_container_indent`].
+enum StripIndent {
+    /// Indent successfully consumed (or none required, or line is blank/EOF —
+    /// in all cases the caller may peek the line and process it normally).
+    Ok,
+    /// A non-blank line had less leading whitespace than `indent` columns —
+    /// the table is no longer aligned, the caller must abort the parse.
+    Insufficient,
+}
+
+/// Advances `reader` past `indent` display columns of leading whitespace on
+/// the current line, mirroring what a parent container's `cont()` would have
+/// done before invoking a fresh child block parser.
+///
+/// Necessary because [`MultilineTableParser::open`] eagerly consumes every
+/// line of the table inside a single call. After our own `advance_line()` the
+/// reader sits at the next line's head with the parent container's continuation
+/// indent (list-item content offset, def-list body indent, blockquote `> `,
+/// fenced-div padding, …) still attached. Without re-stripping it on every
+/// line after the first, `parse_column_rule` / `is_any_dash_rule` see the
+/// indent as part of the line content and either reject the bottom rule
+/// (`indent_width > 3`) or shift the derived column extents — both of which
+/// silently corrupt the parse.
+///
+/// Blank lines and EOF are returned as [`StripIndent::Ok`] without
+/// advancement; pandoc treats them as row separators / table terminators and
+/// neither requires an indent prefix.
+fn strip_container_indent(
+    reader: &mut text::BasicReader,
+    indent: usize,
+) -> StripIndent {
+    if indent == 0 {
+        return StripIndent::Ok;
+    }
+    let Some((line, _)) = reader.peek_line_bytes() else {
+        return StripIndent::Ok;
+    };
+    if is_blank(&line) {
+        return StripIndent::Ok;
+    }
+    match indent_position(&line, reader.line_offset(), indent) {
+        Some((pos, padding)) => {
+            reader.advance_and_set_padding(pos, padding);
+            StripIndent::Ok
+        }
+        None => StripIndent::Insufficient,
+    }
 }
 
 /// Extracts the cell content segment for column `[col_start, col_end)` from
@@ -448,6 +498,19 @@ impl BlockParser for MultilineTableParser {
         let with_header = solid;
         let table_pos = top_seg.start();
 
+        // `top_offset` is the column on the source line where the parent
+        // container's content begins (e.g. 2 cols inside a list item with
+        // 2-space content offset, 4 cols inside a `:   ` def-list body, the
+        // post-`> ` position inside a blockquote, …). The dispatcher only
+        // invokes a parent's `cont()` between top-level line boundaries;
+        // since we consume every line of the table here, we must re-strip
+        // the same indent ourselves before processing each subsequent line.
+        // For top-level tables `top_offset` is 0 and stripping is a no-op.
+        let container_indent = top_offset;
+        let restore = |reader: &mut text::BasicReader| {
+            reader.set_position(saved_line, saved_pos);
+        };
+
         // Advance past the top rule.
         reader.advance_line();
 
@@ -456,13 +519,20 @@ impl BlockParser for MultilineTableParser {
             // Collect header lines until we hit the grouped separator.
             let mut headers: Vec<Segment> = Vec::new();
             let cols = loop {
+                if matches!(
+                    strip_container_indent(reader, container_indent),
+                    StripIndent::Insufficient
+                ) {
+                    restore(reader);
+                    return None;
+                }
                 let Some((lb, ls)) = reader.peek_line_bytes() else {
                     // EOF before separator.
-                    reader.set_position(saved_line, saved_pos);
+                    restore(reader);
                     return None;
                 };
                 if ls.padding() > 0 {
-                    reader.set_position(saved_line, saved_pos);
+                    restore(reader);
                     return None;
                 }
                 let lb = lb.as_ref();
@@ -475,7 +545,7 @@ impl BlockParser for MultilineTableParser {
                 }
                 // Blank line inside the header section is not allowed.
                 if is_blank(la) {
-                    reader.set_position(saved_line, saved_pos);
+                    restore(reader);
                     return None;
                 }
                 headers.push(ls);
@@ -484,7 +554,7 @@ impl BlockParser for MultilineTableParser {
 
             // A with-header table must have at least one header line.
             if headers.is_empty() {
-                reader.set_position(saved_line, saved_pos);
+                restore(reader);
                 return None;
             }
             (cols, headers)
@@ -500,13 +570,20 @@ impl BlockParser for MultilineTableParser {
         let mut current_row: Vec<Segment> = Vec::new();
 
         loop {
+            if matches!(
+                strip_container_indent(reader, container_indent),
+                StripIndent::Insufficient
+            ) {
+                restore(reader);
+                return None;
+            }
             let Some((lb, ls)) = reader.peek_line_bytes() else {
                 // EOF without bottom rule.
-                reader.set_position(saved_line, saved_pos);
+                restore(reader);
                 return None;
             };
             if ls.padding() > 0 {
-                reader.set_position(saved_line, saved_pos);
+                restore(reader);
                 return None;
             }
             let lb = lb.as_ref();
@@ -1347,4 +1424,228 @@ Following paragraph.
         assert_eq!(cell_text(&html, 2), "a");
         assert_eq!(cell_text(&html, 3), "x y z more text even more");
     }
+
+    // ── Nested-container tests ───────────────────────────────────────────────
+    //
+    // Multiline tables must work as block-level children of containers that
+    // strip a continuation indent on each line (sparse list items, definition
+    // list bodies, block quotes, fenced divs). The dispatcher only invokes a
+    // parent's `cont()` between *top-level* line boundaries; when our parser
+    // consumes multiple lines inside one `open()` it must therefore strip the
+    // parent's continuation indent itself on every line after the first.
+
+    /// Parser with definition_list + multiline_table extensions on top of GFM.
+    fn make_parser_with_deflist() -> parser::Parser {
+        parser::Parser::with_extensions(
+            parser::Options {
+                attributes: false,
+                auto_heading_ids: false,
+                ..Default::default()
+            },
+            parser::gfm(parser::GfmOptions::default())
+                .and(rushdown_definition_list::definition_list_parser_extension())
+                .and(multiline_table_parser_extension()),
+        )
+    }
+
+    fn parse_with_deflist(input: &str) -> (Arena, NodeRef) {
+        let p = make_parser_with_deflist();
+        let mut reader = BasicReader::new(input);
+        p.parse(&mut reader)
+    }
+
+    /// Returns the first descendant of any of the given kind names.
+    fn find_kind(arena: &Arena, root: NodeRef, name: &str) -> Option<NodeRef> {
+        let mut found: Option<NodeRef> = None;
+        walk(arena, root, &mut |arena: &Arena,
+                                node_ref: NodeRef,
+                                entering: bool|
+         -> Result<WalkStatus> {
+            if entering
+                && arena[node_ref].kind_data().kind_name() == name
+                && found.is_none()
+            {
+                found = Some(node_ref);
+            }
+            Ok(WalkStatus::Continue)
+        })
+        .ok();
+        found
+    }
+
+    /// Collect non-whitespace text content of a node by walking its inline
+    /// descendants. Mirrors `cell_text` semantics but works on the AST.
+    fn collect_text(arena: &Arena, root: NodeRef, source: &str) -> String {
+        let mut buf = String::new();
+        walk(arena, root, &mut |arena: &Arena,
+                                node_ref: NodeRef,
+                                entering: bool|
+         -> Result<WalkStatus> {
+            if !entering {
+                return Ok(WalkStatus::Continue);
+            }
+            if arena[node_ref].kind_data().kind_name() == "Text" {
+                let text = rushdown::as_kind_data!(arena, node_ref, Text);
+                let s = text.str(source);
+                if !buf.is_empty() && !buf.ends_with(' ') {
+                    buf.push(' ');
+                }
+                buf.push_str(s);
+            }
+            Ok(WalkStatus::Continue)
+        })
+        .ok();
+        buf.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    #[test]
+    fn table_inside_sparse_list_item_ascii() {
+        // ASCII content keeps the byte/column mapping trivial so any column
+        // misalignment shows up as wrong cell content rather than invalid
+        // UTF-8. Two body rows separated by a blank line; bottom rule closes
+        // the table.
+        let input = "\
+* item 1
+
+* item 2 contains a table:
+
+  ----- -----
+   A     B
+
+   1     2
+  ----- -----
+
+* item 3
+";
+        let html = render(input);
+        assert!(html.contains("<ul"), "list present: {html}");
+        assert!(html.contains("<table"), "table inside list: {html}");
+        // All four body cell values must be intact (two rows × two cols).
+        for needle in ["A", "B", "1", "2"] {
+            assert!(
+                html.contains(&format!(">{needle}<"))
+                    || html.contains(&format!("> {needle} <")),
+                "body cell `{needle}` missing from {html}"
+            );
+        }
+        // Must not collapse to thematic-break + paragraphs.
+        assert!(
+            !html.contains("<hr"),
+            "table close rule must not degrade to <hr>: {html}"
+        );
+    }
+
+    #[test]
+    fn table_inside_sparse_list_item_cyrillic() {
+        // Regression for the case where the parser sliced body-line bytes
+        // using column extents derived from the *un-indented* top rule. With
+        // Cyrillic content the misaligned byte offset split a 2-byte UTF-8
+        // character, producing invalid UTF-8 and dropping the cell text.
+        let input = "\
+* Элемент 1
+
+* Элемент 2 содержит таблицу:
+
+  -------  -------
+  Ячейка   Ячейка
+  А        Б
+  -------  -------
+
+* Элемент 3
+";
+        let (arena, doc) = parse(input);
+        let table = find_first!(&arena, doc, Table).expect("no Table node");
+
+        // Headerless table — the dash rule has two groups.
+        assert!(
+            find_first!(&arena, table, TableHeader).is_none(),
+            "headerless table must not have a TableHeader"
+        );
+
+        // Both cells must be left-aligned: header text is flush-left in its
+        // column extent ("Ячейка" starts at col 2 and ends at col 7, the
+        // column extends to col 7 — flush both sides → Default/None, but
+        // critically NOT Right.
+        let body = find_first!(&arena, table, TableBody).expect("no TableBody");
+        let rows = children_of_kind(&arena, body, "TableRow");
+        assert_eq!(rows.len(), 1, "one body row (two physical lines joined)");
+        let cells = children_of_kind(&arena, rows[0], "TableCell");
+        assert_eq!(cells.len(), 2, "two body cells");
+
+        // Cell contents must contain BOTH physical lines' text. The bug
+        // dropped "Ячейка" from cell[0] line 0 entirely.
+        let c0 = collect_text(&arena, cells[0], input);
+        let c1 = collect_text(&arena, cells[1], input);
+        assert!(
+            c0.contains("Ячейка") && c0.contains("А"),
+            "cell[0] must contain both lines, got {c0:?}"
+        );
+        assert!(
+            c1.contains("Ячейка") && c1.contains("Б"),
+            "cell[1] must contain both lines, got {c1:?}"
+        );
+
+        // Alignment must NOT be Right (which is what the buggy parser
+        // produced — the leading list indent made the column-0 text look
+        // flush-right within the un-stripped column extent).
+        for cell in &cells {
+            let align =
+                rushdown::as_kind_data!(arena, *cell, TableCell).alignment();
+            assert!(
+                !matches!(align, TableCellAlignment::Right),
+                "cell alignment must not be Right (bug), got {align:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn table_inside_definition_list_body() {
+        // Regression for the case where multiline tables inside a definition
+        // list body were not recognised at all: the parser saw the body /
+        // bottom rule lines with the 4-column def-list continuation indent
+        // still attached, `indent_width > 3` failed `is_any_dash_rule` on
+        // the bottom rule, the parser exhausted to EOF and rewound, and the
+        // ThematicBreak parser claimed the dashes instead.
+        let input = "\
+Term
+
+:   First paragraph of the definition.
+
+    Second paragraph of the same definition.
+
+    -------  -------
+    Ячейка   Ячейка
+    А        Б
+    -------  -------
+";
+        let (arena, doc) = parse_with_deflist(input);
+        // A DefinitionList must exist and contain a Table inside its
+        // TermDefinition body.
+        let dl =
+            find_kind(&arena, doc, "DefinitionList").expect("no DefinitionList");
+        let td =
+            find_kind(&arena, dl, "TermDefinition").expect("no TermDefinition");
+        let table = find_first!(&arena, td, Table)
+            .expect("table must be parsed inside the definition list body");
+
+        // Sanity: it's a headerless table with one body row of two cells.
+        assert!(find_first!(&arena, table, TableHeader).is_none());
+        let body = find_first!(&arena, table, TableBody).expect("no TableBody");
+        let rows = children_of_kind(&arena, body, "TableRow");
+        assert_eq!(rows.len(), 1);
+        let cells = children_of_kind(&arena, rows[0], "TableCell");
+        assert_eq!(cells.len(), 2);
+
+        let c0 = collect_text(&arena, cells[0], input);
+        let c1 = collect_text(&arena, cells[1], input);
+        assert!(
+            c0.contains("Ячейка") && c0.contains("А"),
+            "cell[0] must contain both lines, got {c0:?}"
+        );
+        assert!(
+            c1.contains("Ячейка") && c1.contains("Б"),
+            "cell[1] must contain both lines, got {c1:?}"
+        );
+    }
+
 }
