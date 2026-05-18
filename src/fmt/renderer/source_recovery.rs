@@ -527,3 +527,119 @@ pub(super) fn footnote_has_inline_body(
     let colon = tail.find(':')?;
     Some(!tail[colon + 1..].trim().is_empty())
 }
+
+// ─── Multiline-table source probes ────────────────────────────────────────
+//
+// The four helpers below duplicate the dash-rule / column-rule predicates
+// implemented inside `src/multiline_table.rs`. The duplication is
+// intentional: `multiline_table.rs` is a self-contained rushdown extension
+// that we may publish as its own crate, and the formatter (a downstream
+// consumer of the parsed AST) should not depend on parser internals.
+//
+// If the predicates here ever diverge from the parser's behaviour, the
+// formatter falls back to the pipe-table emitter for the affected table —
+// which is the pre-existing behaviour and not a correctness regression.
+
+/// Returns `true` if `line` is a *solid* dash rule: indent ≤ 3 spaces,
+/// followed by ≥ 3 contiguous dashes, with only horizontal whitespace
+/// afterwards. Tabs disqualify (the parser rejects them as well).
+fn is_solid_dash_rule_line(line: &str) -> bool {
+    if line.bytes().any(|b| b == b'\t') {
+        return false;
+    }
+    let bytes = line.as_bytes();
+    let indent = bytes.iter().take_while(|&&b| b == b' ').count();
+    if indent > 3 {
+        return false;
+    }
+    let rest = &bytes[indent..];
+    let dashes = rest.iter().take_while(|&&b| b == b'-').count();
+    if dashes < 3 {
+        return false;
+    }
+    rest[dashes..].iter().all(|&b| b == b' ')
+}
+
+/// Parses a *grouped* dash rule (two or more dash groups separated by
+/// spaces) and returns the byte/column extents of each group as
+/// `(start, end)`. Returns `None` for non-grouped or invalid lines.
+/// Pure ASCII (dashes + spaces), so byte offsets equal display columns.
+fn parse_grouped_dash_rule_line(line: &str) -> Option<Vec<(usize, usize)>> {
+    if line.bytes().any(|b| b == b'\t') {
+        return None;
+    }
+    let bytes = line.as_bytes();
+    let mut pos = bytes.iter().take_while(|&&b| b == b' ').count();
+    if pos > 3 {
+        return None;
+    }
+
+    // Trim trailing spaces from the meaningful content end.
+    let mut content_end = bytes.len();
+    while content_end > pos && bytes[content_end - 1] == b' ' {
+        content_end -= 1;
+    }
+
+    for &b in &bytes[pos..content_end] {
+        if b != b'-' && b != b' ' {
+            return None;
+        }
+    }
+
+    let mut groups: Vec<(usize, usize)> = Vec::new();
+    while pos < content_end {
+        if bytes[pos] == b' ' {
+            pos += 1;
+            continue;
+        }
+        let group_start = pos;
+        while pos < content_end && bytes[pos] == b'-' {
+            pos += 1;
+        }
+        groups.push((group_start, pos));
+    }
+
+    if groups.len() >= 2 {
+        Some(groups)
+    } else {
+        None
+    }
+}
+
+/// Returns `true` if `line` is any valid dash rule (solid or grouped) — the
+/// signal the formatter uses to recognise a multiline table from the source
+/// position the parser planted on the `Table` node.
+pub(super) fn is_any_dash_rule_line(line: &str) -> bool {
+    is_solid_dash_rule_line(line) || parse_grouped_dash_rule_line(line).is_some()
+}
+
+/// Returns the *display-column* extents of the grouped separator rule of a
+/// multiline table whose opening dash rule begins at `table_pos`.
+///
+/// For with-header tables this is the second dash-rule line (after the
+/// header lines). For headerless tables the opening rule itself is the
+/// grouped separator. Returns `None` if no grouped rule is found before
+/// the closing rule or the end of source.
+pub(super) fn multiline_table_separator_extents(
+    source: &str,
+    table_pos: usize,
+) -> Option<Vec<(usize, usize)>> {
+    let mut cursor = table_pos;
+    while cursor <= source.len() {
+        let line_end = source[cursor..]
+            .find('\n')
+            .map(|idx| cursor + idx)
+            .unwrap_or(source.len());
+        let line = source[cursor..line_end].trim_end_matches('\r');
+
+        if let Some(extents) = parse_grouped_dash_rule_line(line) {
+            return Some(extents);
+        }
+
+        if line_end >= source.len() {
+            return None;
+        }
+        cursor = line_end + 1;
+    }
+    None
+}

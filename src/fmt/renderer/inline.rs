@@ -25,7 +25,7 @@ impl MarkdownFmtRenderer {
         Ok(())
     }
 
-    fn render_inline(
+    pub(super) fn render_inline(
         &self,
         out: &mut String,
         arena: &Arena,

@@ -197,11 +197,7 @@ impl MarkdownFmtRenderer {
                 }
             }
             KindData::Table(_) => {
-                if self.align_tables {
-                    self.render_table(out, arena, node_ref, source)?;
-                } else {
-                    self.render_table_unaligned(out, arena, node_ref, source)?;
-                }
+                self.render_any_table(out, arena, node_ref, source)?;
             }
             KindData::HtmlBlock(html) => {
                 for line in html.value().iter(source) {
