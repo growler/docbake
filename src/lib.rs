@@ -14,6 +14,7 @@ pub(crate) mod graph;
 mod html;
 mod html_page;
 mod html_site;
+pub(crate) mod multiline_table;
 mod publish;
 mod render_confluence;
 mod render_docx;

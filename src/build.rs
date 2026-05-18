@@ -30,6 +30,7 @@ pub(crate) fn markdown_parser() -> parser::Parser {
             .and(crate::bracketed_span::bracketed_span_parser_extension())
             .and(rushdown_fenced_div::fenced_div_parser_extension())
             .and(code_block_attribute_parser_extension())
+            .and(crate::multiline_table::multiline_table_parser_extension())
             .and(diagram_parser_extension(DiagramParserOptions::default())),
         // NOTE: caption_parser_extension is intentionally omitted here.
         // The caption AST transformer is run as a post-parse step in
