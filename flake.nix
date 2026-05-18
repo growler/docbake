@@ -65,7 +65,7 @@
           packages = rec {
             docbake = pkgs.rustPlatform.buildRustPackage {
               pname = "docbake";
-              version = "0.1.6";
+              version = "0.1.12";
               src = ./.;
               cargoLock = {
                 lockFile = ./Cargo.lock;

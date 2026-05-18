@@ -923,6 +923,7 @@ pub(crate) fn visible_asset_targets_for_profile(
     Ok(visible_assets)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn check_command(
     logger: &DebugDumper,
     cache: &Cache,

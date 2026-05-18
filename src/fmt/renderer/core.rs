@@ -162,6 +162,7 @@ impl MarkdownFmtRenderer {
         Ok(())
     }
 
+    #[allow(clippy::only_used_in_recursion)]
     fn collect_graph_footnotes_in_node(
         &self,
         prepared: &PreparedDocument,

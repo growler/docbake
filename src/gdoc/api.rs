@@ -382,9 +382,7 @@ pub(crate) fn parse_folder_id(url_or_id: &str) -> &str {
     if let Some(idx) = url_or_id.find("/folders/") {
         let after = &url_or_id[idx + 9..]; // skip "/folders/"
                                            // The ID ends at the next '/', '?', or '#' (or end of string).
-        let end = after
-            .find(|c: char| c == '/' || c == '?' || c == '#')
-            .unwrap_or(after.len());
+        let end = after.find(['/', '?', '#']).unwrap_or(after.len());
         &after[..end]
     } else {
         url_or_id

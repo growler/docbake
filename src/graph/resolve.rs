@@ -451,7 +451,7 @@ pub(crate) fn heading_text(arena: &Arena, node_ref: NodeRef, source: &str) -> St
         match arena[child_ref].kind_data() {
             KindData::Text(value) => text.push_str(value.str(source)),
             KindData::CodeSpan(cs) => {
-                text.push_str(&cs.value_str(source));
+                text.push_str(&cs.str(source));
             }
             _ => {}
         }

@@ -129,8 +129,8 @@ impl MarkdownFmtRenderer {
                     } else {
                         match arena[item].kind_data() {
                             KindData::ListItem(li) => match li.task() {
-                                Some(Task::Checked) => format!("{unordered_marker} [x] "),
-                                Some(Task::Unchecked) => format!("{unordered_marker} [ ] "),
+                                Some(Task::Completed) => format!("{unordered_marker} [x] "),
+                                Some(Task::Active) => format!("{unordered_marker} [ ] "),
                                 _ => format!("{unordered_marker} "),
                             },
                             _ => format!("{unordered_marker} "),

@@ -233,14 +233,14 @@ fn collect_node_text(arena: &Arena, node_ref: NodeRef, source: &str, out: &mut S
             out.push(' ');
         }
         KindData::CodeSpan(cs) => {
-            out.push_str(&cs.value_str(source));
+            out.push_str(&cs.str(source));
             out.push(' ');
         }
         // Code blocks — include content unless it's a diagram language.
         KindData::CodeBlock(cb) => {
             if cb.code_block_kind() == CodeBlockKind::Fenced {
                 if let Some(lang) = cb.language_str(source) {
-                    if DIAGRAM_LANGUAGES.iter().any(|&d| d == lang) {
+                    if DIAGRAM_LANGUAGES.contains(&lang) {
                         return; // skip diagram content
                     }
                 }
@@ -275,7 +275,7 @@ fn plain_text(arena: &Arena, node_ref: NodeRef, source: &str) -> String {
         }
         match arena[child_ref].kind_data() {
             KindData::Text(value) => text.push_str(value.str(source)),
-            KindData::CodeSpan(cs) => text.push_str(&cs.value_str(source)),
+            KindData::CodeSpan(cs) => text.push_str(&cs.str(source)),
             _ => {}
         }
         Ok(WalkStatus::Continue)

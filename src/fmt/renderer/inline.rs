@@ -42,7 +42,7 @@ impl MarkdownFmtRenderer {
                 }
             }
             KindData::CodeSpan(cs) => {
-                let text = cs.value_str(source).to_string();
+                let text = cs.str(source).to_string();
                 let fence = backtick_fence(&text);
                 let preserve_padding = code_span_has_explicit_padding(arena, node_ref, source);
                 if preserve_padding || text.starts_with('`') || text.ends_with('`') {
@@ -51,13 +51,13 @@ impl MarkdownFmtRenderer {
                     write!(out, "{fence}{text}{fence}")?;
                 }
             }
-            KindData::Emphasis(emphasis) if emphasis.level() == 1 => {
+            KindData::Emphasis(_) => {
                 let marker = emphasis_marker_from_source(arena, node_ref, source);
                 out.push(marker);
                 self.render_inline_children(out, arena, node_ref, source)?;
                 out.push(marker);
             }
-            KindData::Emphasis(_) => {
+            KindData::Strong(_) => {
                 let marker = emphasis_marker_from_source(arena, node_ref, source);
                 out.push_str(&marker.to_string().repeat(2));
                 self.render_inline_children(out, arena, node_ref, source)?;
@@ -142,7 +142,7 @@ impl MarkdownFmtRenderer {
         for child in arena[node_ref].children(arena) {
             match arena[child].kind_data() {
                 KindData::Text(text) => out.push_str(text.str(source)),
-                KindData::CodeSpan(cs) => out.push_str(&cs.value_str(source)),
+                KindData::CodeSpan(cs) => out.push_str(&cs.str(source)),
                 _ => self.render_inline(out, arena, child, source)?,
             }
         }

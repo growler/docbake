@@ -12,7 +12,7 @@
 //!    credential store so subsequent runs do not require browser interaction.
 
 use anyhow::{bail, Context, Result};
-use rand::{rngs::OsRng, RngCore};
+use rand::{rngs::SysRng, TryRng};
 use serde::{Deserialize, Serialize};
 
 /// Google OAuth2 endpoints.
@@ -303,7 +303,7 @@ fn generate_oauth_state() -> Result<String> {
 }
 
 fn fill_secure_random(bytes: &mut [u8]) -> Result<()> {
-    let mut rng = OsRng;
+    let mut rng = SysRng;
     rng.try_fill_bytes(bytes)
         .context("failed to read secure random bytes from OS")
 }

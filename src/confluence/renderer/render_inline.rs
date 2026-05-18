@@ -47,14 +47,14 @@ impl<'a> ConfluenceRenderer<'a> {
                 }
             }
             KindData::CodeSpan(cs) => {
-                write!(out, "<code>{}</code>", xml_escape(&cs.value_str(source)))?;
+                write!(out, "<code>{}</code>", xml_escape(&cs.str(source)))?;
             }
-            KindData::Emphasis(emphasis) if emphasis.level() == 1 => {
+            KindData::Emphasis(_) => {
                 out.push_str("<em>");
                 self.render_inline_children(out, context, node_ref)?;
                 out.push_str("</em>");
             }
-            KindData::Emphasis(_) => {
+            KindData::Strong(_) => {
                 out.push_str("<strong>");
                 self.render_inline_children(out, context, node_ref)?;
                 out.push_str("</strong>");
@@ -237,7 +237,7 @@ fn collect_image_alt_text(arena: &Arena, node_ref: NodeRef, source: &str) -> Str
     for child in arena[node_ref].children(arena) {
         match arena[child].kind_data() {
             KindData::Text(text) => alt.push_str(text.str(source)),
-            KindData::CodeSpan(cs) => alt.push_str(&cs.value_str(source)),
+            KindData::CodeSpan(cs) => alt.push_str(&cs.str(source)),
             _ => {}
         }
     }

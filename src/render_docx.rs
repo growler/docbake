@@ -922,7 +922,7 @@ impl<'a> DocxRenderer<'a> {
                 runs
             }
             KindData::CodeSpan(cs) => {
-                let content = cs.value_str(source);
+                let content = cs.str(source);
                 let mono_fonts = RunFonts::new()
                     .ascii("Courier New")
                     .hi_ansi("Courier New")
@@ -933,11 +933,11 @@ impl<'a> DocxRenderer<'a> {
                     .fonts(mono_fonts)
                     .shading(Shading::new().fill(CODE_BG))]
             }
-            KindData::Emphasis(emphasis) if emphasis.level() == 1 => {
+            KindData::Emphasis(_) => {
                 let children_runs = self.collect_child_runs(context, node_ref);
                 children_runs.into_iter().map(|r| r.italic()).collect()
             }
-            KindData::Emphasis(_) => {
+            KindData::Strong(_) => {
                 let children_runs = self.collect_child_runs(context, node_ref);
                 children_runs.into_iter().map(|r| r.bold()).collect()
             }
@@ -996,7 +996,7 @@ impl<'a> DocxRenderer<'a> {
                     }
                 }
                 KindData::CodeSpan(cs) => {
-                    buf.push_str(&cs.value_str(source));
+                    buf.push_str(&cs.str(source));
                 }
                 _ => {
                     buf.push_str(&Self::collect_inline_text(arena, source, child));

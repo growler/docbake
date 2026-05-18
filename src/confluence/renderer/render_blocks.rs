@@ -129,7 +129,7 @@ impl<'a> ConfluenceRenderer<'a> {
                     if is_task_list {
                         if let KindData::ListItem(li) = arena[item].kind_data() {
                             match li.task() {
-                                Some(Task::Checked) => {
+                                Some(Task::Completed) => {
                                     out.push_str("<ac:task-list><ac:task><ac:task-status>complete</ac:task-status><ac:task-body>");
                                     for child in arena[item].children(arena) {
                                         self.render_block(out, context, child)?;
@@ -138,7 +138,7 @@ impl<'a> ConfluenceRenderer<'a> {
                                     out.push_str("</li>\n");
                                     continue;
                                 }
-                                Some(Task::Unchecked) => {
+                                Some(Task::Active) => {
                                     out.push_str("<ac:task-list><ac:task><ac:task-status>incomplete</ac:task-status><ac:task-body>");
                                     for child in arena[item].children(arena) {
                                         self.render_block(out, context, child)?;

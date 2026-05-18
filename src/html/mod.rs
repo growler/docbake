@@ -53,7 +53,7 @@ pub(crate) fn heading_text_html(arena: &Arena, node_ref: NodeRef, source: &str) 
             KindData::Text(value) => html.push_str(&html_escape(value.str(source))),
             KindData::CodeSpan(cs) => {
                 html.push_str("<code>");
-                html.push_str(&html_escape(&cs.value_str(source)));
+                html.push_str(&html_escape(&cs.str(source)));
                 html.push_str("</code>");
             }
             _ => {}
@@ -239,7 +239,7 @@ fn render_image_alt_text<W: TextWrite>(
     for child in arena[node_ref].children(arena) {
         match arena[child].kind_data() {
             KindData::Text(text) => writer.write(w, text.str(source))?,
-            KindData::CodeSpan(cs) => writer.write(w, &cs.value_str(source))?,
+            KindData::CodeSpan(cs) => writer.write(w, &cs.str(source))?,
             _ => render_image_alt_text(w, writer, source, arena, child)?,
         }
     }

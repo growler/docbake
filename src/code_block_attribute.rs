@@ -488,7 +488,7 @@ mod tests {
         let renderer = html::Renderer::with_extensions(
             html::Options::default(),
             code_block_attribute_html_renderer_extension(
-                CodeBlockAttributeHtmlRendererOptions::default(),
+                CodeBlockAttributeHtmlRendererOptions,
             ),
         );
         let mut output = String::new();
@@ -518,7 +518,7 @@ mod tests {
         let renderer = html::Renderer::with_extensions(
             html::Options::default(),
             code_block_attribute_html_renderer_extension(
-                CodeBlockAttributeHtmlRendererOptions::default(),
+                CodeBlockAttributeHtmlRendererOptions,
             ),
         );
         let mut output = String::new();
@@ -544,7 +544,7 @@ mod tests {
         let renderer = html::Renderer::with_extensions(
             html::Options::default(),
             code_block_attribute_html_renderer_extension(
-                CodeBlockAttributeHtmlRendererOptions::default(),
+                CodeBlockAttributeHtmlRendererOptions,
             ),
         );
         let mut output = String::new();
@@ -574,7 +574,7 @@ mod tests {
         let renderer = html::Renderer::with_extensions(
             html::Options::default(),
             code_block_attribute_html_renderer_extension(
-                CodeBlockAttributeHtmlRendererOptions::default(),
+                CodeBlockAttributeHtmlRendererOptions,
             ),
         );
         let mut output = String::new();

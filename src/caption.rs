@@ -710,7 +710,7 @@ mod tests {
             html::Options::default(),
             crate::bracketed_span::bracketed_span_html_renderer_extension()
                 .and(rushdown_fenced_div::fenced_div_html_renderer_extension(
-                    rushdown_fenced_div::FencedDivHtmlRendererOptions::default(),
+                    rushdown_fenced_div::FencedDivHtmlRendererOptions,
                 ))
                 .and(caption_html_renderer_extension()),
         );

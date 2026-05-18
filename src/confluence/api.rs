@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use rand::{rngs::OsRng, RngCore};
+use rand::{rngs::SysRng, TryRng};
 use serde_json::{json, Value};
 
 /// Metadata about a Confluence page.
@@ -461,8 +461,9 @@ fn percent_encode(value: &str) -> String {
 const HEX: &[u8; 16] = b"0123456789ABCDEF";
 
 fn random_u64() -> u64 {
-    let mut rng = OsRng;
-    rng.next_u64()
+    let mut rng = SysRng;
+    rng.try_next_u64()
+        .expect("SysRng failed to produce a u64 from OS entropy")
 }
 
 #[cfg(test)]

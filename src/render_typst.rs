@@ -223,8 +223,8 @@ impl TypstRenderer {
                     if is_task_list {
                         if let KindData::ListItem(li) = arena[item].kind_data() {
                             match li.task() {
-                                Some(Task::Checked) => out.push_str("#task-checkbox(true) "),
-                                Some(Task::Unchecked) => out.push_str("#task-checkbox(false) "),
+                                Some(Task::Completed) => out.push_str("#task-checkbox(true) "),
+                                Some(Task::Active) => out.push_str("#task-checkbox(false) "),
                                 // Non-task item in a mixed list — restore the
                                 // bullet that marker: none suppressed.
                                 Some(_) | None => out.push_str("#task-bullet() "),
@@ -781,13 +781,11 @@ impl TypstRenderer {
                 write!(
                     out,
                     "#inline-code(\"{}\")",
-                    escape_typst_string(&cs.value_str(source))
+                    escape_typst_string(&cs.str(source))
                 )?;
             }
-            KindData::Emphasis(emphasis) if emphasis.level() == 1 => {
-                self.wrap_inline(out, "emph", context, node_ref)?
-            }
-            KindData::Emphasis(_) => self.wrap_inline(out, "strong", context, node_ref)?,
+            KindData::Emphasis(_) => self.wrap_inline(out, "emph", context, node_ref)?,
+            KindData::Strong(_) => self.wrap_inline(out, "strong", context, node_ref)?,
             KindData::Strikethrough(_) => self.wrap_inline(out, "strike", context, node_ref)?,
             KindData::Link(link) => {
                 let dest = prepared
