@@ -496,10 +496,7 @@ fn emit_row_physical_lines(
                 .and_then(|lines| lines.get(line_idx))
                 .map(String::as_str)
                 .unwrap_or("");
-            let align = aligns
-                .get(col)
-                .copied()
-                .unwrap_or(TableCellAlignment::None);
+            let align = aligns.get(col).copied().unwrap_or(TableCellAlignment::None);
             if col > 0 {
                 row_line.push(' ');
             }
@@ -697,7 +694,8 @@ mod tests {
         );
         assert!(out.contains("| 1   | 2   |"));
         assert!(
-            !out.lines().any(|line| line.starts_with("---") && !line.contains('|')),
+            !out.lines()
+                .any(|line| line.starts_with("---") && !line.contains('|')),
             "unexpected solid dash rule in pipe-table output: {out:?}"
         );
     }

@@ -224,7 +224,9 @@ impl Theme {
         match self {
             Theme::Embedded(name) => {
                 let dir = embedded_theme_dir(name)?;
-                Ok(dir.get_file(format!("{name}/{rel}")).map(|file| file.contents().to_vec()))
+                Ok(dir
+                    .get_file(format!("{name}/{rel}"))
+                    .map(|file| file.contents().to_vec()))
             }
             Theme::Custom(dir) => {
                 let path = dir.join(rel);
