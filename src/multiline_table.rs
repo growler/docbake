@@ -57,9 +57,11 @@
 //!
 //! [pandoc manual]: https://pandoc.org/demo/example33/8.9-tables.html
 
-use rushdown::as_type_data_mut;
+use core::fmt;
+
 use rushdown::ast::{
-    Arena, NodeRef, Table, TableBody, TableCell, TableCellAlignment, TableHeader, TableRow,
+    pp_indent, Arena, KindData, NodeKind, NodeRef, NodeType, Paragraph, PrettyPrint, Table,
+    TableBody, TableCell, TableCellAlignment, TableHeader, TableRow,
 };
 use rushdown::parser::{
     AnyBlockParser, BlockParser, Context, NoParserOptions, Parser, ParserExtension,
@@ -67,9 +69,10 @@ use rushdown::parser::{
 };
 use rushdown::text::{self, Reader as _, Segment};
 use rushdown::util::{
-    indent_position, indent_width, is_blank, is_space, trim_left_space_length,
+    indent_position, indent_width, is_blank, is_space, tab_width, trim_left_space_length,
     trim_right_space_length,
 };
+use rushdown::{as_extension_data_mut, as_type_data_mut};
 
 // ============================================================================
 // Low-level helpers (byte-level, no regex, no string allocation)
@@ -192,26 +195,28 @@ enum StripIndent {
 }
 
 /// Advances `reader` past `indent` display columns of leading whitespace on
-/// the current line, mirroring what a parent container's `cont()` would have
-/// done before invoking a fresh child block parser.
+/// the current line, mirroring what a *whitespace-stripping* parent
+/// container's `cont()` would have done before invoking a fresh child block
+/// parser.
 ///
 /// Necessary because [`MultilineTableParser::open`] eagerly consumes every
 /// line of the table inside a single call. After our own `advance_line()` the
 /// reader sits at the next line's head with the parent container's continuation
-/// indent (list-item content offset, def-list body indent, blockquote `> `,
-/// fenced-div padding, …) still attached. Without re-stripping it on every
-/// line after the first, `parse_column_rule` / `is_any_dash_rule` see the
-/// indent as part of the line content and either reject the bottom rule
+/// indent (list-item content offset, def-list body indent, fenced-div
+/// padding, …) still attached. Without re-stripping it on every line after
+/// the first, `parse_column_rule` / `is_any_dash_rule` see the indent as
+/// part of the line content and either reject the bottom rule
 /// (`indent_width > 3`) or shift the derived column extents — both of which
 /// silently corrupt the parse.
 ///
 /// Blank lines and EOF are returned as [`StripIndent::Ok`] without
 /// advancement; pandoc treats them as row separators / table terminators and
 /// neither requires an indent prefix.
-fn strip_container_indent(
-    reader: &mut text::BasicReader,
-    indent: usize,
-) -> StripIndent {
+///
+/// This helper handles only *whitespace* continuation. Blockquote markers
+/// (`>`) require [`strip_blockquote_layers`]; see [`ParentMode`] for the
+/// dispatch.
+fn strip_container_indent(reader: &mut text::BasicReader, indent: usize) -> StripIndent {
     if indent == 0 {
         return StripIndent::Ok;
     }
@@ -228,6 +233,202 @@ fn strip_container_indent(
         }
         None => StripIndent::Insufficient,
     }
+}
+
+/// Advances `reader` past `layers` consecutive blockquote markers on the
+/// current line, replicating the byte/column shape of
+/// [`BlockquoteParser::process`] (`rushdown-0.18.0/src/parser/blockquote.rs`):
+/// for each layer, skip any leading whitespace via [`indent_width`], require
+/// a `>`, advance past it, then optionally consume one trailing space/tab
+/// (with the tab-padding adjustment).
+///
+/// Necessary because [`MultilineTableParser::open`] eagerly consumes every
+/// line in a single dispatch — the rushdown block dispatcher does **not**
+/// re-invoke `BlockquoteParser::cont()` between our internal
+/// `advance_line()` calls, so each subsequent peeked line still carries the
+/// raw `>` prefix that the parent blockquote would have stripped on a
+/// normal top-level line.
+///
+/// Returns [`StripIndent::Insufficient`] the first time a layer's `>` is
+/// missing (including the case of a truly blank `\n`-only line, which
+/// terminates the parent blockquote in CommonMark/pandoc). A `>\n` line
+/// (blockquote with empty content) succeeds: the `>` is consumed and the
+/// reader sits on the trailing `\n`, where the outer table loop's
+/// `is_blank` check then catches it as a row separator.
+fn strip_blockquote_layers(reader: &mut text::BasicReader, layers: usize) -> StripIndent {
+    for _ in 0..layers {
+        let Some((line, _)) = reader.peek_line_bytes() else {
+            return StripIndent::Ok;
+        };
+        let line_bytes: &[u8] = line.as_ref();
+        let (_, mut pos) = indent_width(line_bytes, reader.line_offset());
+        if pos >= line_bytes.len() || line_bytes[pos] != b'>' {
+            return StripIndent::Insufficient;
+        }
+        pos += 1;
+        if pos >= line_bytes.len() || line_bytes[pos] == b'\n' {
+            // Line ends at the marker — `>\n` (blank-content). Consume the
+            // marker; the next blockquote layer (if any) will see the
+            // remaining bytes and fail, which correctly aborts the table
+            // parse for nested cases where the inner blockquote is not
+            // continued.
+            reader.advance(pos);
+            continue;
+        }
+        reader.advance(pos);
+        let next = line_bytes[pos];
+        if next == b' ' || next == b'\t' {
+            let padding = if next == b'\t' {
+                tab_width(reader.line_offset()) - 1
+            } else {
+                0
+            };
+            reader.advance_and_set_padding(1, padding);
+        }
+    }
+    StripIndent::Ok
+}
+
+/// Per-line continuation strip tokenised from the raw bytes of the top
+/// rule line's prefix (the bytes between the line head and
+/// `reader.pos.start` when `open()` is called, i.e. what every ancestor
+/// collectively stripped on the top rule line).
+///
+/// Each `StripOp` corresponds to either a whitespace run (any composition
+/// of list-item, def-list term-definition, or other indent-stripping
+/// ancestors) or a single blockquote layer. The whole sequence is
+/// applied — in order — to each peeked line during the forward-scan in
+/// `open()`.
+///
+/// During `cont()` we don't need the sequence at all: the engine invokes
+/// each parent's `cont()` in turn before reaching us, so the line we
+/// peek there is already fully stripped. The sequence only exists to
+/// validate the forward-scan's view of upcoming lines from raw source.
+#[derive(Debug, Clone)]
+struct ParentStripSeq(Vec<StripOp>);
+
+/// A single strip operation.
+#[derive(Debug, Clone, Copy)]
+enum StripOp {
+    /// Strip up to `cols` columns of leading whitespace. Blank lines (at
+    /// the time this op is applied) pass through unchanged — matches the
+    /// engine's tolerance for blank lines inside list-item / def-list-body
+    /// continuations.
+    Whitespace { cols: usize },
+    /// Strip ≤3 cols leading whitespace, then `>`, then optionally one
+    /// space/tab. Mirrors `BlockquoteParser::process`.
+    Blockquote,
+}
+
+impl ParentStripSeq {
+    /// Tokenises `prefix` (the raw bytes the dispatcher stripped on the
+    /// top rule line) into a sequence of strip ops, without consulting
+    /// the AST. The prefix is decomposed left-to-right as alternating
+    /// runs of leading whitespace and `>` blockquote markers — every
+    /// container kind whose `cont()` strips a whitespace indent (list
+    /// items, def-list term-definitions) or a blockquote marker is
+    /// covered by this grammar. Container kinds that strip nothing
+    /// (fenced divs, `Document`, `List`, `DefinitionList`) contribute
+    /// no prefix bytes and are therefore irrelevant.
+    ///
+    /// Returns `None` if the prefix contains any byte that is neither
+    /// whitespace nor `>` — that would mean the dispatcher consumed
+    /// something this parser cannot replay, so we decline the candidate
+    /// rather than guess.
+    fn build(prefix: &[u8]) -> Option<Self> {
+        let mut ops: Vec<StripOp> = Vec::new();
+        let mut cursor: usize = 0;
+        let mut col: usize = 0;
+        while cursor < prefix.len() {
+            // Whitespace run.
+            let mut ws_cols: usize = 0;
+            while let Some(&b) = prefix.get(cursor) {
+                if b == b' ' {
+                    ws_cols += 1;
+                    cursor += 1;
+                } else if b == b'\t' {
+                    ws_cols += tab_width(col + ws_cols);
+                    cursor += 1;
+                } else {
+                    break;
+                }
+            }
+            if ws_cols > 0 {
+                ops.push(StripOp::Whitespace { cols: ws_cols });
+                col += ws_cols;
+            }
+            // Blockquote marker (with optional trailing space/tab).
+            match prefix.get(cursor) {
+                Some(&b'>') => {
+                    cursor += 1;
+                    col += 1;
+                    match prefix.get(cursor) {
+                        Some(&b' ') => {
+                            cursor += 1;
+                            col += 1;
+                        }
+                        Some(&b'\t') => {
+                            let pad = tab_width(col);
+                            cursor += 1;
+                            col += pad;
+                        }
+                        _ => {}
+                    }
+                    ops.push(StripOp::Blockquote);
+                }
+                Some(_) => return None, // unrecognised non-whitespace byte
+                None => break,
+            }
+        }
+        Some(Self(ops))
+    }
+
+    /// Apply the sequence to the current line. Returns
+    /// [`StripIndent::Insufficient`] if any op fails on a non-blank line.
+    fn apply(&self, reader: &mut text::BasicReader) -> StripIndent {
+        for op in &self.0 {
+            // Re-peek for each op — blank-line semantics are op-specific
+            // and prior ops may have advanced the reader past leading
+            // whitespace into a now-blank tail.
+            let blank = reader
+                .peek_line_bytes()
+                .map(|(b, _)| is_blank(b.as_ref()))
+                .unwrap_or(true);
+            match op {
+                StripOp::Whitespace { cols } => {
+                    if blank {
+                        continue; // list/def-list continue past blank lines
+                    }
+                    if matches!(
+                        strip_container_indent(reader, *cols),
+                        StripIndent::Insufficient
+                    ) {
+                        return StripIndent::Insufficient;
+                    }
+                }
+                StripOp::Blockquote => {
+                    if matches!(
+                        strip_blockquote_layers(reader, 1),
+                        StripIndent::Insufficient
+                    ) {
+                        return StripIndent::Insufficient;
+                    }
+                }
+            }
+        }
+        StripIndent::Ok
+    }
+}
+
+/// Finds the byte position of the start of the line containing byte
+/// `pos` in `source`. Used to extract the raw prefix bytes that the
+/// dispatcher stripped on the top rule line.
+fn find_line_head(source: &[u8], pos: usize) -> usize {
+    source[..pos]
+        .iter()
+        .rposition(|&b| b == b'\n')
+        .map(|i| i + 1)
+        .unwrap_or(0)
 }
 
 /// Extracts the cell content segment for column `[col_start, col_end)` from
@@ -301,8 +502,7 @@ fn compute_alignments(
             for &line_seg in reference_lines {
                 let line_bytes = &source.as_bytes()[line_seg.start()..line_seg.stop()];
                 let content_byte_len = strip_newline(line_bytes);
-                let content =
-                    &source[line_seg.start()..line_seg.start() + content_byte_len];
+                let content = &source[line_seg.start()..line_seg.start() + content_byte_len];
                 let line_col_width = content.chars().count();
 
                 // Always use col_end as the right boundary for alignment
@@ -444,16 +644,150 @@ fn populate_cell(
 }
 
 // ============================================================================
+// Intermediate AST node — collected during the line-by-line phase, replaced
+// in `close()` by a real `Table` (or a `Paragraph` fallback).
+// ============================================================================
+
+/// State of the per-line collection state machine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum CandidateState {
+    /// With-header form, pre-separator: subsequent lines are header
+    /// content until a grouped column rule appears.
+    #[default]
+    AwaitingHeader,
+    /// Body section: content lines accumulate, blank lines separate rows,
+    /// a dash rule (solid or grouped) closes the table.
+    AwaitingBody,
+    /// A bottom rule was consumed in `cont()`; the next `cont()` call
+    /// returns `None` to close.
+    Complete,
+}
+
+/// Classification used when capturing a line, so the close-time transform
+/// can partition the captured stream into header / body / row-separator
+/// groups without re-parsing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LineKind {
+    Header,
+    Body,
+    /// Blank line — row separator inside the body section.
+    Blank,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CapturedLine {
+    /// Post-parent-strip source segment for the line, including its
+    /// trailing newline byte (consistent with what `peek_line_bytes()`
+    /// returns).
+    seg: Segment,
+    kind: LineKind,
+}
+
+/// AST extension node holding the table's captured lines between the
+/// block-parsing phase (`open` + `cont`) and the in-phase transform
+/// (`close`). Marked as a [`NodeType::LeafBlock`] so the engine does not
+/// attempt to open any child blocks for it. Its built-in `Block`
+/// type-data carries an empty source vector — captured segments live in
+/// this struct's own `lines` field, which keeps `parse_block` from
+/// inline-parsing them and preserves the segments for the close-time
+/// transform. The node is unconditionally replaced (by a `Table` on
+/// success or a `Paragraph` on fallback) inside `close()`, so the
+/// extension type never reaches the renderer.
+#[derive(Debug)]
+struct MultilineTableCandidate {
+    /// True if the top rule was solid (with-header form).
+    with_header: bool,
+    /// Top-rule source segment (kept for the fallback paragraph so the
+    /// original text is preserved when the candidate cannot be materialised
+    /// as a table).
+    top_rule_seg: Segment,
+    /// Column extents in stripped-line column space. Populated in
+    /// `open()` for headerless tables, in `cont()` (on separator) for
+    /// with-header tables.
+    col_extents: Vec<(usize, usize)>,
+    /// Captured (post-parent-strip) source segments for every line the
+    /// state machine accepted, in document order.
+    lines: Vec<CapturedLine>,
+    /// State machine cursor.
+    state: CandidateState,
+}
+
+impl NodeKind for MultilineTableCandidate {
+    fn typ(&self) -> NodeType {
+        NodeType::LeafBlock
+    }
+
+    fn kind_name(&self) -> &'static str {
+        "MultilineTableCandidate"
+    }
+}
+
+impl PrettyPrint for MultilineTableCandidate {
+    fn pretty_print(&self, w: &mut dyn fmt::Write, _source: &str, level: usize) -> fmt::Result {
+        writeln!(
+            w,
+            "{}MultilineTableCandidate (state={:?}, lines={})",
+            pp_indent(level),
+            self.state,
+            self.lines.len()
+        )
+    }
+}
+
+impl From<MultilineTableCandidate> for KindData {
+    fn from(c: MultilineTableCandidate) -> Self {
+        KindData::Extension(Box::new(c))
+    }
+}
+
+// ============================================================================
 // Block parser
 // ============================================================================
 
 /// [`BlockParser`] for pandoc-style multiline tables.
 ///
-/// Triggered on `b"-"` at priority 50 — ahead of setext headings (100) and
-/// thematic breaks (200).  The entire table is validated and materialised in
-/// [`open`][Self::open]; [`cont`][Self::cont] is a no-op.  On look-ahead
-/// failure the reader position is restored so downstream parsers can claim
-/// the dashes line.
+/// Cooperates with the rushdown line dispatcher rather than fighting it.
+///
+/// 1. [`open`][Self::open] runs a *read-only* forward-scan over the source
+///    that follows the top rule, applying the parent chain's strip via
+///    [`classify_parent_chain`] + [`strip_parent_prefix`] on a cursor
+///    reader, and validates that the candidate looks like a well-formed
+///    multiline table. Heuristics:
+///    - A top rule immediately followed by a blank (post-strip) line is
+///      a thematic break, not a table opening.
+///    - A solid (with-header) top rule must be followed by no more than
+///      `MAX_HEADER_LINES` non-blank lines before the grouped separator.
+///    - The bottom dash rule must exist before EOF, and the line
+///      immediately preceding it must not be blank (otherwise the rule
+///      is a thematic break inside the body).
+///
+///    The reader is restored to the start of the top rule before
+///    returning; only the top-rule line is consumed (`advance_to_eol`)
+///    and a [`MultilineTableCandidate`] extension node is opened.
+///
+/// 2. [`cont`][Self::cont] is invoked by the dispatcher once per
+///    subsequent line, *after* every parent container has stripped its
+///    own prefix. The state machine pushes the post-strip segment into
+///    the candidate's `lines` field, advances on grouped column rules
+///    (header → body) and dash rules (body → complete), and returns
+///    `None` only once a bottom rule has been seen.
+///
+/// 3. [`close`][Self::close] replaces the candidate with the real
+///    `Table`/`TableHeader`/`TableBody`/`TableRow`/`TableCell` subtree
+///    using the existing [`extract_cell_segment`] / [`compute_alignments`]
+///    / [`populate_cell`] helpers. Running in `close()` (during the
+///    block-parsing phase) means each freshly-emitted `TableCell.source`
+///    is later picked up by `parse_block`'s inline-parsing pass — same
+///    timing as the built-in `TableParagraphTransformer`. When the state
+///    machine never reached [`CandidateState::Complete`] (e.g. parent
+///    closed us before we saw the bottom rule), the candidate is replaced
+///    with a `Paragraph` whose source is the captured lines, so no text
+///    is lost.
+///
+/// Triggered on `b"-"` at priority **50** — ahead of setext headings
+/// (100) and thematic breaks (200). `cont()` never advances the reader
+/// (the engine's `advance_line` after each iteration does that); `open()`
+/// advances past the top rule with `advance_to_eol`.
 #[derive(Debug, Default)]
 pub(crate) struct MultilineTableParser;
 
@@ -462,6 +796,14 @@ impl MultilineTableParser {
         Self
     }
 }
+
+/// Maximum number of non-blank header lines tolerated between the solid
+/// top rule and the grouped separator.
+const MAX_HEADER_LINES: usize = 10;
+/// Hard ceiling on body-section lines (incl. blanks and the bottom rule)
+/// during the forward-scan. Guards against runaway scans on degenerate
+/// input.
+const MAX_BODY_LINES: usize = 10_000;
 
 impl BlockParser for MultilineTableParser {
     fn trigger(&self) -> &[u8] {
@@ -475,152 +817,220 @@ impl BlockParser for MultilineTableParser {
         reader: &mut text::BasicReader,
         _ctx: &mut Context,
     ) -> Option<(NodeRef, State)> {
-        let source = reader.source();
         let (saved_line, saved_pos) = reader.position();
 
-        // ── Step 1: classify the top rule line ───────────────────────────────
+        // ── Step 1: classify the top rule line ─────────────────────────────
         let (top_bytes, top_seg) = reader.peek_line_bytes()?;
         if top_seg.padding() > 0 {
-            // Tab-expanded leading content — not supported in v1.
-            return None;
+            return None; // tab-expanded leading content unsupported
         }
         let top_offset = reader.line_offset();
-        let top_bytes = top_bytes.as_ref();
-        let top_for_analysis = &top_bytes[..strip_newline(top_bytes)];
+        let top_bytes_ref: &[u8] = top_bytes.as_ref();
+        let top_for_analysis = &top_bytes_ref[..strip_newline(top_bytes_ref)];
 
         let maybe_grouped = parse_column_rule(top_for_analysis, top_offset);
         let solid = maybe_grouped.is_none() && is_solid_rule(top_for_analysis, top_offset);
-
         if !solid && maybe_grouped.is_none() {
-            return None; // not a dash rule at all
+            return None;
         }
-
         let with_header = solid;
         let table_pos = top_seg.start();
 
-        // `top_offset` is the column on the source line where the parent
-        // container's content begins (e.g. 2 cols inside a list item with
-        // 2-space content offset, 4 cols inside a `:   ` def-list body, the
-        // post-`> ` position inside a blockquote, …). The dispatcher only
-        // invokes a parent's `cont()` between top-level line boundaries;
-        // since we consume every line of the table here, we must re-strip
-        // the same indent ourselves before processing each subsequent line.
-        // For top-level tables `top_offset` is 0 and stripping is a no-op.
-        let container_indent = top_offset;
-        let restore = |reader: &mut text::BasicReader| {
-            reader.set_position(saved_line, saved_pos);
-        };
+        // Build the per-line parent strip by tokenising the raw prefix
+        // bytes the dispatcher already consumed on the top rule line.
+        // Returns None for prefix shapes we can't decode (a byte that's
+        // neither whitespace nor `>`); we then decline the candidate
+        // rather than guess.
+        let source_bytes = reader.source().as_bytes();
+        let head = find_line_head(source_bytes, top_seg.start());
+        let prefix = &source_bytes[head..top_seg.start()];
+        let strip_seq = ParentStripSeq::build(prefix)?;
 
-        // Advance past the top rule.
+        // ── Step 2: read-only forward-scan validation ──────────────────────
+        // The reader is mutated during the scan; restored to the start of
+        // the top rule before returning so cont() picks up from line 2 via
+        // the engine's normal dispatch (which handles per-line parent
+        // stripping for free).
         reader.advance_line();
+        let scan_ok = validate_table_structure(reader, &strip_seq, with_header);
+        reader.set_position(saved_line, saved_pos);
 
-        // ── Step 2: collect header lines / resolve column extents ─────────────
-        let (col_extents, header_segs): (Vec<(usize, usize)>, Vec<Segment>) = if with_header {
-            // Collect header lines until we hit the grouped separator.
-            let mut headers: Vec<Segment> = Vec::new();
-            let cols = loop {
-                if matches!(
-                    strip_container_indent(reader, container_indent),
-                    StripIndent::Insufficient
-                ) {
-                    restore(reader);
-                    return None;
-                }
-                let Some((lb, ls)) = reader.peek_line_bytes() else {
-                    // EOF before separator.
-                    restore(reader);
-                    return None;
-                };
-                if ls.padding() > 0 {
-                    restore(reader);
-                    return None;
-                }
-                let lb = lb.as_ref();
-                let la = &lb[..strip_newline(lb)];
-
-                // Grouped dash rule → separator found.
-                if let Some(cols) = parse_column_rule(la, reader.line_offset()) {
-                    reader.advance_line(); // consume separator
-                    break cols;
-                }
-                // Blank line inside the header section is not allowed.
-                if is_blank(la) {
-                    restore(reader);
-                    return None;
-                }
-                headers.push(ls);
-                reader.advance_line();
-            };
-
-            // A with-header table must have at least one header line.
-            if headers.is_empty() {
-                restore(reader);
-                return None;
-            }
-            (cols, headers)
-        } else {
-            // Headerless: the top grouped rule IS the column rule.
-            (maybe_grouped.unwrap(), Vec::new())
-        };
-
-        let num_cols = col_extents.len();
-
-        // ── Step 3: collect body rows until the bottom dash rule ──────────────
-        let mut body_rows: Vec<Vec<Segment>> = Vec::new();
-        let mut current_row: Vec<Segment> = Vec::new();
-
-        loop {
-            if matches!(
-                strip_container_indent(reader, container_indent),
-                StripIndent::Insufficient
-            ) {
-                restore(reader);
-                return None;
-            }
-            let Some((lb, ls)) = reader.peek_line_bytes() else {
-                // EOF without bottom rule.
-                restore(reader);
-                return None;
-            };
-            if ls.padding() > 0 {
-                restore(reader);
-                return None;
-            }
-            let lb = lb.as_ref();
-            let la = &lb[..strip_newline(lb)];
-
-            if is_any_dash_rule(la, reader.line_offset()) {
-                // Bottom rule found.
-                if !current_row.is_empty() {
-                    body_rows.push(std::mem::take(&mut current_row));
-                }
-                reader.advance_to_eol(); // leave reader at EOL; outer loop calls advance_line()
-                break;
-            }
-
-            if is_blank(la) {
-                // Blank line separates body rows.
-                if !current_row.is_empty() {
-                    body_rows.push(std::mem::take(&mut current_row));
-                }
-                reader.advance_line();
-                continue;
-            }
-
-            // Regular content line — accumulate into the current row.
-            current_row.push(ls);
-            reader.advance_line();
-        }
-
-        // A multiline table must have at least one body row.
-        if body_rows.is_empty() {
-            reader.set_position(saved_line, saved_pos);
+        if !scan_ok {
             return None;
         }
 
-        // ── Step 4: compute column alignments ────────────────────────────────
-        // With-header: all header lines determine alignment.
-        // Headerless:  only the first physical line of the first body row.
+        // ── Step 3: commit — consume top rule, open the candidate ──────────
+        let candidate = MultilineTableCandidate {
+            with_header,
+            top_rule_seg: top_seg,
+            col_extents: if with_header {
+                Vec::new()
+            } else {
+                maybe_grouped.expect("headerless top rule already parsed")
+            },
+            lines: Vec::new(),
+            state: if with_header {
+                CandidateState::AwaitingHeader
+            } else {
+                CandidateState::AwaitingBody
+            },
+        };
+        let node_ref = arena.new_node(candidate);
+        arena[node_ref].set_pos(table_pos);
+        reader.advance_to_eol();
+
+        Some((node_ref, State::NO_CHILDREN))
+    }
+
+    fn cont(
+        &self,
+        arena: &mut Arena,
+        node_ref: NodeRef,
+        reader: &mut text::BasicReader,
+        _ctx: &mut Context,
+    ) -> Option<State> {
+        // Already complete? Close on this line so the dispatcher hands
+        // control back to the parent / next block parser.
+        {
+            let cand = as_extension_data_mut!(arena, node_ref, MultilineTableCandidate);
+            if matches!(cand.state, CandidateState::Complete) {
+                return None;
+            }
+        }
+
+        let (lb, ls) = reader.peek_line_bytes()?;
+        if ls.padding() > 0 {
+            // Tab-padded line — abort. Forward-scan would have caught a
+            // tab in the rule lines; a tab in mid-row appearing here means
+            // the engine's strip diverged from our forward-scan
+            // assumption, so it is safer to close than to corrupt the
+            // capture.
+            return None;
+        }
+        let lb_ref: &[u8] = lb.as_ref();
+        let line = &lb_ref[..strip_newline(lb_ref)];
+        let offset = reader.line_offset();
+
+        let cand = as_extension_data_mut!(arena, node_ref, MultilineTableCandidate);
+        match cand.state {
+            CandidateState::AwaitingHeader => {
+                if let Some(cols) = parse_column_rule(line, offset) {
+                    // Header → body transition. Don't capture the rule
+                    // itself; col_extents now drives cell extraction.
+                    cand.col_extents = cols;
+                    cand.state = CandidateState::AwaitingBody;
+                    Some(State::NO_CHILDREN)
+                } else if is_solid_rule(line, offset) || is_blank(line) {
+                    // A solid rule or a blank line before the separator
+                    // contradicts the forward-scan; close so the engine
+                    // can re-dispatch and the fallback path in close()
+                    // preserves whatever we collected.
+                    None
+                } else {
+                    cand.lines.push(CapturedLine {
+                        seg: ls,
+                        kind: LineKind::Header,
+                    });
+                    Some(State::NO_CHILDREN)
+                }
+            }
+            CandidateState::AwaitingBody => {
+                if is_any_dash_rule(line, offset) {
+                    // Bottom rule. Do not capture the rule itself; the
+                    // blank-before-bottom heuristic was enforced by the
+                    // forward-scan.
+                    cand.state = CandidateState::Complete;
+                    Some(State::NO_CHILDREN)
+                } else if is_blank(line) {
+                    cand.lines.push(CapturedLine {
+                        seg: ls,
+                        kind: LineKind::Blank,
+                    });
+                    Some(State::NO_CHILDREN)
+                } else {
+                    cand.lines.push(CapturedLine {
+                        seg: ls,
+                        kind: LineKind::Body,
+                    });
+                    Some(State::NO_CHILDREN)
+                }
+            }
+            CandidateState::Complete => None,
+        }
+    }
+
+    fn close(
+        &self,
+        arena: &mut Arena,
+        node_ref: NodeRef,
+        reader: &mut text::BasicReader,
+        _ctx: &mut Context,
+    ) {
+        if arena.get(node_ref).is_none() {
+            return; // already removed by something else
+        }
+        let Some(parent_ref) = arena[node_ref].parent() else {
+            return;
+        };
+
+        let source = reader.source();
+        let pos = arena[node_ref].pos().unwrap_or(0);
+
+        // Pull captured state out by value so the mutable extension
+        // borrow ends before we mutate the arena tree.
+        let (with_header, col_extents, captured, state, top_rule_seg) = {
+            let cand = as_extension_data_mut!(arena, node_ref, MultilineTableCandidate);
+            (
+                cand.with_header,
+                core::mem::take(&mut cand.col_extents),
+                core::mem::take(&mut cand.lines),
+                cand.state,
+                cand.top_rule_seg,
+            )
+        };
+
+        // Success criteria:
+        //   - state == Complete (bottom rule was seen)
+        //   - col_extents populated (separator was seen for with-header;
+        //     unconditional for headerless)
+        //   - at least one body line captured
+        //   - with-header: at least one header line captured
+        let has_body = captured.iter().any(|c| c.kind == LineKind::Body);
+        let has_header = captured.iter().any(|c| c.kind == LineKind::Header);
+        let succeed = matches!(state, CandidateState::Complete)
+            && !col_extents.is_empty()
+            && has_body
+            && (!with_header || has_header);
+
+        if !succeed {
+            fallback_paragraph(arena, node_ref, parent_ref, &captured, top_rule_seg, pos);
+            return;
+        }
+
+        // Partition captured lines into header_segs and body_rows.
+        let mut header_segs: Vec<Segment> = Vec::new();
+        let mut body_rows: Vec<Vec<Segment>> = Vec::new();
+        let mut current_row: Vec<Segment> = Vec::new();
+        for cl in &captured {
+            match cl.kind {
+                LineKind::Header => header_segs.push(cl.seg),
+                LineKind::Body => current_row.push(cl.seg),
+                LineKind::Blank => {
+                    if !current_row.is_empty() {
+                        body_rows.push(core::mem::take(&mut current_row));
+                    }
+                }
+            }
+        }
+        if !current_row.is_empty() {
+            body_rows.push(current_row);
+        }
+        if body_rows.is_empty() {
+            fallback_paragraph(arena, node_ref, parent_ref, &captured, top_rule_seg, pos);
+            return;
+        }
+
+        // Compute alignments and build the Table AST.
         let ref_lines: &[Segment] = if with_header {
             &header_segs
         } else {
@@ -628,16 +1038,16 @@ impl BlockParser for MultilineTableParser {
             &first[..1.min(first.len())]
         };
         let alignments = compute_alignments(source, &col_extents, ref_lines);
+        let num_cols = col_extents.len();
 
-        // ── Step 5: build the AST ─────────────────────────────────────────────
         let table_ref = arena.new_node(Table::new());
-        arena[table_ref].set_pos(table_pos);
+        arena[table_ref].set_pos(pos);
 
         if with_header {
             let header_ref = arena.new_node(TableHeader::new());
-            arena[header_ref].set_pos(table_pos);
+            arena[header_ref].set_pos(pos);
             let row_ref = arena.new_node(TableRow::new());
-            arena[row_ref].set_pos(table_pos);
+            arena[row_ref].set_pos(pos);
 
             for (i, &(col_start, col_end)) in col_extents.iter().enumerate() {
                 let is_last = i == num_cols - 1;
@@ -653,17 +1063,14 @@ impl BlockParser for MultilineTableParser {
                 );
                 row_ref.append_child(arena, cell_ref);
             }
-
             header_ref.append_child(arena, row_ref);
             table_ref.append_child(arena, header_ref);
         }
 
         let body_ref = arena.new_node(TableBody::new());
-        arena[body_ref].set_pos(table_pos);
-
+        arena[body_ref].set_pos(pos);
         for row_lines in &body_rows {
             let row_ref = arena.new_node(TableRow::new());
-
             for (i, &(col_start, col_end)) in col_extents.iter().enumerate() {
                 let is_last = i == num_cols - 1;
                 let cell_ref = arena.new_node(TableCell::with_alignment(alignments[i]));
@@ -672,31 +1079,156 @@ impl BlockParser for MultilineTableParser {
                 );
                 row_ref.append_child(arena, cell_ref);
             }
-
             body_ref.append_child(arena, row_ref);
         }
-
         if arena[body_ref].first_child().is_some() {
             table_ref.append_child(arena, body_ref);
         }
 
-        Some((table_ref, State::NO_CHILDREN))
-    }
-
-    fn cont(
-        &self,
-        _arena: &mut Arena,
-        _node_ref: NodeRef,
-        _reader: &mut text::BasicReader,
-        _ctx: &mut Context,
-    ) -> Option<State> {
-        // The entire table is consumed eagerly in open().
-        None
+        parent_ref.replace_child(arena, node_ref, table_ref);
     }
 
     fn can_interrupt_paragraph(&self) -> bool {
         false
     }
+}
+
+/// Read-only forward-scan that validates the table structure starting at
+/// the reader's current position (which the caller has advanced past the
+/// top rule). The reader is mutated during the scan; the caller is
+/// responsible for restoring its position before returning from `open()`.
+///
+/// Each iteration peeks one logical line, applies the parent-chain strip
+/// via [`ParentStripSeq::apply`] once, then classifies. The strip is
+/// **not idempotent** for non-zero indent widths — it must be applied
+/// exactly once per peeked line.
+///
+/// Returns `true` if the structure looks like a well-formed multiline
+/// table, `false` otherwise.
+fn validate_table_structure(
+    reader: &mut text::BasicReader,
+    strip_seq: &ParentStripSeq,
+    with_header: bool,
+) -> bool {
+    // ── With-header header section: collect up to MAX_HEADER_LINES
+    // non-blank lines, then expect a grouped separator. A blank line
+    // immediately after the top rule means it was a thematic break.
+    if with_header {
+        let mut header_count = 0;
+        loop {
+            if matches!(strip_seq.apply(reader), StripIndent::Insufficient) {
+                return false;
+            }
+            let Some((lb, ls)) = reader.peek_line_bytes() else {
+                return false; // EOF before separator
+            };
+            if ls.padding() > 0 {
+                return false;
+            }
+            let lb_ref: &[u8] = lb.as_ref();
+            let la = &lb_ref[..strip_newline(lb_ref)];
+            let off = reader.line_offset();
+
+            if parse_column_rule(la, off).is_some() {
+                if header_count == 0 {
+                    // Solid rule + separator with no header rows.
+                    return false;
+                }
+                reader.advance_line();
+                break;
+            }
+            if is_blank(la) {
+                // Blank inside header (incl. immediately after top rule).
+                return false;
+            }
+            if is_solid_rule(la, off) {
+                // Solid rule before separator would close the table
+                // prematurely.
+                return false;
+            }
+            header_count += 1;
+            if header_count > MAX_HEADER_LINES {
+                return false;
+            }
+            reader.advance_line();
+        }
+    }
+
+    // ── Body: accept content lines and blank row-separators until a dash
+    // rule closes the table. The first body line may not be blank
+    // (otherwise the top rule was a thematic break — relevant for the
+    // headerless form, where this loop is entered directly). The line
+    // immediately before the bottom rule may not be blank either, or the
+    // rule is a thematic break inside the body.
+    let mut body_lines = 0usize;
+    let mut body_content_seen = false;
+    let mut last_was_blank = false;
+    let mut first_body_line = true;
+    loop {
+        if matches!(strip_seq.apply(reader), StripIndent::Insufficient) {
+            return false;
+        }
+        let Some((lb, ls)) = reader.peek_line_bytes() else {
+            return false; // EOF without bottom rule
+        };
+        if ls.padding() > 0 {
+            return false;
+        }
+        let lb_ref: &[u8] = lb.as_ref();
+        let la = &lb_ref[..strip_newline(lb_ref)];
+        let off = reader.line_offset();
+
+        if is_any_dash_rule(la, off) {
+            if last_was_blank || !body_content_seen {
+                return false;
+            }
+            reader.advance_line();
+            return true;
+        }
+        if is_blank(la) {
+            if first_body_line {
+                // Blank as the very first body line → top rule is a
+                // thematic break, not a table opening.
+                return false;
+            }
+            last_was_blank = true;
+        } else {
+            body_content_seen = true;
+            last_was_blank = false;
+        }
+        first_body_line = false;
+        body_lines += 1;
+        if body_lines > MAX_BODY_LINES {
+            return false;
+        }
+        reader.advance_line();
+    }
+}
+
+/// Replace the candidate node with a fallback `Paragraph` whose source is
+/// the captured-line segments plus the original top-rule line. This
+/// preserves the input text when the candidate cannot be materialised as a
+/// table — e.g. the engine closed us before `cont()` saw the bottom rule,
+/// or a per-line strip discrepancy left the state machine stuck.
+fn fallback_paragraph(
+    arena: &mut Arena,
+    node_ref: NodeRef,
+    parent_ref: NodeRef,
+    captured: &[CapturedLine],
+    top_rule_seg: Segment,
+    pos: usize,
+) {
+    let para_ref = arena.new_node(Paragraph::new());
+    arena[para_ref].set_pos(pos);
+    as_type_data_mut!(arena, para_ref, Block).append_source_line(top_rule_seg);
+    for line in captured {
+        if matches!(line.kind, LineKind::Blank) {
+            // A paragraph cannot span a blank line — drop separators.
+            continue;
+        }
+        as_type_data_mut!(arena, para_ref, Block).append_source_line(line.seg);
+    }
+    parent_ref.replace_child(arena, node_ref, para_ref);
 }
 
 impl From<MultilineTableParser> for AnyBlockParser {
@@ -1461,10 +1993,7 @@ Following paragraph.
                                 node_ref: NodeRef,
                                 entering: bool|
          -> Result<WalkStatus> {
-            if entering
-                && arena[node_ref].kind_data().kind_name() == name
-                && found.is_none()
-            {
+            if entering && arena[node_ref].kind_data().kind_name() == name && found.is_none() {
                 found = Some(node_ref);
             }
             Ok(WalkStatus::Continue)
@@ -1523,8 +2052,7 @@ Following paragraph.
         // All four body cell values must be intact (two rows × two cols).
         for needle in ["A", "B", "1", "2"] {
             assert!(
-                html.contains(&format!(">{needle}<"))
-                    || html.contains(&format!("> {needle} <")),
+                html.contains(&format!(">{needle}<")) || html.contains(&format!("> {needle} <")),
                 "body cell `{needle}` missing from {html}"
             );
         }
@@ -1589,8 +2117,7 @@ Following paragraph.
         // produced — the leading list indent made the column-0 text look
         // flush-right within the un-stripped column extent).
         for cell in &cells {
-            let align =
-                rushdown::as_kind_data!(arena, *cell, TableCell).alignment();
+            let align = rushdown::as_kind_data!(arena, *cell, TableCell).alignment();
             assert!(
                 !matches!(align, TableCellAlignment::Right),
                 "cell alignment must not be Right (bug), got {align:?}"
@@ -1621,10 +2148,8 @@ Term
         let (arena, doc) = parse_with_deflist(input);
         // A DefinitionList must exist and contain a Table inside its
         // TermDefinition body.
-        let dl =
-            find_kind(&arena, doc, "DefinitionList").expect("no DefinitionList");
-        let td =
-            find_kind(&arena, dl, "TermDefinition").expect("no TermDefinition");
+        let dl = find_kind(&arena, doc, "DefinitionList").expect("no DefinitionList");
+        let td = find_kind(&arena, dl, "TermDefinition").expect("no TermDefinition");
         let table = find_first!(&arena, td, Table)
             .expect("table must be parsed inside the definition list body");
 
@@ -1648,4 +2173,567 @@ Term
         );
     }
 
+    #[test]
+    fn table_inside_blockquote() {
+        // Direct port of the bug reproducer.
+        //
+        // Before the blockquote-aware strip, the table parser saw each
+        // continuation line with the parent's `>` marker still attached.
+        // `strip_container_indent` (whitespace-only) returned `Insufficient`
+        // at the first `>` byte, the parse aborted, and `ThematicBreak`
+        // (priority 200) claimed the dashes — top and bottom rule degraded
+        // to `<hr>`, body lines became paragraphs.
+        //
+        // After the fix, `classify_parent_chain` sees a `Blockquote`-only
+        // ancestor chain and `strip_blockquote_layers` replays the marker
+        // strip per line, including the `>\n` row-separator line.
+        let input = "\
+> ----- -----
+>  A     B
+>
+>  1     2
+> ----- -----
+";
+        let (arena, doc) = parse(input);
+
+        // The table must live inside a Blockquote.
+        let bq = find_kind(&arena, doc, "Blockquote").expect("no Blockquote");
+        let table =
+            find_first!(&arena, bq, Table).expect("table must be parsed inside the blockquote");
+
+        // Headerless (grouped top rule, no solid rule above the header).
+        assert!(
+            find_first!(&arena, table, TableHeader).is_none(),
+            "headerless table must not have a TableHeader"
+        );
+
+        // Two body rows, each with two cells.
+        let body = find_first!(&arena, table, TableBody).expect("no TableBody");
+        let rows = children_of_kind(&arena, body, "TableRow");
+        assert_eq!(
+            rows.len(),
+            2,
+            "two body rows (blank `>` line is the separator)"
+        );
+        for row in &rows {
+            let cells = children_of_kind(&arena, *row, "TableCell");
+            assert_eq!(cells.len(), 2, "two cells per row");
+        }
+
+        let r0_cells = children_of_kind(&arena, rows[0], "TableCell");
+        let r1_cells = children_of_kind(&arena, rows[1], "TableCell");
+        assert_eq!(collect_text(&arena, r0_cells[0], input), "A");
+        assert_eq!(collect_text(&arena, r0_cells[1], input), "B");
+        assert_eq!(collect_text(&arena, r1_cells[0], input), "1");
+        assert_eq!(collect_text(&arena, r1_cells[1], input), "2");
+
+        // The dash rules must NOT degrade to thematic breaks.
+        assert!(
+            find_first!(&arena, doc, ThematicBreak).is_none(),
+            "dash rules must not degrade to <hr>"
+        );
+
+        // Render-side sanity: <table> is enclosed by <blockquote>.
+        let html = render(input);
+        let bq_open = html.find("<blockquote").expect("no <blockquote");
+        let bq_close = html.find("</blockquote>").expect("no </blockquote>");
+        let table_open = html.find("<table").expect("no <table");
+        assert!(
+            bq_open < table_open && table_open < bq_close,
+            "<table> must be inside <blockquote>: {html}"
+        );
+        assert!(!html.contains("<hr"), "no <hr> in rendered HTML: {html}");
+    }
+
+    #[test]
+    fn table_inside_blockquote_cyrillic() {
+        // Keeps the UTF-8 boundary regression test alive in the blockquote
+        // code path. Each Cyrillic character is two UTF-8 bytes; if the
+        // parser ever sliced cell content by raw byte offsets derived from
+        // the (ASCII) dash rule, this test would produce invalid UTF-8 in
+        // the rendered output.
+        let input = "\
+> ----------- -----------
+>  Ячейка1     Ячейка2
+>
+>  Значение1   Значение2
+> ----------- -----------
+";
+        let (arena, doc) = parse(input);
+
+        let bq = find_kind(&arena, doc, "Blockquote").expect("no Blockquote");
+        let table =
+            find_first!(&arena, bq, Table).expect("table must be parsed inside the blockquote");
+
+        let body = find_first!(&arena, table, TableBody).expect("no TableBody");
+        let rows = children_of_kind(&arena, body, "TableRow");
+        assert_eq!(rows.len(), 2, "two body rows");
+
+        let r0_cells = children_of_kind(&arena, rows[0], "TableCell");
+        let r1_cells = children_of_kind(&arena, rows[1], "TableCell");
+        assert_eq!(collect_text(&arena, r0_cells[0], input), "Ячейка1");
+        assert_eq!(collect_text(&arena, r0_cells[1], input), "Ячейка2");
+        assert_eq!(collect_text(&arena, r1_cells[0], input), "Значение1");
+        assert_eq!(collect_text(&arena, r1_cells[1], input), "Значение2");
+
+        // Rendered HTML must be valid UTF-8 and structurally well-formed.
+        let html = render(input);
+        assert!(
+            html.is_char_boundary(0),
+            "rendered HTML must be valid UTF-8"
+        );
+        for needle in ["Ячейка1", "Ячейка2", "Значение1", "Значение2"] {
+            assert!(html.contains(needle), "{needle} missing from {html}");
+        }
+        assert!(!html.contains("<hr"), "no <hr> in rendered HTML: {html}");
+    }
+
+    // ── Redesign-specific regression tests ──────────────────────────────────
+    //
+    // After moving line collection into cont() and the table-AST build into
+    // close(), the parser no longer fights parent containers — each line is
+    // pre-stripped by the dispatcher. These tests exercise nesting depths
+    // and edge cases the old "consume-everything-in-open" design couldn't
+    // handle.
+
+    #[test]
+    fn two_deep_blockquote_table() {
+        // Table inside two levels of `>`. The dispatcher invokes each
+        // blockquote's cont() in turn before reaching the table's cont(),
+        // so we just see the stripped content.
+        let input = "\
+> > ----- -----
+> >  A     B
+> >
+> >  1     2
+> > ----- -----
+";
+        let (arena, doc) = parse(input);
+        // Two blockquotes.
+        let outer = find_kind(&arena, doc, "Blockquote").expect("no outer Blockquote");
+        // find_kind returns the root if it matches; walk children manually.
+        let inner = children_of_kind(&arena, outer, "Blockquote")
+            .into_iter()
+            .next()
+            .expect("no inner Blockquote");
+        let table = find_first!(&arena, inner, Table).expect("no Table in inner blockquote");
+        let body = find_first!(&arena, table, TableBody).expect("no TableBody");
+        let rows = children_of_kind(&arena, body, "TableRow");
+        assert_eq!(rows.len(), 2, "two body rows: {input}");
+
+        let r0_cells = children_of_kind(&arena, rows[0], "TableCell");
+        let r1_cells = children_of_kind(&arena, rows[1], "TableCell");
+        assert_eq!(collect_text(&arena, r0_cells[0], input), "A");
+        assert_eq!(collect_text(&arena, r0_cells[1], input), "B");
+        assert_eq!(collect_text(&arena, r1_cells[0], input), "1");
+        assert_eq!(collect_text(&arena, r1_cells[1], input), "2");
+    }
+
+    #[test]
+    fn three_deep_blockquote_table() {
+        // Triple-nested blockquote. Demonstrates that the new design
+        // composes naturally with depth: cont() never sees `>` markers,
+        // because each blockquote ancestor strips its own layer.
+        let input = "\
+> > > ----- -----
+> > >  A     B
+> > >
+> > >  1     2
+> > > ----- -----
+";
+        let (arena, doc) = parse(input);
+        let table =
+            find_first!(&arena, doc, Table).expect("no Table parsed inside three-deep blockquote");
+        let body = find_first!(&arena, table, TableBody).expect("no TableBody");
+        let rows = children_of_kind(&arena, body, "TableRow");
+        assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn table_inside_blockquote_with_header() {
+        // Verifies the header-form table works inside a blockquote: a
+        // solid top rule, header lines, grouped separator, body rows,
+        // and a solid bottom rule — every line carries a `>` marker.
+        let input = "\
+> ---------
+>  Col1 Col2
+> ---- ----
+>  a    b
+> ---------
+";
+        let (arena, doc) = parse(input);
+        let bq = find_kind(&arena, doc, "Blockquote").expect("no Blockquote");
+        let table = find_first!(&arena, bq, Table).expect("no Table inside blockquote");
+        let header = find_first!(&arena, table, TableHeader).expect("no TableHeader");
+        let header_rows = children_of_kind(&arena, header, "TableRow");
+        assert_eq!(header_rows.len(), 1);
+        let header_cells = children_of_kind(&arena, header_rows[0], "TableCell");
+        assert_eq!(header_cells.len(), 2);
+
+        let body = find_first!(&arena, table, TableBody).expect("no TableBody");
+        let body_rows = children_of_kind(&arena, body, "TableRow");
+        assert_eq!(body_rows.len(), 1);
+    }
+
+    #[test]
+    fn dash_rule_followed_by_blank_is_thematic_break() {
+        // Forward-scan heuristic: a dash rule immediately followed by a
+        // blank (post-strip) line is a thematic break, NOT a table
+        // opening. The candidate must NOT be allocated; the line falls
+        // through to the thematic-break parser.
+        let input = "---\n\nsome paragraph\n";
+        let html = render(input);
+        assert!(
+            html.contains("<hr"),
+            "single dash rule followed by blank line must be <hr>: {html}"
+        );
+        assert!(!html.contains("<table"), "must not produce <table>: {html}");
+    }
+
+    #[test]
+    fn dash_rule_followed_by_blank_inside_blockquote_is_thematic_break() {
+        // Same heuristic, but inside a blockquote. The forward-scan
+        // applies the blockquote strip on the next line; if the post-
+        // strip view is blank, reject.
+        let input = "\
+> ---
+>
+> some paragraph
+";
+        let html = render(input);
+        // Either an <hr> inside the blockquote, or fall-through to other
+        // parsers. The key is NOT producing a <table>.
+        assert!(
+            !html.contains("<table"),
+            "blockquote `> ---\\n>\\n` must not become a table: {html}"
+        );
+    }
+
+    #[test]
+    fn blank_before_bottom_rule_falls_through() {
+        // Forward-scan heuristic: a blank line immediately before what
+        // looks like the bottom rule means the rule is a thematic break,
+        // not the table's closing rule. Reject the whole thing.
+        let input = "\
+----- -----
+ A     B
+ 1     2
+
+----- -----
+";
+        let html = render(input);
+        // The blank before `----- -----` makes the second grouped rule
+        // a thematic break, so no <table> should be produced.
+        assert!(
+            !html.contains("<table"),
+            "blank before bottom rule must reject the table: {html}"
+        );
+    }
+
+    #[test]
+    fn body_only_blank_lines_falls_through() {
+        // Forward-scan heuristic: at least one non-blank body line is
+        // required before the bottom rule.
+        let input = "\
+----- -----
+
+----- -----
+";
+        let html = render(input);
+        assert!(
+            !html.contains("<table"),
+            "table with no body content must reject: {html}"
+        );
+    }
+
+    #[test]
+    fn ten_header_lines_accepted() {
+        // The MAX_HEADER_LINES heuristic accepts exactly 10 non-blank
+        // header lines before the grouped separator.
+        let mut input = String::from("----------\n");
+        for i in 0..10 {
+            input.push_str(&format!("h{i}h{i}h{i}h{i}\n"));
+        }
+        input.push_str("---- -----\n");
+        input.push_str(" a    b\n");
+        input.push_str("----------\n");
+        let html = render(&input);
+        assert!(
+            html.contains("<table"),
+            "10 header lines must be accepted: {html}"
+        );
+    }
+
+    #[test]
+    fn eleven_header_lines_rejected() {
+        // 11 non-blank header lines exceed MAX_HEADER_LINES.
+        let mut input = String::from("----------\n");
+        for i in 0..11 {
+            input.push_str(&format!("h{i}h{i}h{i}h{i}\n"));
+        }
+        input.push_str("---- -----\n");
+        input.push_str(" a    b\n");
+        input.push_str("----------\n");
+        let html = render(&input);
+        assert!(
+            !html.contains("<table"),
+            "11 header lines must be rejected: {html}"
+        );
+    }
+
+    // ── Mixed parent chain tests (pandoc parity) ────────────────────────────
+    //
+    // After decoding the parent-strip from the top rule's raw prefix, the
+    // forward-scan handles arbitrary nesting of List/Blockquote ancestors.
+    // Each case below is verified against pandoc 3.x output.
+
+    #[test]
+    fn table_inside_blockquote_inside_list_headerless() {
+        // List → Blockquote → headerless table.
+        // Pandoc emits: list > blockquote > <p>blockquote starts</p>
+        // > headerless table with one row of three right-aligned cells.
+        let input = "\
+* list item
+
+  > blockquote starts
+  >
+  > ----- ---- ----
+  >     1    2    3
+  > ----- ---- ----
+";
+        let (arena, doc) = parse(input);
+        // Find: List → ListItem → Blockquote → Table
+        let list = find_kind(&arena, doc, "List").expect("no List");
+        let li = find_kind(&arena, list, "ListItem").expect("no ListItem");
+        let bq = children_of_kind(&arena, li, "Blockquote")
+            .into_iter()
+            .next()
+            .expect("no Blockquote inside list item");
+        let table =
+            find_first!(&arena, bq, Table).expect("no Table inside blockquote inside list item");
+        assert!(
+            find_first!(&arena, table, TableHeader).is_none(),
+            "headerless"
+        );
+        let body = find_first!(&arena, table, TableBody).expect("no TableBody");
+        let rows = children_of_kind(&arena, body, "TableRow");
+        assert_eq!(rows.len(), 1, "one body row");
+        let cells = children_of_kind(&arena, rows[0], "TableCell");
+        assert_eq!(cells.len(), 3, "three cells");
+        assert_eq!(collect_text(&arena, cells[0], input), "1");
+        assert_eq!(collect_text(&arena, cells[1], input), "2");
+        assert_eq!(collect_text(&arena, cells[2], input), "3");
+        // Per pandoc parity, all three cells are right-aligned (flush-right
+        // within their column extents).
+        for cell in &cells {
+            let align = rushdown::as_kind_data!(arena, *cell, TableCell).alignment();
+            assert!(
+                matches!(align, TableCellAlignment::Right),
+                "cell must be right-aligned, got {align:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn table_inside_blockquote_inside_list_with_header() {
+        // List → Blockquote → with-header table. The separator dashes
+        // must extend at least as wide as the header text in each column
+        // (per pandoc multiline-table column-extent semantics).
+        let input = "\
+* list item
+
+  > blockquote
+  >
+  > ------------
+  >  Col1 Col2
+  > ----- ------
+  >  a    b
+  > ------------
+";
+        let (arena, doc) = parse(input);
+        let list = find_kind(&arena, doc, "List").expect("no List");
+        let li = find_kind(&arena, list, "ListItem").expect("no ListItem");
+        let bq = children_of_kind(&arena, li, "Blockquote")
+            .into_iter()
+            .next()
+            .expect("no Blockquote in list item");
+        let table = find_first!(&arena, bq, Table).expect("no Table");
+        let header = find_first!(&arena, table, TableHeader).expect("no header");
+        let body = find_first!(&arena, table, TableBody).expect("no body");
+        assert_eq!(children_of_kind(&arena, header, "TableRow").len(), 1);
+        assert_eq!(children_of_kind(&arena, body, "TableRow").len(), 1);
+        let header_cells = children_of_kind(
+            &arena,
+            children_of_kind(&arena, header, "TableRow")[0],
+            "TableCell",
+        );
+        assert_eq!(header_cells.len(), 2);
+        assert_eq!(collect_text(&arena, header_cells[0], input), "Col1");
+        assert_eq!(collect_text(&arena, header_cells[1], input), "Col2");
+    }
+
+    #[test]
+    fn table_inside_list_inside_blockquote() {
+        // Blockquote → List → headerless table (the reverse of the
+        // previous case). Pandoc emits two body rows, center-aligned.
+        let input = "\
+> * list inside blockquote
+>
+>   ----- -----
+>    A     B
+>
+>    1     2
+>   ----- -----
+";
+        let (arena, doc) = parse(input);
+        let bq = find_kind(&arena, doc, "Blockquote").expect("no Blockquote");
+        let list = find_kind(&arena, bq, "List").expect("no List inside blockquote");
+        let li = find_kind(&arena, list, "ListItem").expect("no ListItem");
+        let table = find_first!(&arena, li, Table).expect("no Table inside list inside blockquote");
+        assert!(
+            find_first!(&arena, table, TableHeader).is_none(),
+            "headerless"
+        );
+        let body = find_first!(&arena, table, TableBody).expect("no body");
+        let rows = children_of_kind(&arena, body, "TableRow");
+        assert_eq!(rows.len(), 2, "two body rows");
+        let r0 = children_of_kind(&arena, rows[0], "TableCell");
+        let r1 = children_of_kind(&arena, rows[1], "TableCell");
+        assert_eq!(collect_text(&arena, r0[0], input), "A");
+        assert_eq!(collect_text(&arena, r0[1], input), "B");
+        assert_eq!(collect_text(&arena, r1[0], input), "1");
+        assert_eq!(collect_text(&arena, r1[1], input), "2");
+    }
+
+    #[test]
+    fn table_inside_nested_lists() {
+        // Two-level homogeneous list nesting → with-header table. Uses
+        // the solid-rule form (our parser's documented header trigger);
+        // pandoc accepts grouped-top + grouped-middle as with-header too,
+        // but that's a behavioural extension outside the current
+        // contract.
+        let input = "\
+* outer
+
+  * inner
+
+    ----------
+     Col1 Col2
+    ---- -----
+     a    b
+    ----------
+";
+        let (arena, doc) = parse(input);
+        let table = find_first!(&arena, doc, Table).expect("no Table inside nested lists");
+        let header = find_first!(&arena, table, TableHeader).expect("no header");
+        let body = find_first!(&arena, table, TableBody).expect("no body");
+        assert_eq!(children_of_kind(&arena, header, "TableRow").len(), 1);
+        assert_eq!(children_of_kind(&arena, body, "TableRow").len(), 1);
+    }
+
+    #[test]
+    fn mixed_parent_chain_list_then_blockquote_no_intro_paragraph() {
+        // List → ListItem → Blockquote → headerless table, with the
+        // blockquote opening *directly* on the table's top rule (no
+        // introductory paragraph inside the blockquote). The byte-driven
+        // [`ParentStripSeq::build`] tokenises the dispatcher's prefix
+        // (`  > ` = 2-col list indent + blockquote marker + space) into
+        // `[Whitespace { cols: 2 }, Blockquote]` regardless of the AST
+        // chain's shape.
+        let input = "\
+* item
+
+  > ----- -----
+  >  A     B
+  >
+  >  1     2
+  > ----- -----
+";
+        let (arena, doc) = parse(input);
+        let list = find_kind(&arena, doc, "List").expect("no List");
+        let li = find_kind(&arena, list, "ListItem").expect("no ListItem");
+        let bq = find_kind(&arena, li, "Blockquote").expect("no Blockquote in list item");
+        let table = find_first!(&arena, bq, Table).expect("no Table inside blockquote");
+        assert!(
+            find_first!(&arena, table, TableHeader).is_none(),
+            "headerless"
+        );
+        let body = find_first!(&arena, table, TableBody).expect("no TableBody");
+        let rows = children_of_kind(&arena, body, "TableRow");
+        assert_eq!(rows.len(), 2, "two body rows separated by `>` blank line");
+        let r0 = children_of_kind(&arena, rows[0], "TableCell");
+        let r1 = children_of_kind(&arena, rows[1], "TableCell");
+        assert_eq!(collect_text(&arena, r0[0], input), "A");
+        assert_eq!(collect_text(&arena, r0[1], input), "B");
+        assert_eq!(collect_text(&arena, r1[0], input), "1");
+        assert_eq!(collect_text(&arena, r1[1], input), "2");
+    }
+
+    #[test]
+    fn table_after_paragraph_with_blank_line() {
+        // Standard separation: paragraph, blank line, table. Must produce
+        // both the paragraph and the table.
+        let input = "\
+Some intro text.
+
+----- -----
+ A     B
+----- -----
+ 1     2
+----- -----
+";
+        let html = render(input);
+        assert!(html.contains("Some intro text"), "paragraph: {html}");
+        assert!(html.contains("<table"), "table: {html}");
+    }
+
+    #[test]
+    fn table_inside_sparse_list_three_rows() {
+        // Multiple body rows inside a list item, separated by blank lines.
+        // Each blank line must be recognised as a row separator (not a
+        // table terminator) after the dispatcher strips the list's
+        // continuation indent.
+        let input = "\
+* The table:
+
+  ----- -----
+   A     B
+
+   C     D
+
+   E     F
+  ----- -----
+";
+        let (arena, doc) = parse(input);
+        let table = find_first!(&arena, doc, Table).expect("no Table");
+        let body = find_first!(&arena, table, TableBody).expect("no TableBody");
+        let rows = children_of_kind(&arena, body, "TableRow");
+        assert_eq!(rows.len(), 3, "three body rows: {input}");
+    }
+
+    #[test]
+    fn def_list_body_table_with_header() {
+        // With-header table inside a definition list body (4-col content
+        // indent). The dispatcher strips 4 cols on every line; our
+        // forward-scan classifies the parent as Whitespace { width: 4 }.
+        let input = "\
+Term
+
+:   First definition paragraph.
+
+    ----------
+     Col1 Col2
+    ---- -----
+     a    b
+    ----------
+";
+        let (arena, doc) = parse_with_deflist(input);
+        let dl = find_kind(&arena, doc, "DefinitionList").expect("no DefinitionList");
+        let td = find_kind(&arena, dl, "TermDefinition").expect("no TermDefinition");
+        let table = find_first!(&arena, td, Table).expect("no Table in def-list body");
+        let header = find_first!(&arena, table, TableHeader).expect("no header");
+        let body = find_first!(&arena, table, TableBody).expect("no body");
+        assert!(children_of_kind(&arena, header, "TableRow").len() == 1);
+        assert!(children_of_kind(&arena, body, "TableRow").len() == 1);
+    }
 }
