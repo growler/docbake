@@ -643,3 +643,90 @@ pub(super) fn multiline_table_separator_extents(
     }
     None
 }
+
+// ─── Grid-table source probes ─────────────────────────────────────────────
+//
+// The two helpers below mirror the dash-rule probes above but for pandoc
+// grid-table borders (`+---+---+` / `+===+===+`, optionally carrying `:`
+// alignment markers). The duplication with `src/grid_table.rs` is
+// intentional — same self-contained-extension rationale as the multiline-
+// table block.
+
+/// Returns `true` if `line` is a pandoc grid-table border: indent ≤ 3 spaces,
+/// `+` at start and end, only `-` / `=` / `:` / `+` characters between, no
+/// mixed `-` / `=`, no empty columns (`++`), at least two `+`. Tabs
+/// disqualify.
+pub(super) fn is_grid_border_line(line: &str) -> bool {
+    if line.bytes().any(|b| b == b'\t') {
+        return false;
+    }
+    let bytes = line.as_bytes();
+    let indent = bytes.iter().take_while(|&&b| b == b' ').count();
+    if indent > 3 {
+        return false;
+    }
+    let mut content_end = bytes.len();
+    while content_end > indent && bytes[content_end - 1] == b' ' {
+        content_end -= 1;
+    }
+    let rest = &bytes[indent..content_end];
+    if rest.len() < 3 {
+        return false;
+    }
+    if rest[0] != b'+' || rest[rest.len() - 1] != b'+' {
+        return false;
+    }
+    let mut plus_positions: Vec<usize> = Vec::new();
+    let mut saw_dash = false;
+    let mut saw_equals = false;
+    for (i, &b) in rest.iter().enumerate() {
+        match b {
+            b'+' => plus_positions.push(i),
+            b'-' => saw_dash = true,
+            b'=' => saw_equals = true,
+            b':' => {}
+            _ => return false,
+        }
+    }
+    if plus_positions.len() < 2 {
+        return false;
+    }
+    if saw_dash && saw_equals {
+        return false;
+    }
+    // No empty column (`++` with nothing between).
+    for w in plus_positions.windows(2) {
+        if w[1] - w[0] < 2 {
+            return false;
+        }
+    }
+    true
+}
+
+/// Returns the per-column widths (in bytes between consecutive `+` characters,
+/// exclusive of the `+` themselves) of the grid-table top border at
+/// `table_pos`. The byte counts equal display-column counts because borders
+/// are pure ASCII. Returns `None` if the source line at `table_pos` is not a
+/// grid-table border or contains fewer than two `+`.
+pub(super) fn grid_table_column_widths(source: &str, table_pos: usize) -> Option<Vec<usize>> {
+    let line = source_line_at_pos(source, table_pos)?;
+    if !is_grid_border_line(line) {
+        return None;
+    }
+    let bytes = line.as_bytes();
+    let indent = bytes.iter().take_while(|&&b| b == b' ').count();
+    let mut content_end = bytes.len();
+    while content_end > indent && bytes[content_end - 1] == b' ' {
+        content_end -= 1;
+    }
+    let rest = &bytes[indent..content_end];
+    let plus: Vec<usize> = rest
+        .iter()
+        .enumerate()
+        .filter_map(|(i, &b)| (b == b'+').then_some(i))
+        .collect();
+    if plus.len() < 2 {
+        return None;
+    }
+    Some(plus.windows(2).map(|w| w[1] - w[0] - 1).collect())
+}

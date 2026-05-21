@@ -3,7 +3,8 @@ use rushdown::as_kind_data;
 use rushdown::ast::{Arena, KindData, NodeRef, TableCellAlignment, TextQualifier};
 
 use super::source_recovery::{
-    is_any_dash_rule_line, multiline_table_separator_extents, source_line_at_pos,
+    grid_table_column_widths, is_any_dash_rule_line, is_grid_border_line,
+    multiline_table_separator_extents, source_line_at_pos,
 };
 use super::MarkdownFmtRenderer;
 
@@ -11,6 +12,21 @@ use super::MarkdownFmtRenderer;
 struct TableEdgeStyle {
     leading_pipe: bool,
     trailing_pipe: bool,
+}
+
+/// One cell from a grid table, captured by the fmt renderer. Tracks the
+/// physical-line content (recovered through the cell-mode inline renderer
+/// plus `SOFT_LINE_BREAK` split) along with the cell's `colspan` and
+/// `rowspan` (each read from the corresponding node attribute set by the
+/// grid-table parser; default 1). The `alignment` field mirrors the AST's
+/// `TableCell::alignment()` so single-column cells keep their per-column
+/// alignment.
+#[derive(Debug, Clone)]
+struct GridCell {
+    colspan: usize,
+    rowspan: usize,
+    alignment: TableCellAlignment,
+    lines: Vec<String>,
 }
 
 /// Internal sentinel used by the cell-mode inline renderer to mark cell
@@ -35,6 +51,10 @@ impl MarkdownFmtRenderer {
         node_ref: NodeRef,
         source: &str,
     ) -> Result<()> {
+        if is_grid_table_node(arena, node_ref, source) {
+            self.render_grid_table(out, arena, node_ref, source)?;
+            return Ok(());
+        }
         if is_multiline_table_node(arena, node_ref, source) {
             self.render_multiline_table(out, arena, node_ref, source)?;
             return Ok(());
@@ -382,6 +402,34 @@ impl MarkdownFmtRenderer {
         Ok(row)
     }
 
+    /// Like [`Self::collect_multiline_row`] but for grid tables: each cell
+    /// carries its `colspan` and `rowspan` (each read from the
+    /// corresponding node attribute set by the grid-table parser;
+    /// default 1) and its column alignment. Used by
+    /// [`Self::render_grid_table`] to lay out spanned and unspanned cells
+    /// uniformly.
+    fn collect_grid_row(
+        &self,
+        arena: &Arena,
+        row_ref: NodeRef,
+        source: &str,
+    ) -> Result<Vec<GridCell>> {
+        let mut row = Vec::new();
+        for cell in arena[row_ref].children(arena) {
+            let lines = self.collect_cell_lines(arena, cell, source)?;
+            let colspan = read_span_attr(arena, cell, source, "colspan");
+            let rowspan = read_span_attr(arena, cell, source, "rowspan");
+            let alignment = as_kind_data!(arena, cell, TableCell).alignment();
+            row.push(GridCell {
+                colspan,
+                rowspan,
+                alignment,
+                lines,
+            });
+        }
+        Ok(row)
+    }
+
     /// Renders a cell into its constituent physical lines.
     ///
     /// The cell-mode inline renderer (`render_cell_inline_children`) emits
@@ -464,6 +512,275 @@ impl MarkdownFmtRenderer {
         // do not need to recurse in cell-mode here.
         self.render_inline(out, arena, node_ref, source)
     }
+
+    /// Re-emits a pandoc-style grid table.
+    ///
+    /// Column widths come from the AST-derived minimum per column (longest
+    /// physical line + 2 for the `| ` / ` |` padding, floored at 3), widened
+    /// to the original source's column widths when the source is available.
+    /// Per-column alignment is read from the cell `TableCellAlignment` set
+    /// by the parser and encoded as `:` markers in the header separator
+    /// (`+:-:+`); for headerless tables the markers are placed in the top
+    /// border instead.
+    ///
+    /// Multi-line cell content is recovered through
+    /// [`Self::collect_cell_lines`] — the same SOFT_LINE_BREAK splitting
+    /// used by `render_multiline_table`. Cells from the grid-table parser
+    /// emit the SOFT_LINE_BREAK marker the same way.
+    pub(super) fn render_grid_table(
+        &self,
+        out: &mut String,
+        arena: &Arena,
+        node_ref: NodeRef,
+        source: &str,
+    ) -> Result<()> {
+        let mut header_rows: Vec<NodeRef> = Vec::new();
+        let mut body_rows: Vec<NodeRef> = Vec::new();
+        for child in arena[node_ref].children(arena) {
+            match arena[child].kind_data() {
+                KindData::TableHeader(_) => {
+                    for row in arena[child].children(arena) {
+                        header_rows.push(row);
+                    }
+                }
+                KindData::TableBody(_) => {
+                    for row in arena[child].children(arena) {
+                        body_rows.push(row);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let has_header = !header_rows.is_empty();
+
+        // Collect rows as cell sequences, capturing each cell's colspan
+        // (read from the node's `colspan` attribute, defaulting to 1).
+        let mut rendered_header: Vec<Vec<GridCell>> = Vec::with_capacity(header_rows.len());
+        let mut rendered_body: Vec<Vec<GridCell>> = Vec::with_capacity(body_rows.len());
+        for row in &header_rows {
+            rendered_header.push(self.collect_grid_row(arena, *row, source)?);
+        }
+        for row in &body_rows {
+            rendered_body.push(self.collect_grid_row(arena, *row, source)?);
+        }
+
+        // Total column count = the maximum sum of colspans across all rows.
+        // A well-formed table has the same sum on every row; we take max
+        // defensively for malformed input.
+        let columns = rendered_header
+            .iter()
+            .chain(rendered_body.iter())
+            .map(|row| row.iter().map(|c| c.colspan).sum::<usize>())
+            .max()
+            .unwrap_or(0);
+        if columns == 0 {
+            return Ok(());
+        }
+
+        // Per-column alignment: take from the first row's *unspanned* cells.
+        // Spanned cells override their slot to `None` since per-column
+        // alignment is ambiguous for them.
+        let mut aligns: Vec<TableCellAlignment> = vec![TableCellAlignment::None; columns];
+        if let Some(first) = rendered_header.first().or(rendered_body.first()) {
+            let mut col_idx = 0;
+            for cell in first {
+                if cell.colspan == 1 && col_idx < aligns.len() {
+                    aligns[col_idx] = cell.alignment;
+                }
+                col_idx += cell.colspan;
+            }
+        }
+
+        // Step 1: AST-derived minimum widths from *unspanned* cells. Each
+        // single-column cell needs room for the longest physical line plus
+        // 2 (space on each side between `|` and content). Pandoc floor: 3.
+        let mut widths = vec![3usize; columns];
+        for row in rendered_header.iter().chain(rendered_body.iter()) {
+            let mut col_idx = 0;
+            for cell in row {
+                if cell.colspan == 1 && col_idx < widths.len() {
+                    for line in &cell.lines {
+                        widths[col_idx] = widths[col_idx].max(line.chars().count() + 2);
+                    }
+                }
+                col_idx += cell.colspan;
+            }
+        }
+
+        // Step 2: widen for column-spanning cells. A cell spanning N
+        // columns occupies `sum(widths[start..start+N]) + (N - 1)` chars
+        // (the `+N-1` accounts for the `|` characters absent inside the
+        // span). If the cell content + 2 padding exceeds that, distribute
+        // the deficit across the spanned columns.
+        for row in rendered_header.iter().chain(rendered_body.iter()) {
+            let mut col_idx = 0;
+            for cell in row {
+                if cell.colspan > 1 && col_idx + cell.colspan <= widths.len() {
+                    let needed = cell
+                        .lines
+                        .iter()
+                        .map(|l| l.chars().count())
+                        .max()
+                        .unwrap_or(0)
+                        + 2;
+                    let available: usize = widths[col_idx..col_idx + cell.colspan]
+                        .iter()
+                        .sum::<usize>()
+                        + (cell.colspan - 1);
+                    if needed > available {
+                        let deficit = needed - available;
+                        let per = deficit / cell.colspan;
+                        let rem = deficit % cell.colspan;
+                        for i in 0..cell.colspan {
+                            widths[col_idx + i] += per;
+                            if i < rem {
+                                widths[col_idx + i] += 1;
+                            }
+                        }
+                    }
+                }
+                col_idx += cell.colspan;
+            }
+        }
+
+        // Step 3: widen with the source's original column widths when the
+        // source had wider columns. Preserves author-tuned widths so
+        // unmodified tables round-trip more faithfully.
+        if let Some(table_pos) = arena[node_ref].pos() {
+            if let Some(source_widths) = grid_table_column_widths(source, table_pos) {
+                for (col, w) in source_widths.iter().enumerate() {
+                    if col >= widths.len() {
+                        break;
+                    }
+                    widths[col] = widths[col].max(*w);
+                }
+            }
+        }
+
+        // Alignment markers: header separator if there's a header,
+        // otherwise the top border.
+        let top_aligns: Option<&[TableCellAlignment]> = if has_header {
+            None
+        } else {
+            Some(aligns.as_slice())
+        };
+
+        // Active-rowspan state: each entry is the number of additional
+        // rows after the current one that a cell from above still
+        // occupies this column. `0` means the cell ends at the current
+        // row. Continuations across rows decrement this on each row
+        // boundary; `> 0` after the row's content means the next row
+        // separator must use a Continuation segment (spaces) for this
+        // column.
+        let mut active_rowspans: Vec<usize> = vec![0; columns];
+
+        // Top border (all-dash; no rowspan can come from "above").
+        out.push_str(&grid_border_line(
+            b'-',
+            &widths,
+            top_aligns,
+            &active_rowspans,
+        ));
+        out.push('\n');
+
+        // Header rows + header separator.
+        if has_header {
+            for (idx, row) in rendered_header.iter().enumerate() {
+                emit_grid_row_lines(out, row, &widths, &aligns, &active_rowspans);
+                advance_active_rowspans(&mut active_rowspans, row);
+                let is_last_header = idx + 1 == rendered_header.len();
+                if is_last_header {
+                    // The `+===+` boundary closes any rowspan still
+                    // active (rowspan can't cross header/body — the
+                    // parser already enforces this).
+                    for s in active_rowspans.iter_mut() {
+                        *s = 0;
+                    }
+                    out.push_str(&grid_border_line(
+                        b'=',
+                        &widths,
+                        Some(aligns.as_slice()),
+                        &active_rowspans,
+                    ));
+                } else {
+                    out.push_str(&grid_border_line(b'-', &widths, None, &active_rowspans));
+                }
+                out.push('\n');
+            }
+        }
+
+        // Body rows, each followed by a row separator. The separator
+        // after the last body row is the bottom border (any still-
+        // active rowspan there is a parser bug; we clear defensively).
+        for (idx, row) in rendered_body.iter().enumerate() {
+            emit_grid_row_lines(out, row, &widths, &aligns, &active_rowspans);
+            advance_active_rowspans(&mut active_rowspans, row);
+            let is_last_body = idx + 1 == rendered_body.len();
+            if is_last_body {
+                for s in active_rowspans.iter_mut() {
+                    *s = 0;
+                }
+            }
+            out.push_str(&grid_border_line(b'-', &widths, None, &active_rowspans));
+            out.push('\n');
+        }
+        if rendered_body.is_empty() {
+            out.push_str(&grid_border_line(b'-', &widths, None, &active_rowspans));
+            out.push('\n');
+        }
+
+        // Trailing blank line so the block separator matches surrounding
+        // conventions.
+        out.push('\n');
+
+        Ok(())
+    }
+}
+
+/// Reads a `colspan` / `rowspan` node attribute as a `usize`, defaulting
+/// to 1 for missing, unparseable, or zero values.
+fn read_span_attr(arena: &Arena, cell: NodeRef, source: &str, name: &str) -> usize {
+    arena[cell]
+        .attributes()
+        .get(name)
+        .map(|v| v.str(source).into_owned())
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|&n| n >= 1)
+        .unwrap_or(1)
+}
+
+/// Update `active_rowspans` after emitting `row`'s content lines: each
+/// non-zero entry steps down by 1 (the cell from above advanced one row),
+/// and each rowspan > 1 cell in *this* row adds `rowspan - 1` to its
+/// columns (the rows it still occupies).
+fn advance_active_rowspans(active_rowspans: &mut [usize], row: &[GridCell]) {
+    // Step 1: decrement carry-over rowspans from earlier rows.
+    for s in active_rowspans.iter_mut() {
+        if *s > 0 {
+            *s -= 1;
+        }
+    }
+    // Step 2: account for cells in this row. We walk in the same
+    // column-cursor pattern as `emit_grid_row_lines`: each `GridCell`
+    // occupies `colspan` columns, starting at the next free column.
+    let mut col_idx = 0;
+    for cell in row {
+        // Advance the cursor past any columns occupied by a carry-over
+        // rowspan that's still active (those didn't consume a cell from
+        // this row's `row`).
+        while col_idx < active_rowspans.len() && active_rowspans[col_idx] > 0 {
+            col_idx += 1;
+        }
+        if cell.rowspan > 1 {
+            let extra = cell.rowspan - 1;
+            for i in 0..cell.colspan {
+                if col_idx + i < active_rowspans.len() {
+                    active_rowspans[col_idx + i] = extra;
+                }
+            }
+        }
+        col_idx += cell.colspan;
+    }
 }
 
 /// Detects whether `node_ref` is a multiline (pandoc) table by inspecting
@@ -477,6 +794,184 @@ fn is_multiline_table_node(arena: &Arena, node_ref: NodeRef, source: &str) -> bo
         return false;
     };
     is_any_dash_rule_line(line)
+}
+
+/// Detects whether `node_ref` is a pandoc grid table by inspecting the source
+/// line at the table's `pos`. The grid-table parser sets `pos` to the byte
+/// offset of the opening `+---+` border.
+fn is_grid_table_node(arena: &Arena, node_ref: NodeRef, source: &str) -> bool {
+    let Some(pos) = arena[node_ref].pos() else {
+        return false;
+    };
+    let Some(line) = source_line_at_pos(source, pos) else {
+        return false;
+    };
+    is_grid_border_line(line)
+}
+
+/// Builds a grid-table border line of the form `+---+:--+--:+:-:+`. `marker`
+/// is the fill byte (`-` for dash borders, `=` for header separator). If
+/// `aligns` is `Some`, the corresponding `:` markers are placed inside the
+/// border at column boundaries.
+/// Build a grid-table border line. For each column:
+/// - If `active_rowspans[col] > 0`, emit `widths[col]` spaces (the cell
+///   from above is still occupying this column → continuation marker).
+/// - Otherwise emit `widths[col]` copies of `marker`, with optional
+///   `:` alignment markers at the boundaries.
+///
+/// A `+` is emitted between every column regardless of continuation —
+/// pandoc requires a `+` at every top-border column position on every
+/// border line, even inside a contiguous continuation run. The
+/// "merged" continuation form `+         +` (no internal `+`) is not
+/// emitted because the parser's strict-equality column-position check
+/// would reject it on re-parse.
+fn grid_border_line(
+    marker: u8,
+    widths: &[usize],
+    aligns: Option<&[TableCellAlignment]>,
+    active_rowspans: &[usize],
+) -> String {
+    let mut s = String::new();
+    s.push('+');
+    for (col, &w) in widths.iter().enumerate() {
+        let continuing = active_rowspans.get(col).map(|&n| n > 0).unwrap_or(false);
+        if continuing {
+            for _ in 0..w {
+                s.push(' ');
+            }
+        } else {
+            let align = aligns
+                .and_then(|a| a.get(col))
+                .copied()
+                .unwrap_or(TableCellAlignment::None);
+            let (left, right) = match align {
+                TableCellAlignment::Left => (true, false),
+                TableCellAlignment::Right => (false, true),
+                TableCellAlignment::Center => (true, true),
+                _ => (false, false),
+            };
+            let fill_count = w
+                .saturating_sub(if left { 1 } else { 0 })
+                .saturating_sub(if right { 1 } else { 0 });
+            if left {
+                s.push(':');
+            }
+            for _ in 0..fill_count {
+                s.push(marker as char);
+            }
+            if right {
+                s.push(':');
+            }
+        }
+        s.push('+');
+    }
+    s
+}
+
+/// Emits one source line per physical-line index across the row, with
+/// `| ... | ... |` framing.
+///
+/// Cells with `colspan > 1` consume the `widths` of all covered columns
+/// plus `colspan - 1` extra characters (the `|` separators absent
+/// inside the span are *not* emitted between those columns).
+///
+/// Columns where `active_rowspans[col] > 0` are continuations of cells
+/// from earlier rows: they don't consume a `GridCell` from this row's
+/// `row` list and are emitted as `widths[col]` spaces (the cell's
+/// content area is empty in this row), bounded by `|` separators that
+/// are still emitted to preserve column alignment.
+fn emit_grid_row_lines(
+    out: &mut String,
+    row: &[GridCell],
+    widths: &[usize],
+    aligns: &[TableCellAlignment],
+    active_rowspans: &[usize],
+) {
+    let height = row
+        .iter()
+        .map(|cell| cell.lines.len())
+        .max()
+        .unwrap_or(0)
+        .max(1);
+    for line_idx in 0..height {
+        let mut line_buf = String::new();
+        line_buf.push('|');
+        let mut col_idx = 0;
+        let mut cell_iter = row.iter();
+        while col_idx < widths.len() {
+            let continuing = active_rowspans
+                .get(col_idx)
+                .map(|&n| n > 0)
+                .unwrap_or(false);
+            if continuing {
+                // Continuation slot — emit empty cell area + `|`.
+                for _ in 0..widths[col_idx] {
+                    line_buf.push(' ');
+                }
+                line_buf.push('|');
+                col_idx += 1;
+                continue;
+            }
+            let Some(cell) = cell_iter.next() else {
+                // Defensive: not enough cells to fill remaining columns
+                // (parser would have rejected). Pad with spaces.
+                for _ in 0..widths[col_idx] {
+                    line_buf.push(' ');
+                }
+                line_buf.push('|');
+                col_idx += 1;
+                continue;
+            };
+            let span = cell.colspan.max(1);
+            let end_col = (col_idx + span).min(widths.len());
+            let effective_width: usize = widths[col_idx..end_col].iter().sum::<usize>()
+                + (end_col - col_idx).saturating_sub(1);
+            let align = if span == 1 {
+                aligns
+                    .get(col_idx)
+                    .copied()
+                    .unwrap_or(TableCellAlignment::None)
+            } else {
+                TableCellAlignment::None
+            };
+            let content = cell.lines.get(line_idx).map(String::as_str).unwrap_or("");
+            line_buf.push_str(&pad_cell_for_grid(content, effective_width, align));
+            line_buf.push('|');
+            col_idx = end_col;
+        }
+        out.push_str(line_buf.trim_end_matches(' '));
+        out.push('\n');
+    }
+}
+
+/// Returns a string of width `width` (in characters) containing `content`
+/// padded to fit between two `|` separators with 1-space border on each side.
+/// Padding inside the border respects `align`. If content is wider than the
+/// inner area, no padding is added (the width-computation step is expected
+/// to have prevented this).
+fn pad_cell_for_grid(content: &str, width: usize, align: TableCellAlignment) -> String {
+    let inner = width.saturating_sub(2);
+    let chars = content.chars().count();
+    if chars >= inner {
+        return format!(" {} ", content);
+    }
+    let extra = inner - chars;
+    let (left, right) = match align {
+        TableCellAlignment::Right => (extra, 0),
+        TableCellAlignment::Center => (extra / 2, extra - extra / 2),
+        _ => (0, extra), // Left or None — flush left
+    };
+    let mut s = String::with_capacity(width);
+    s.push(' ');
+    for _ in 0..left {
+        s.push(' ');
+    }
+    s.push_str(content);
+    for _ in 0..right {
+        s.push(' ');
+    }
+    s.push(' ');
+    s
 }
 
 /// Emits the maximum-physical-line count's worth of source lines for a
@@ -838,6 +1333,294 @@ First        row          12.0 Single line.
         // Pipe table preserved.
         assert!(out.contains("| A   | B   |"), "{out}");
         assert!(out.contains("| 1   | 2   |"));
+    }
+
+    /// Grid table with header round-trips: input is grid syntax, output must
+    /// still be grid syntax (not pipe, not multiline).
+    #[test]
+    fn grid_with_header_round_trip() {
+        let src = "\
+# Heading
+
++----------+----------+
+| Header 1 | Header 2 |
++==========+==========+
+| a        | b        |
++----------+----------+
+| c        | d        |
++----------+----------+
+";
+        let out = fmt(src);
+        // Must emit grid borders.
+        assert!(
+            out.contains("+----------+----------+") || out.contains("+----------+"),
+            "missing grid border: {out}"
+        );
+        // Header separator must use `=`.
+        assert!(out.contains("+=="), "missing header separator: {out}");
+        // Cell content preserved.
+        assert!(out.contains("Header 1"));
+        assert!(out.contains("Header 2"));
+        assert!(out.contains("| a"));
+        assert!(out.contains("| b"));
+        assert!(out.contains("| c"));
+        assert!(out.contains("| d"));
+        // Must not collapse to a pipe table.
+        assert!(
+            !out.contains("|---|"),
+            "rewrote as pipe-table delimiter: {out}"
+        );
+    }
+
+    /// Headerless grid table round-trips. Alignment markers (when present in
+    /// the source) should reappear in the rendered top border.
+    #[test]
+    fn grid_headerless_with_alignment_round_trip() {
+        let src = "\
+# Heading
+
++:----+----:+:--:+
+| a   | b   | c  |
++-----+-----+----+
+| d   | e   | f  |
++-----+-----+----+
+";
+        let out = fmt(src);
+        // Must emit grid borders.
+        assert!(out.contains("+--"), "missing grid border: {out}");
+        // No header → no `+===+` separator.
+        assert!(
+            !out.contains("+==="),
+            "headerless table emitted header separator: {out}"
+        );
+        // Alignment markers placed in top border (since headerless).
+        let lines: Vec<&str> = out.lines().collect();
+        let first_border = lines
+            .iter()
+            .find(|l| l.starts_with('+'))
+            .expect("no border line");
+        assert!(
+            first_border.contains(':'),
+            "alignment markers missing from top border: {first_border:?}"
+        );
+        // Content preserved (alignment may pad either side, so just check
+        // each cell letter appears between `|`s).
+        for needle in ["a", "b", "c", "d", "e", "f"] {
+            assert!(out.contains(needle), "cell {needle} missing: {out}");
+        }
+        assert!(!out.contains("|---|"), "rewrote as pipe table: {out}");
+    }
+
+    /// Grid table with a column-spanned cell in the header survives the
+    /// markdown round trip. The output must:
+    ///   - drop one `|` separator on the spanned-row physical line
+    ///   - keep the full `|`-separator set on unspanned rows
+    ///   - keep the header separator (`+===+...===+`)
+    #[test]
+    fn grid_colspan_header_round_trip() {
+        let src = "\
+# Heading
+
++------+------+------+
+| Group 1     | Solo |
++======+======+======+
+| a    | b    | c    |
++------+------+------+
+";
+        let out = fmt(src);
+        // Top border + header separator + bottom border = 3 grid borders.
+        let borders = out.lines().filter(|l| l.starts_with('+')).count();
+        assert!(borders >= 3, "missing grid borders: {out}");
+        assert!(out.contains("+======"), "header separator missing: {out}");
+        // The header row should have the spanned cell rendered without a
+        // middle `|`: search for a header content line that contains the
+        // text `Group 1` and has only TWO `|` characters total (outer
+        // borders), proving the middle `|` was suppressed.
+        let header_line = out
+            .lines()
+            .find(|l| l.contains("Group 1"))
+            .expect("no header content line");
+        assert_eq!(
+            header_line.bytes().filter(|&b| b == b'|').count(),
+            3,
+            "spanned header should have 3 `|`s (outer + outer + Solo): {header_line:?}"
+        );
+        // The unspanned body row should have 4 `|`s.
+        let body_line = out.lines().find(|l| l.contains("| a ")).expect("body");
+        assert_eq!(
+            body_line.bytes().filter(|&b| b == b'|').count(),
+            4,
+            "unspanned body should have 4 `|`s: {body_line:?}"
+        );
+        // Content preserved.
+        for needle in ["Group 1", "Solo", "a", "b", "c"] {
+            assert!(out.contains(needle), "{needle} missing: {out}");
+        }
+        assert!(!out.contains("|---|"));
+    }
+
+    /// Column span in a body row round-trips, and the source's wider
+    /// columns are preserved.
+    #[test]
+    fn grid_colspan_body_round_trip() {
+        let src = "\
++------+------+------+
+| Hdr1 | Hdr2 | Hdr3 |
++======+======+======+
+| both columns | x   |
++------+------+------+
+| a    | b    | c    |
++------+------+------+
+";
+        let out = fmt(src);
+        // The first body row must render with 3 `|`s (the middle was
+        // merged), the second body row with 4.
+        let spans_line = out
+            .lines()
+            .find(|l| l.contains("both columns"))
+            .expect("spans line");
+        assert_eq!(spans_line.bytes().filter(|&b| b == b'|').count(), 3);
+        let unsp_line = out.lines().find(|l| l.contains("| a ")).expect("unsp");
+        assert_eq!(unsp_line.bytes().filter(|&b| b == b'|').count(), 4);
+        assert!(out.contains("both columns"));
+        assert!(out.contains("Hdr1"));
+        assert!(!out.contains("|---|"));
+    }
+
+    /// Grid table with a row-spanning cell survives the round trip. The
+    /// row separator after row 1 must carry a continuation segment
+    /// (spaces between `+`s) for column 0 and emit dashes for column 1;
+    /// row 2's content line for column 0 is an empty padded area
+    /// bounded by `|`s on both sides.
+    #[test]
+    fn grid_rowspan_round_trip() {
+        let src = "\
++------+------+
+| A    | B    |
++      +------+
+|      | C    |
++------+------+
+";
+        let out = fmt(src);
+        // Top + intermediate + bottom = 3 border lines starting with `+`.
+        let borders: Vec<&str> = out.lines().filter(|l| l.starts_with('+')).collect();
+        assert!(borders.len() >= 3, "missing borders: {out}");
+
+        // Find the intermediate separator (between A and the rowspan
+        // continuation row): it must have a continuation segment for
+        // column 0 (no `-` in the segment) and dashes for column 1.
+        let mid_separator = borders
+            .iter()
+            .find(|l| {
+                // Border line that contains both `+   ` (space run) and `+---` (dashes).
+                let bytes = l.as_bytes();
+                bytes.windows(2).any(|w| w == b"+ ") && bytes.windows(2).any(|w| w == b"+-")
+            })
+            .copied()
+            .unwrap_or_else(|| panic!("no continuation-bearing separator: {out}"));
+        // Sanity-check that the first segment is all-space (continuation
+        // for column 0) — i.e. nothing between the first two `+`s is a
+        // `-`.
+        let first_plus = mid_separator.find('+').expect("no `+` in border");
+        let after_first = &mid_separator[first_plus + 1..];
+        let second_plus = after_first.find('+').expect("only one `+` in border");
+        assert!(
+            !after_first[..second_plus].contains('-'),
+            "first segment should be continuation (spaces only): {mid_separator:?}"
+        );
+
+        // Row 2's content line: column-0 cell area must be all spaces
+        // between `|`s, column-1 must contain "C".
+        let row2 = out
+            .lines()
+            .find(|l| l.contains("| C "))
+            .unwrap_or_else(|| panic!("no row 2 line: {out}"));
+        let first_pipe = row2.find('|').unwrap();
+        let after_first_pipe = &row2[first_pipe + 1..];
+        let second_pipe = after_first_pipe.find('|').unwrap();
+        assert!(
+            after_first_pipe[..second_pipe].chars().all(|c| c == ' '),
+            "row 2 col-0 area should be all spaces (rowspan continuation): {row2:?}"
+        );
+
+        // Content survives.
+        for needle in ["A", "B", "C"] {
+            assert!(out.contains(needle), "{needle} missing: {out}");
+        }
+        assert!(!out.contains("|---|"));
+    }
+
+    /// A cell carrying both rowspan and colspan round-trips: the
+    /// continuation row's content line for the spanned area is empty,
+    /// and the row separator marks all spanned columns as continuations.
+    #[test]
+    fn grid_rowspan_and_colspan_round_trip() {
+        let src = "\
++----+----+----+
+| Big     | X  |
++    +    +----+
+|         | Y  |
++----+----+----+
+| a  | b  | c  |
++----+----+----+
+";
+        let out = fmt(src);
+        // Content preserved.
+        for needle in ["Big", "X", "Y", "a", "b", "c"] {
+            assert!(out.contains(needle), "{needle} missing: {out}");
+        }
+        // Some border line in the output must have a `+    +    +`
+        // shape (continuation in both columns 0 and 1).
+        let two_continuations = out.lines().any(|l| {
+            l.starts_with('+') && l.bytes().filter(|&b| b == b'+').count() >= 3 && {
+                // First and second segments must be space-only.
+                let bytes = l.as_bytes();
+                let mut plus_idx: Vec<usize> = bytes
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, &b)| if b == b'+' { Some(i) } else { None })
+                    .collect();
+                plus_idx.truncate(3);
+                plus_idx
+                    .windows(2)
+                    .take(2)
+                    .all(|w| bytes[w[0] + 1..w[1]].iter().all(|&b| b == b' '))
+            }
+        });
+        assert!(
+            two_continuations,
+            "expected a separator with two contiguous continuation segments: {out}"
+        );
+        assert!(!out.contains("|---|"));
+    }
+
+    /// Multi-line cells in a grid table round-trip: each physical source line
+    /// of a cell must reappear on its own line of the output.
+    #[test]
+    fn grid_multi_line_cell_round_trip() {
+        let src = "\
++--------------+----------+
+| spans        | single   |
+| multiple     |          |
++==============+==========+
+| also wraps   | fits one |
+| across lines |          |
++--------------+----------+
+";
+        let out = fmt(src);
+        for needle in [
+            "spans",
+            "multiple",
+            "single",
+            "also wraps",
+            "across lines",
+            "fits one",
+        ] {
+            assert!(out.contains(needle), "{needle} missing: {out}");
+        }
+        // Header separator emitted.
+        assert!(out.contains("+=="));
+        assert!(!out.contains("|---|"), "rewrote as pipe table: {out}");
     }
 
     /// Source separator-rule widths wider than AST minimums must survive

@@ -11,6 +11,7 @@ pub(crate) mod diagram;
 mod fmt;
 pub(crate) mod gdoc;
 pub(crate) mod graph;
+pub(crate) mod grid_table;
 mod html;
 mod html_page;
 mod html_site;
