@@ -15,3 +15,15 @@ override_dh_auto_install:
 override_dh_auto_test:
 
 override_dh_auto_clean:
+
+# dpkg-deb only clamps in-archive file mtimes *down* to SOURCE_DATE_EPOCH,
+# never up. When the changelog date is ahead of the build clock the freshly
+# built files keep their varying wall-clock mtime and the .deb stops being
+# reproducible. Pin every shipped file to SOURCE_DATE_EPOCH before packing.
+override_dh_builddeb:
+	@for d in debian/docbake debian/.debhelper/*/dbgsym-root; do \
+		if [ -e "$$d" ]; then \
+			find "$$d" -exec touch --no-dereference --date=@$$SOURCE_DATE_EPOCH {} + ; \
+		fi; \
+	done
+	dh_builddeb
