@@ -288,13 +288,31 @@
   inset: (x: 10pt, y: 7pt),
 )
 
-#show table.cell.where(y: 0): set text(weight: "bold", font: "PT Sans", size: fontsize - 0.5pt)
-
-#show table: set table(
-  fill: (_, y) => if y == 0 { luma(230) } else if calc.rem(y, 2) == 0 { luma(248) } else { none },
-)
-
 #show figure.where(kind: table): set block(breakable: true)
+
+// Renderer wrapper for Markdown tables.  `has-header: false` is emitted for
+// pipe/grid/multiline tables without a header row, so the row-zero bold and
+// fill styling is suppressed (a global `where(y: 0)` selector can't tell a
+// header row apart from the first body row on its own).
+#let data-table(has-header: true, ..args) = {
+  show table.cell.where(y: 0): it => {
+    if has-header {
+      set text(weight: "bold", font: "PT Sans", size: fontsize - 0.5pt)
+    }
+    it
+  }
+  show table: set table(
+    fill: (_, y) => if has-header {
+      if y == 0 { luma(230) }
+      else if calc.rem(y, 2) == 0 { luma(248) }
+      else { none }
+    } else {
+      if calc.rem(y, 2) == 1 { luma(248) }
+      else { none }
+    },
+  )
+  table(..args)
+}
 
 // ── Figure captions ─────────────────────────────────────────────────────
 #show figure.caption: it => text(size: scale-main-font(0.9), style: "italic", it)

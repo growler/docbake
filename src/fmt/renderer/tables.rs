@@ -229,10 +229,54 @@ impl MarkdownFmtRenderer {
         let mut row = Vec::new();
         for cell in arena[row_ref].children(arena) {
             let mut text = String::new();
-            self.render_inline_children(&mut text, arena, cell, source)?;
+            self.render_pipe_cell_inline_children(&mut text, arena, cell, source)?;
             row.push(text.trim().to_string());
         }
         Ok(row)
+    }
+
+    /// Pipe-table cell inline renderer.
+    ///
+    /// Pipe-table rows are by construction single-line — a literal `\n`
+    /// inside a row breaks the table. The default [`Self::render_inline`]
+    /// emits `\\\n` for a `HARD_LINE_BREAK` qualifier (the pandoc-style
+    /// source marker), which is correct for paragraph contexts but wrong
+    /// here. The pipe-cell variant maps `HARD_LINE_BREAK` → `<br>` so
+    /// re-parse picks the break back up via the AST transformer
+    /// ([`crate::table_cell_breaks`]) and the table structure stays
+    /// intact across the round trip. `SOFT_LINE_BREAK` (which the
+    /// multiline / grid parsers plant between physical cell lines but
+    /// pipe tables never produce) collapses to a single space.
+    fn render_pipe_cell_inline_children(
+        &self,
+        out: &mut String,
+        arena: &Arena,
+        node_ref: NodeRef,
+        source: &str,
+    ) -> Result<()> {
+        for child in arena[node_ref].children(arena) {
+            self.render_pipe_cell_inline(out, arena, child, source)?;
+        }
+        Ok(())
+    }
+
+    fn render_pipe_cell_inline(
+        &self,
+        out: &mut String,
+        arena: &Arena,
+        node_ref: NodeRef,
+        source: &str,
+    ) -> Result<()> {
+        if let KindData::Text(text) = arena[node_ref].kind_data() {
+            out.push_str(text.str(source));
+            if text.has_qualifiers(TextQualifier::HARD_LINE_BREAK) {
+                out.push_str("<br>");
+            } else if text.has_qualifiers(TextQualifier::SOFT_LINE_BREAK) {
+                out.push(' ');
+            }
+            return Ok(());
+        }
+        self.render_inline(out, arena, node_ref, source)
     }
 
     /// Re-emits a pandoc-style multiline table.
@@ -498,10 +542,25 @@ impl MarkdownFmtRenderer {
         source: &str,
     ) -> Result<()> {
         if let KindData::Text(text) = arena[node_ref].kind_data() {
-            out.push_str(text.str(source));
-            if text.has_qualifiers(TextQualifier::HARD_LINE_BREAK)
-                || text.has_qualifiers(TextQualifier::SOFT_LINE_BREAK)
-            {
+            let s = text.str(source);
+            out.push_str(s);
+            if text.has_qualifiers(TextQualifier::HARD_LINE_BREAK) {
+                // Preserve the source-level hard-break marker so the
+                // physical-line layout we emit ALSO encodes "this is a
+                // hard break" to the re-parser. Appending `\` makes the
+                // upcoming line look like `…\<nl>…` in markdown — exactly
+                // the pandoc convention the cell-break transformer
+                // recognises. Skip if the text already ends in an
+                // unescaped `\` (the transformer normally strips it, but
+                // we double-check to avoid `\\` literal).
+                let bytes = s.as_bytes();
+                let already_marker = bytes.last() == Some(&b'\\')
+                    && bytes.iter().rev().take_while(|&&b| b == b'\\').count() % 2 == 1;
+                if !already_marker {
+                    out.push('\\');
+                }
+                out.push_str(CELL_SOFT_BREAK_MARKER);
+            } else if text.has_qualifiers(TextQualifier::SOFT_LINE_BREAK) {
                 out.push_str(CELL_SOFT_BREAK_MARKER);
             }
             return Ok(());
@@ -1646,6 +1705,125 @@ First        row          12.0 Single line.
         assert!(
             has_wide,
             "expected a dash run of ≥36 to survive; output:\n{out}"
+        );
+    }
+
+    // ── Hard-break round-trip ────────────────────────────────────────────────
+    //
+    // The cell-break AST transformer (`crate::table_cell_breaks`) folds
+    // both `<br>` inline HTML and trailing-`\` cell-line markers into the
+    // same `HARD_LINE_BREAK` shape. `fmt` round-trips those back into
+    // markdown source that re-parses to the same hard-break shape:
+    //   * multiline / grid cells → trailing `\` on the line preceding the
+    //     break (preserves pandoc semantics, matches the in-source form);
+    //   * pipe cells → `<br>` (a literal `\n` inside a pipe row would
+    //     break the table).
+
+    /// `\` at end of a non-last column line in a multiline table must
+    /// survive a fmt round trip — the `\` is the source marker.
+    #[test]
+    fn multiline_cell_trailing_backslash_round_trip() {
+        let src = "\
+# Heading
+
+-----------  -----------
+ First       Second
+ line\\       cell text
+ continued   here
+-----------  -----------
+";
+        let out = fmt(src);
+        // The first non-last column cell content `line\` carries the
+        // pandoc hard-break marker through the round trip. In a multiline
+        // table, columns share each physical output line side-by-side,
+        // so the `\` sits mid-line (followed by inter-column padding
+        // and the next column's content), not at the line's end.
+        assert!(
+            out.contains("line\\"),
+            "expected `line\\` to survive in formatted output; got:\n{out}"
+        );
+        // Re-parse must keep producing a HARD_LINE_BREAK so a third pass
+        // is identical (idempotency = full semantic round trip).
+        let twice = fmt(&out);
+        assert_eq!(out, twice, "not idempotent:\nonce:\n{out}\ntwice:\n{twice}");
+    }
+
+    /// `<br>` inside a multiline cell becomes a `\`-marked physical line
+    /// break in the formatted output (the AST has it as HARD_LINE_BREAK
+    /// already after parsing, and fmt prefers the `\` form for
+    /// pandoc-compatible multiline cells).
+    #[test]
+    fn multiline_cell_br_html_round_trips_as_backslash() {
+        let src = "\
+# Heading
+
+-----------  -----------
+ First       Second
+ a<br>b      cell text
+-----------  -----------
+";
+        let out = fmt(src);
+        // No literal `<br>` should remain — multiline cells round-trip
+        // hard breaks through the pandoc `\` convention, not HTML.
+        assert!(
+            !out.contains("<br>"),
+            "expected no literal <br> in multiline output; got:\n{out}"
+        );
+        // The `a\` marker survives somewhere in the formatted output
+        // (mid-line, since columns sit side-by-side).
+        assert!(out.contains("a\\"), "expected `a\\` from <br>; got:\n{out}");
+        assert!(out.contains('b'), "lost `b`: {out}");
+        // Idempotency on the second pass.
+        let twice = fmt(&out);
+        assert_eq!(out, twice, "not idempotent:\nonce:\n{out}\ntwice:\n{twice}");
+    }
+
+    /// `<br>` inside a pipe-table cell must round-trip as `<br>` —
+    /// emitting `\\\n` would put a literal newline in the row and break
+    /// the table on re-parse.
+    #[test]
+    fn pipe_cell_br_html_round_trip_stays_in_row() {
+        let src = "# Heading\n\n| A | B |\n|---|---|\n| a<br>b | c |\n";
+        let out = fmt(src);
+        // The pipe row must remain a single line containing `<br>` and
+        // BOTH `a` and `b` together with `c`.
+        let cell_line = out
+            .lines()
+            .find(|l| l.contains("<br>") && l.contains('a') && l.contains('b') && l.contains('c'))
+            .unwrap_or_else(|| panic!("expected single-line pipe row with <br>; got:\n{out}"));
+        assert!(
+            !cell_line.contains('\n'),
+            "pipe row split across lines: {cell_line:?}"
+        );
+        // No stray `\\\n` style hard-break marker should leak into the
+        // row text.
+        assert!(
+            !out.contains("\\\n"),
+            "literal `\\\\\\n` ended up in output: {out:?}"
+        );
+    }
+
+    /// A trailing `\` cell hard-break should re-parse from fmt output back
+    /// into a HARD_LINE_BREAK in the AST. Verify the full parse → fmt →
+    /// re-parse loop.
+    #[test]
+    fn multiline_hard_break_round_trip_double_pass() {
+        let src = "\
+# Heading
+
+-----------  -----------
+ First       Second
+ line\\       cell text
+ continued   here
+-----------  -----------
+";
+        let once = fmt(src);
+        let twice = fmt(&once);
+        // Idempotent at the second pass — once we hit the canonical
+        // formatted shape, formatting again must not change anything.
+        assert_eq!(
+            once, twice,
+            "fmt not idempotent on hard breaks:\nfirst:\n{once}\nsecond:\n{twice}"
         );
     }
 }

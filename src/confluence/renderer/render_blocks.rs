@@ -243,6 +243,7 @@ impl<'a> ConfluenceRenderer<'a> {
         node_ref: NodeRef,
     ) -> Result<()> {
         let arena = context.arena;
+        let source = context.source;
         out.push_str("<table><tbody>\n");
         for child in arena[node_ref].children(arena) {
             match arena[child].kind_data() {
@@ -250,12 +251,7 @@ impl<'a> ConfluenceRenderer<'a> {
                     for row in arena[child].children(arena) {
                         out.push_str("<tr>");
                         for cell in arena[row].children(arena) {
-                            let align = self.table_cell_align(arena, cell);
-                            if align.is_empty() {
-                                out.push_str("<th>");
-                            } else {
-                                write!(out, "<th style=\"text-align: {align}\">")?;
-                            }
+                            self.open_table_cell(out, arena, source, cell, "th")?;
                             self.render_inline_children(out, context, cell)?;
                             out.push_str("</th>");
                         }
@@ -266,12 +262,7 @@ impl<'a> ConfluenceRenderer<'a> {
                     for row in arena[child].children(arena) {
                         out.push_str("<tr>");
                         for cell in arena[row].children(arena) {
-                            let align = self.table_cell_align(arena, cell);
-                            if align.is_empty() {
-                                out.push_str("<td>");
-                            } else {
-                                write!(out, "<td style=\"text-align: {align}\">")?;
-                            }
+                            self.open_table_cell(out, arena, source, cell, "td")?;
                             self.render_inline_children(out, context, cell)?;
                             out.push_str("</td>");
                         }
@@ -282,6 +273,32 @@ impl<'a> ConfluenceRenderer<'a> {
             }
         }
         out.push_str("</tbody></table>\n");
+        Ok(())
+    }
+
+    fn open_table_cell(
+        &self,
+        out: &mut String,
+        arena: &Arena,
+        source: &str,
+        cell: NodeRef,
+        tag: &str,
+    ) -> Result<()> {
+        let align = self.table_cell_align(arena, cell);
+        let colspan = cell_span_attr(arena, source, cell, "colspan");
+        let rowspan = cell_span_attr(arena, source, cell, "rowspan");
+        out.push('<');
+        out.push_str(tag);
+        if colspan > 1 {
+            write!(out, " colspan=\"{colspan}\"")?;
+        }
+        if rowspan > 1 {
+            write!(out, " rowspan=\"{rowspan}\"")?;
+        }
+        if !align.is_empty() {
+            write!(out, " style=\"text-align: {align}\"")?;
+        }
+        out.push('>');
         Ok(())
     }
 
@@ -442,4 +459,12 @@ impl<'a> ConfluenceRenderer<'a> {
         }
         Ok(())
     }
+}
+
+fn cell_span_attr(arena: &Arena, source: &str, cell: NodeRef, name: &str) -> usize {
+    arena[cell]
+        .attributes()
+        .get(name)
+        .and_then(|v| v.str(source).parse::<usize>().ok())
+        .unwrap_or(1)
 }

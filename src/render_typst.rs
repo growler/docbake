@@ -628,10 +628,9 @@ impl TypstRenderer {
         node_ref: NodeRef,
     ) -> Result<()> {
         let arena = context.arena;
-        let mut column_count = 0usize;
-        let mut aligns = Vec::new();
-        let mut header_rows = Vec::new();
-        let mut body_rows = Vec::new();
+        let source = context.source;
+        let mut header_rows: Vec<NodeRef> = Vec::new();
+        let mut body_rows: Vec<NodeRef> = Vec::new();
         for child in arena[node_ref].children(arena) {
             match arena[child].kind_data() {
                 KindData::TableHeader(_) => {
@@ -647,57 +646,134 @@ impl TypstRenderer {
                 _ => {}
             }
         }
-        if let Some(first_row) = header_rows.first().or_else(|| body_rows.first()) {
-            column_count = arena[*first_row].children(arena).count();
-            aligns = arena[*first_row]
+
+        let has_header = !header_rows.is_empty();
+        // Column count = sum of colspans in the first row. The first row has
+        // no rowspan continuation from above, so its cells fully span every
+        // column once.
+        let column_count = match header_rows.first().or_else(|| body_rows.first()) {
+            Some(&row) => arena[row]
                 .children(arena)
-                .map(
-                    |cell| match as_kind_data!(arena, cell, TableCell).alignment() {
-                        TableCellAlignment::Left | TableCellAlignment::None => "left",
-                        TableCellAlignment::Center => "center",
-                        TableCellAlignment::Right => "right",
-                        _ => "left",
-                    },
-                )
-                .collect();
-        }
+                .map(|cell| cell_colspan(arena, source, cell))
+                .sum::<usize>(),
+            None => 0,
+        };
         if column_count == 0 {
             return Ok(());
         }
-        out.push_str("#table(\n");
-        write!(
+
+        // Per-column alignment: walk every row with rowspan tracking so the
+        // alignment of a single-column cell lands in its actual column, even
+        // when earlier columns are occupied by a rowspan from a previous row.
+        // First single-column cell encountered locks each column's alignment;
+        // unlocked columns stay at the default "left".
+        let mut aligns: Vec<&'static str> = vec!["left"; column_count];
+        let mut align_locked: Vec<bool> = vec![false; column_count];
+        let mut occupied_until: Vec<i32> = vec![-1; column_count];
+        for (row_idx, &row) in header_rows.iter().chain(body_rows.iter()).enumerate() {
+            let row_i = row_idx as i32;
+            let mut col_idx = 0usize;
+            for cell in arena[row].children(arena) {
+                while col_idx < column_count && occupied_until[col_idx] >= row_i {
+                    col_idx += 1;
+                }
+                if col_idx >= column_count {
+                    break;
+                }
+                let cs = cell_colspan(arena, source, cell);
+                let rs = cell_rowspan(arena, source, cell);
+                if cs == 1 && !align_locked[col_idx] {
+                    match as_kind_data!(arena, cell, TableCell).alignment() {
+                        TableCellAlignment::Center => {
+                            aligns[col_idx] = "center";
+                            align_locked[col_idx] = true;
+                        }
+                        TableCellAlignment::Right => {
+                            aligns[col_idx] = "right";
+                            align_locked[col_idx] = true;
+                        }
+                        TableCellAlignment::Left => {
+                            aligns[col_idx] = "left";
+                            align_locked[col_idx] = true;
+                        }
+                        _ => {}
+                    }
+                }
+                if rs > 1 {
+                    let end = row_i + rs as i32 - 1;
+                    let span_end = (col_idx + cs).min(column_count);
+                    for slot in occupied_until.iter_mut().take(span_end).skip(col_idx) {
+                        *slot = end;
+                    }
+                }
+                col_idx += cs;
+            }
+        }
+
+        // Emit via the theme wrapper so header styling can be suppressed for
+        // headerless tables (the global `where(y: 0)` selector can't tell a
+        // body row apart from a header row on its own).
+        out.push_str("#data-table(\n");
+        writeln!(out, "  has-header: {has_header},")?;
+        writeln!(
             out,
-            "  columns: ({})",
+            "  columns: ({}),",
             vec!["auto"; column_count].join(", ")
         )?;
-        out.push_str(",\n");
-        if !aligns.is_empty() {
-            writeln!(out, "  align: ({}),", aligns.join(", "))?;
-        }
-        if !header_rows.is_empty() {
-            out.push_str("  table.header(");
-            let mut first = true;
-            for row in &header_rows {
-                for cell in arena[*row].children(arena) {
-                    if !first {
-                        out.push_str(", ");
-                    }
-                    first = false;
-                    out.push('[');
-                    self.render_inline_children(out, context, cell)?;
-                    out.push(']');
+        writeln!(out, "  align: ({}),", aligns.join(", "))?;
+        if has_header {
+            out.push_str("  table.header(\n");
+            for &row in &header_rows {
+                for cell in arena[row].children(arena) {
+                    self.render_table_cell(out, context, cell, 4)?;
                 }
             }
-            out.push_str("),\n");
+            out.push_str("  ),\n");
         }
-        for row in body_rows {
+        for &row in &body_rows {
             for cell in arena[row].children(arena) {
-                out.push_str("  [");
-                self.render_inline_children(out, context, cell)?;
-                out.push_str("],\n");
+                self.render_table_cell(out, context, cell, 2)?;
             }
         }
         out.push_str(")\n\n");
+        Ok(())
+    }
+
+    fn render_table_cell(
+        &self,
+        out: &mut String,
+        context: &RenderContext<'_>,
+        cell: NodeRef,
+        indent: usize,
+    ) -> Result<()> {
+        let arena = context.arena;
+        let source = context.source;
+        let colspan = cell_colspan(arena, source, cell);
+        let rowspan = cell_rowspan(arena, source, cell);
+        for _ in 0..indent {
+            out.push(' ');
+        }
+        if colspan > 1 || rowspan > 1 {
+            out.push_str("table.cell(");
+            let mut first = true;
+            if colspan > 1 {
+                write!(out, "colspan: {colspan}")?;
+                first = false;
+            }
+            if rowspan > 1 {
+                if !first {
+                    out.push_str(", ");
+                }
+                write!(out, "rowspan: {rowspan}")?;
+            }
+            out.push_str(")[");
+            self.render_inline_children(out, context, cell)?;
+            out.push_str("],\n");
+        } else {
+            out.push('[');
+            self.render_inline_children(out, context, cell)?;
+            out.push_str("],\n");
+        }
         Ok(())
     }
 
@@ -981,6 +1057,22 @@ fn escape_typst_markup(value: &str) -> String {
         }
     }
     out
+}
+
+fn cell_colspan(arena: &Arena, source: &str, cell: NodeRef) -> usize {
+    arena[cell]
+        .attributes()
+        .get("colspan")
+        .and_then(|v| v.str(source).parse::<usize>().ok())
+        .unwrap_or(1)
+}
+
+fn cell_rowspan(arena: &Arena, source: &str, cell: NodeRef) -> usize {
+    arena[cell]
+        .attributes()
+        .get("rowspan")
+        .and_then(|v| v.str(source).parse::<usize>().ok())
+        .unwrap_or(1)
 }
 
 fn collect_labels(prepared: &PreparedDocument, profile: &RenderProfile) -> Result<HashSet<String>> {

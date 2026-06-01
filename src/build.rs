@@ -32,6 +32,7 @@ pub(crate) fn markdown_parser() -> parser::Parser {
             .and(code_block_attribute_parser_extension())
             .and(crate::grid_table::grid_table_parser_extension())
             .and(crate::multiline_table::multiline_table_parser_extension())
+            .and(crate::table_cell_breaks::table_cell_break_transformer_extension())
             .and(diagram_parser_extension(DiagramParserOptions::default())),
         // NOTE: caption_parser_extension is intentionally omitted here.
         // The caption AST transformer is run as a post-parse step in
