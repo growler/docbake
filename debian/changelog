@@ -1,3 +1,10 @@
+docbake (0.1.13) unstable; urgency=medium
+
+  * feat: headerless table styling, cell colspan/rowspan in the Typst/PDF
+    renderer, and pandoc-style hard line breaks inside table cells
+
+ -- Alexey Naidyonov <alexey.naidyonov@gmail.com>  Mon, 01 Jun 2026 10:20:49 +0200
+
 docbake (0.1.12) unstable; urgency=medium
 
   * fix: HTML theme improvements 
