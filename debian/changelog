@@ -1,3 +1,9 @@
+docbake (0.1.14) unstable; urgency=medium
+
+  * chore: update manifest lock files to fix ci/cd build
+
+ -- Alexey Naidyonov <alexey.naidyonov@gmail.com>  Mon, 01 Jun 2026 14:00:00 +0200
+
 docbake (0.1.13) unstable; urgency=medium
 
   * feat: headerless table styling, cell colspan/rowspan in the Typst/PDF
