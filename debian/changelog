@@ -1,3 +1,10 @@
+docbake (0.1.15) unstable; urgency=medium
+
+  * fix: make the Debian package build byte-for-byte reproducible by pinning
+    staged file mtimes to SOURCE_DATE_EPOCH before dpkg-deb packs the archive
+
+ -- Alexey Naidyonov <alexey.naidyonov@gmail.com>  Mon, 01 Jun 2026 11:33:45 +0200
+
 docbake (0.1.14) unstable; urgency=medium
 
   * chore: update manifest lock files to fix ci/cd build

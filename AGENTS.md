@@ -132,6 +132,45 @@ The Nix devshell (`flake.nix`) provides Rust with cross-compilation targets,
 `zig`, and `cargo-zigbuild`. `CARGO_ZIGBUILD_CACHE_DIR` is set to
 `target/zigbuild-cache` to keep build artifacts out of the project root.
 
+## Release Process
+
+Two independent version lines, each with its own tag namespace (tags use the
+`v*` / `tree/v*` form — never a `debian/` prefix):
+
+- **Package** (`vX.Y.Z`) — the `docbake` crate / Debian package.
+- **Builder tree** (`tree/vN`) — the deb-ostree doc-server image that bundles
+  the package.
+
+Release a new package version:
+
+1. **Bump** `version` in `Cargo.toml` and add a `debian/changelog` entry. Use a
+   real, current RFC-2822 timestamp (`date -R`) — a changelog date in the
+   *future* relative to the build clock used to break reproducibility (see
+   below).
+2. **Build**: `make debian-package`. Output lands in `target/`
+   (`docbake_X.Y.Z_amd64.deb` plus the `-dbgsym` companion); `cargo build`
+   also refreshes `Cargo.lock`. The build is byte-for-byte reproducible —
+   `override_dh_builddeb` in `debian/rules` pins every staged file's mtime to
+   `SOURCE_DATE_EPOCH` before packing, so the hash is stable across runs
+   regardless of how the changelog date compares to the build clock (dpkg-deb's
+   own clamp is one-directional and is not sufficient on its own).
+3. **Commit** the bump (`Cargo.toml`, `Cargo.lock`, `debian/changelog`) and tag
+   `vX.Y.Z`.
+
+Refresh the builder tree to ship the new package:
+
+4. Point the `[[local]]` entry in `server/doc-server.toml` at the new
+   `../target/docbake_X.Y.Z_amd64.deb`.
+5. Refresh its hash/size and the lock file:
+   `deb-ostree -m server/doc-server.toml update -L`.
+6. Verify the tree builds: `scripts/build-doc-server` (no flags; (re)builds the
+   `spec` and `container` specs). `--update` additionally re-runs the local
+   refresh before building; `--version <tree-version>` is CI-only and
+   commits/publishes the OSTree image.
+7. Commit the tree update (`server/doc-server.toml`,
+   `server/doc-server.amd64.lock`) and tag `tree/vN` (increment the latest
+   `tree/v*`).
+
 ## Include Mechanism
 
 Documents use `:::include{path=relative/file.md}` fenced-div blocks for
