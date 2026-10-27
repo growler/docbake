@@ -12,3 +12,4 @@ libnull.a
 /debian/docbake.substvars
 /debian/*.log
 /debian/files
+/docs/research/docx-gdoc-probe/probe.docx
