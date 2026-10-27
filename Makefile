@@ -75,7 +75,7 @@ mac-cross:
 		exit 1; \
 	fi; \
 	if ! command -v cargo-zigbuild >/dev/null 2>&1; then \
-		echo "cargo-zigbuild is required (run inside the nix devshell)"; \
+		echo "cargo-zigbuild is required"; \
 		exit 1; \
 	fi; \
 	export SDKROOT="$$(xcrun --sdk macosx --show-sdk-path)"; \

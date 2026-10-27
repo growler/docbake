@@ -117,7 +117,7 @@ definition lists, captions, and diagram transforms.
 
 ## Cross-Compilation
 
-The project uses `cargo-zigbuild` (via Nix flake) to cross-compile for
+The project uses `cargo-zigbuild` to cross-compile for
 distribution. After every major change, **all three targets must compile
 successfully**:
 
@@ -128,9 +128,19 @@ cargo zigbuild --release --target x86_64-pc-windows-gnu            # Windows x86
 cargo zigbuild --release --target x86_64-apple-darwin              # Windows x86_64
 ```
 
-The Nix devshell (`flake.nix`) provides Rust with cross-compilation targets,
-`zig`, and `cargo-zigbuild`. `CARGO_ZIGBUILD_CACHE_DIR` is set to
-`target/zigbuild-cache` to keep build artifacts out of the project root.
+The host system provides Rust with cross-compilation targets, `zig`, and
+`cargo-zigbuild`. `make mac-cross` sets `CARGO_ZIGBUILD_CACHE_DIR` to
+`target/.zigbuild-cache` and puts an `x86_64-w64-mingw32-dlltool` symlink to
+`cargo-zigbuild` on PATH. The `x86_64-pc-windows-gnu` build needs this symlink.
+
+## Nix Package
+
+`flake.nix` exports `overlays.default`, which adds `docbake` to nixpkgs.
+The derivation is in `nix/package.nix`. It uses `rustPlatform` from the
+consumer's nixpkgs and wraps the binary so that `typst`, `d2`, `plantuml`, and
+`mmdc` are on PATH. Tools on the user's PATH take priority. `drawio` is not
+included. `packages.<system>.default` builds the same derivation for
+`nix build`.
 
 ## Release Process
 
