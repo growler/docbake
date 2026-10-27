@@ -350,6 +350,64 @@ impl GoogleDriveClient {
     }
 }
 
+#[cfg(test)]
+impl GoogleDriveClient {
+    /// Export a Google Doc as `mime` and write the response body to `dest`.
+    ///
+    /// Returns the number of bytes written.
+    fn export_to_file(&self, file_id: &str, mime: &str, dest: &std::path::Path) -> Result<u64> {
+        let url = format!("{DRIVE_FILES_URL}/{file_id}/export");
+        let req = self
+            .agent
+            .get(&url)
+            .query("mimeType", mime)
+            .header("Authorization", &format!("Bearer {}", self.access_token));
+        let resp = req
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .call()
+            .with_context(|| format!("GET {url}"))?;
+
+        let status = resp.status().as_u16();
+        if status >= 400 {
+            let err_body: String = resp.into_body().read_to_string().unwrap_or_default();
+            bail!("Google Drive API export error (HTTP {status}): {err_body}");
+        }
+
+        let mut file = std::fs::File::create(dest)
+            .with_context(|| format!("failed to create {}", dest.display()))?;
+        std::io::copy(&mut resp.into_body().into_reader(), &mut file)
+            .inspect_err(|_| {
+                // Do not leave a part-written file.
+                let _ = std::fs::remove_file(dest);
+            })
+            .with_context(|| format!("failed to write {}", dest.display()))
+    }
+
+    /// Delete a Drive file permanently. The file does not go to the trash.
+    fn delete(&self, file_id: &str) -> Result<()> {
+        let url = format!("{DRIVE_FILES_URL}/{file_id}");
+        let req = self
+            .agent
+            .delete(&url)
+            .header("Authorization", &format!("Bearer {}", self.access_token));
+        let resp = req
+            .config()
+            .http_status_as_error(false)
+            .build()
+            .call()
+            .with_context(|| format!("DELETE {url}"))?;
+
+        let status = resp.status().as_u16();
+        if status >= 400 {
+            let err_body: String = resp.into_body().read_to_string().unwrap_or_default();
+            bail!("Google Drive API delete error (HTTP {status}): {err_body}");
+        }
+        Ok(())
+    }
+}
+
 /// Build a Google Docs URL from a document ID.
 pub(crate) fn google_docs_url(doc_id: &str) -> String {
     format!("https://docs.google.com/document/d/{doc_id}/edit")
@@ -432,5 +490,68 @@ mod tests {
     #[test]
     fn parse_folder_id_raw() {
         assert_eq!(parse_folder_id("1XyZ_AbC"), "1XyZ_AbC");
+    }
+
+    /// Upload `docs/research/docx-gdoc-probe/probe.docx` to My Drive with
+    /// conversion to a Google Doc, the same as `publish gdoc`. Export the
+    /// Google Doc as DOCX and PDF to `result/probe-import.*`. Then replace the
+    /// TOC with a native Google Docs TOC, the same as `publish gdoc`, and
+    /// export again to `result/probe-toc.*`. Delete the Google Doc at the end,
+    /// also when an export fails.
+    ///
+    /// Needs stored Google Docs credentials and network access:
+    /// `cargo test import_probe_and_export -- --ignored --nocapture`
+    #[test]
+    #[ignore = "uploads to Google Drive; needs credentials and network access"]
+    fn import_probe_and_export() {
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/research/docx-gdoc-probe");
+        let docx = std::fs::read(dir.join("probe.docx"))
+            .expect("read probe.docx (run build.sh to make it)");
+        let out = dir.join("result");
+        std::fs::create_dir_all(&out).expect("create result directory");
+        // Remove the files of an earlier run, so that a failed export does
+        // not leave old files next to new ones.
+        for name in [
+            "probe-import.docx",
+            "probe-import.pdf",
+            "probe-toc.docx",
+            "probe-toc.pdf",
+        ] {
+            match std::fs::remove_file(out.join(name)) {
+                Err(err) if err.kind() != std::io::ErrorKind::NotFound => {
+                    panic!("remove {name}: {err}")
+                }
+                _ => {}
+            }
+        }
+
+        let token = crate::credentials::resolve_gdoc_access_token().expect("resolve access token");
+        let client = GoogleDriveClient::new(&token);
+        let file = client
+            .create_doc("docbake DOCX import probe", &docx, None)
+            .expect("upload probe.docx");
+        println!("Google Doc: {}", google_docs_url(&file.id));
+
+        let export_both = |stem: &str| -> Result<()> {
+            for (ext, mime) in [("docx", DOCX_MIME), ("pdf", "application/pdf")] {
+                let dest = out.join(format!("{stem}.{ext}"));
+                let n = client.export_to_file(&file.id, mime, &dest)?;
+                println!("wrote {} ({n} bytes)", dest.display());
+            }
+            Ok(())
+        };
+        let steps = export_both("probe-import").and_then(|()| {
+            // `publish gdoc` reports a TOC error as a warning and continues.
+            if let Err(err) = client.ensure_native_toc(&file.id) {
+                println!("Warning: failed to create native Google Docs TOC: {err}");
+            }
+            export_both("probe-toc")
+        });
+
+        let deleted = client.delete(&file.id);
+        println!("delete {}: {deleted:?}", file.id);
+        steps.expect("export Google Doc");
+        deleted.expect("delete Google Doc");
     }
 }
