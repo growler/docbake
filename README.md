@@ -54,7 +54,7 @@ docbake fmt --check doc/ru
 
 ## Кросс-сборка
 
-- `make cross` — кросс-сборка в Linux-контейнере через `deb-ostree`.
+- `make cross` — кросс-сборка в Linux-контейнере через `debles`.
 - `make mac-cross` — кросс-сборка напрямую на macOS-хосте (через `cargo-zigbuild`, без контейнера).
 
 Обе команды собирают цели:

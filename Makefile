@@ -1,5 +1,6 @@
-MANIFEST     := server/builder.toml
-DEBOSTREE    := deb-ostree -m $(MANIFEST)
+MODULE       := server/builder.les
+REPO         ?= $(HOME)/.local/share/ostree/repo
+export OSTREE_REPO := $(REPO)
 
 CROSS_TARGETS := \
 	x86_64-unknown-linux-musl \
@@ -7,7 +8,7 @@ CROSS_TARGETS := \
 	aarch64-apple-darwin \
 	x86_64-apple-darwin
 
-BUILDER_REF    = $$($(DEBOSTREE) spec build-ref)
+BUILDER_REF    = $$(debles build-ref $(MODULE))
 
 CONTAINER_RUN := ostree-podman run --rm \
 	--volume $(CURDIR):/root/src \
@@ -20,7 +21,7 @@ CONTAINER_RUN_CROSS := ostree-podman run --rm \
 	--rootfs $(BUILDER_REF):O
 
 # ---------------------------------------------------------------------------
-# Build the deb-ostree tree
+# Build the builder tree
 # ---------------------------------------------------------------------------
 
 .PHONY: build-tree

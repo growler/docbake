@@ -138,7 +138,7 @@ Two independent version lines, each with its own tag namespace (tags use the
 `v*` / `tree/v*` form — never a `debian/` prefix):
 
 - **Package** (`vX.Y.Z`) — the `docbake` crate / Debian package.
-- **Builder tree** (`tree/vN`) — the deb-ostree doc-server image that bundles
+- **Builder tree** (`tree/vN`) — the debles doc-server image that bundles
   the package.
 
 Release a new package version:
@@ -159,15 +159,15 @@ Release a new package version:
 
 Refresh the builder tree to ship the new package:
 
-4. Point the `[[local]]` entry in `server/doc-server.toml` at the new
+4. Point the `_DOCBAKE_DEB` constant in `server/doc-server.les` at the new
    `../target/docbake_X.Y.Z_amd64.deb`.
-5. Refresh its hash/size and the lock file:
-   `deb-ostree -m server/doc-server.toml update -L`.
+5. Refresh the lock file: `debles lock server/doc-server.les` (re-hashes the
+   local `.deb` and re-resolves against the pinned snapshot).
 6. Verify the tree builds: `scripts/build-doc-server` (no flags; (re)builds the
-   `spec` and `container` specs). `--update` additionally re-runs the local
-   refresh before building; `--version <tree-version>` is CI-only and
-   commits/publishes the OSTree image.
-7. Commit the tree update (`server/doc-server.toml`,
+   `image` and `container_image` targets). `--update` additionally re-locks
+   before building; `--version <tree-version>` is CI-only and commits/publishes
+   the OSTree image.
+7. Commit the tree update (`server/doc-server.les`,
    `server/doc-server.amd64.lock`) and tag `tree/vN` (increment the latest
    `tree/v*`).
 

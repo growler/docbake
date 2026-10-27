@@ -10,4 +10,5 @@ libnull.a
 /debian/.debhelper/
 /debian/debhelper-build-stamp
 /debian/docbake.substvars
+/debian/*.log
 /debian/files
