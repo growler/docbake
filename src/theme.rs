@@ -89,7 +89,8 @@ impl Theme {
         }
     }
 
-    /// Return logo bytes from theme assets (`assets/logo.*`) for DOCX front page.
+    /// Return logo bytes from theme assets (`assets/logo.*`) for the DOCX
+    /// title page and page header.
     pub fn logo_asset(&self) -> Result<Option<(Vec<u8>, String)>> {
         let candidates = [
             ("logo.svg", "svg"),
@@ -510,6 +511,8 @@ mod tests {
             [m.top, m.bottom, m.left, m.right, m.header, m.footer],
             [1134, 1134, 1134, 567, 851, 992].map(Twips)
         );
+        assert_eq!(params.logo.title_height, Twips(522));
+        assert_eq!(params.logo.header_height, Twips(210));
         let c = &params.table.cell_margins;
         assert_eq!(
             [c.top, c.bottom, c.left, c.right],

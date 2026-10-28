@@ -692,6 +692,7 @@ mod tests {
 page:
   size: a4
   margins: {top: 2cm, bottom: 2cm, left: 2cm, right: 1cm, header: 1.5cm, footer: 1.75cm}
+logo: {title_height: 0.92cm, header_height: 10.5pt}
 fonts: {body: PT Sans, heading: PT Sans, mono: PT Mono}
 colors: {accent: EE721C}
 table:

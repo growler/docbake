@@ -36,6 +36,8 @@ use self::title_page::TitleFields;
 
 mod admonition;
 mod blocks;
+mod doc_props;
+mod fields;
 mod font_table;
 mod header_footer;
 mod inline;
@@ -49,8 +51,6 @@ mod stylesheet;
 mod tables;
 mod title_page;
 mod toc;
-
-const ACCENT_ORANGE: &str = "EE721C";
 
 /// Code block background fill colour (light grey).
 const CODE_BG: &str = "F2F2F2";
@@ -136,18 +136,15 @@ impl<'a> DocxRenderer<'a> {
         if !fields.version.is_empty() {
             docx = docx.custom_property("Version", &fields.version);
         }
-        if !fields.title.is_empty() {
-            docx = docx.header(self.build_default_header(fields.title));
-        } else {
-            docx = docx.header(self.build_default_header(""));
-        }
+        let logo = self.theme_logo();
+        docx = docx.header(self.build_default_header(fields.title, logo.as_ref()));
         docx = docx
             .footer(self.build_default_footer(&fields.version))
             .title_pg();
 
         let has_title_page = !fields.title.is_empty();
         if has_title_page {
-            docx = self.add_title_page(docx, &fields);
+            docx = self.add_title_page(docx, &fields, logo.as_ref());
         }
 
         docx = self.add_table_of_contents(docx, graph)?;
@@ -160,7 +157,7 @@ impl<'a> DocxRenderer<'a> {
         // each top-level block.  render_block handles its own children.
         docx = self.render_graph_document(docx, graph, graph.root_id, 0)?;
 
-        Ok(Package::new(docx, self.params, lang))
+        Ok(Package::new(docx, self.params, lang, fields.title))
     }
 
     /// Walk a document occurrence, resolving includes and rendering

@@ -8,6 +8,7 @@ use rushdown::ast::{Arena, NodeRef};
 
 use crate::cache::Cache;
 
+use super::params::Twips;
 use super::{DocxRenderer, RenderContext};
 
 /// EMU per pixel at 96 DPI (1 inch = 914400 EMU, 1 inch = 96 px).
@@ -15,8 +16,9 @@ const EMU_PER_PX: u32 = 9525;
 
 /// Maximum image width in EMU (~6 inches at 96 DPI).
 const MAX_IMAGE_WIDTH_EMU: u32 = 5_760_000;
-const FRONT_LOGO_WIDTH_EMU: u32 = 1_712_140;
-const FRONT_LOGO_HEIGHT_EMU: u32 = 330_413;
+
+/// EMU per twip (1 twip = 914400 / 1440 EMU).
+const EMU_PER_TWIP: u64 = 635;
 
 /// A diagram PNG render request.
 ///
@@ -160,7 +162,11 @@ impl<'a> DocxRenderer<'a> {
         }
     }
 
-    pub(super) fn resolve_front_logo(&self) -> Option<Pic> {
+    /// Decode the theme logo. An SVG logo is rasterised to PNG.
+    ///
+    /// Returns `None` when the theme has no logo, the logo does not
+    /// decode, or the logo has a zero width or height.
+    pub(super) fn theme_logo(&self) -> Option<Pic> {
         let (bytes, ext) = self.logo_asset.as_ref()?;
         let ext = ext.to_ascii_lowercase();
 
@@ -172,11 +178,15 @@ impl<'a> DocxRenderer<'a> {
         } else {
             self.pic_from_raster(bytes)?
         };
-
-        Some(pic.size(FRONT_LOGO_WIDTH_EMU, FRONT_LOGO_HEIGHT_EMU))
+        if pic.size.0 == 0 || pic.size.1 == 0 {
+            self.logger
+                .log("warning: theme logo has a zero width or height, skipping");
+            return None;
+        }
+        Some(pic)
     }
 
-    fn svg_to_png(&self, svg_data: &[u8]) -> Option<Vec<u8>> {
+    pub(super) fn svg_to_png(&self, svg_data: &[u8]) -> Option<Vec<u8>> {
         let opt = usvg::Options::default();
         let tree = usvg::Tree::from_data(svg_data, &opt).ok()?;
         let size = tree.size().to_int_size();
@@ -320,6 +330,18 @@ impl<'a> DocxRenderer<'a> {
         };
         Some(pic.size(final_w, final_h))
     }
+}
+
+/// Gives a copy of the logo `pic` with the height `height`. The width
+/// keeps the aspect ratio of `pic`.
+pub(super) fn logo_at_height(pic: &Pic, height: Twips) -> Pic {
+    let (w, h) = pic.size;
+    let height_emu = u64::from(height.0) * EMU_PER_TWIP;
+    let width_emu = height_emu * u64::from(w) / u64::from(h.max(1));
+    pic.clone().size(
+        u32::try_from(width_emu).unwrap_or(u32::MAX),
+        height_emu as u32,
+    )
 }
 
 /// Detect PNG image dimensions from the IHDR chunk.

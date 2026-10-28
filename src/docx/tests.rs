@@ -1,8 +1,11 @@
 use std::fs;
 use std::io::{Cursor, Read};
 use std::path::Path;
+use std::sync::LazyLock;
 
 use anyhow::Result;
+use docx_rs::Pic;
+use regex::Regex;
 use resvg::tiny_skia;
 use serde_json::Map as JsonMap;
 use tempfile::TempDir;
@@ -16,7 +19,9 @@ use crate::graph::prepare_document;
 use crate::theme::Theme;
 use crate::DebugDumper;
 
+use super::media::logo_at_height;
 use super::package::Package;
+use super::params::Twips;
 use super::DocxRenderer;
 
 mod body_lint;
@@ -79,14 +84,57 @@ fn pic_from_png_keeps_encoded_png_and_caps_width() {
 }
 
 #[test]
-fn front_logo_skips_png_file_that_is_not_an_image() {
+fn theme_logo_skips_png_file_that_is_not_an_image() {
     let logo = (b"this is not an image".to_vec(), "png".to_string());
-    let pic = with_renderer(Some(logo), |r| r.resolve_front_logo());
+    let pic = with_renderer(Some(logo), |r| r.theme_logo());
     assert!(pic.is_none());
 }
 
-/// Renders `markdown` with the blank theme.
+#[test]
+fn theme_logo_skips_png_with_zero_dimension() {
+    for at in [16, 20] {
+        let mut data = png_header_with_corrupt_data();
+        data[at..at + 4].copy_from_slice(&0u32.to_be_bytes());
+        let pic = with_renderer(Some((data, "png".to_string())), |r| r.theme_logo());
+        assert!(pic.is_none(), "{:?}", pic.map(|p| p.size));
+    }
+}
+
+#[test]
+fn theme_logo_rasterises_svg() {
+    let logo = Theme::Embedded("blank").logo_asset().unwrap();
+    let pic = with_renderer(logo, |r| r.theme_logo()).unwrap();
+    assert_eq!(pic.size, (532 * 9525, 103 * 9525));
+}
+
+#[test]
+fn logo_at_height_keeps_aspect_ratio() {
+    let pic = Pic::new_with_dimensions(b"png".to_vec(), 400, 100);
+    let sized = logo_at_height(&pic, Twips(100));
+    assert_eq!(sized.size, (254_000, 63_500));
+    assert_eq!(sized.image, pic.image);
+
+    let pic = Pic::new_with_dimensions(Vec::new(), 532, 103);
+    assert_eq!(logo_at_height(&pic, Twips(210)).size, (688_759, 133_350));
+}
+
+/// The blank logo, rasterised to PNG one time for all renders.
+static BLANK_LOGO_PNG: LazyLock<(Vec<u8>, String)> = LazyLock::new(|| {
+    let (svg, _) = Theme::Embedded("blank").logo_asset().unwrap().unwrap();
+    let png = with_renderer(None, |r| r.svg_to_png(&svg)).unwrap();
+    (png, "png".to_string())
+});
+
+/// Renders `markdown` with the blank theme and its logo.
 fn render_package(markdown: &str) -> Result<Package> {
+    render_package_with_logo(markdown, Some(BLANK_LOGO_PNG.clone()))
+}
+
+/// Renders `markdown` with the blank theme and the logo `logo_asset`.
+fn render_package_with_logo(
+    markdown: &str,
+    logo_asset: Option<(Vec<u8>, String)>,
+) -> Result<Package> {
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("index.md");
     fs::write(&source, markdown).unwrap();
@@ -99,14 +147,18 @@ fn render_package(markdown: &str) -> Result<Package> {
     )
     .unwrap();
     let metadata = prepared.document_metadata();
-    with_renderer(None, |r| r.render(&prepared, &metadata))
+    with_renderer(logo_asset, |r| r.render(&prepared, &metadata))
 }
 
-/// Renders `markdown` with the blank theme and gives the parts of the
-/// DOCX file by name.
+/// Renders `markdown` with the blank theme and its logo, and gives the
+/// parts of the DOCX file by name.
 fn render_parts(markdown: &str) -> Result<impl Fn(&str) -> String> {
-    let bytes = render_package(markdown)?.into_bytes()?;
-    Ok(move |name: &str| {
+    Ok(parts(render_package(markdown)?.into_bytes()?))
+}
+
+/// Gives the parts of the DOCX file `bytes` by name.
+fn parts(bytes: Vec<u8>) -> impl Fn(&str) -> String {
+    move |name: &str| {
         let mut archive = ZipArchive::new(Cursor::new(&bytes)).unwrap();
         let mut text = String::new();
         archive
@@ -115,12 +167,55 @@ fn render_parts(markdown: &str) -> Result<impl Fn(&str) -> String> {
             .read_to_string(&mut text)
             .unwrap();
         text
-    })
+    }
 }
+
+/// Gives the names of the entries of the DOCX file `bytes`.
+fn entry_names(bytes: &[u8]) -> Vec<String> {
+    let archive = ZipArchive::new(Cursor::new(bytes)).unwrap();
+    archive.file_names().map(str::to_string).collect()
+}
+
+/// Gives the text of `xml` from the first occurrence of `start` to the
+/// first `end` after it, both included.
+fn between<'x>(xml: &'x str, start: &str, end: &str) -> &'x str {
+    let from = xml
+        .find(start)
+        .unwrap_or_else(|| panic!("no {start} in {xml}"));
+    let to = from + xml[from..].find(end).unwrap() + end.len();
+    &xml[from..to]
+}
+
+/// Asserts that `xml` contains each item of `parts` in this order.
+#[track_caller]
+fn assert_in_order(xml: &str, parts: &[&str]) {
+    let mut rest = xml;
+    for part in parts {
+        let at = rest
+            .find(part)
+            .unwrap_or_else(|| panic!("no {part} in order in {xml}"));
+        rest = &rest[at + part.len()..];
+    }
+}
+
+/// The runs of a field with the instruction `instr` and the cached result
+/// `cached`.
+fn field_parts<'p>(instr: &'p str, cached: &'p str) -> [&'p str; 5] {
+    [
+        r#"<w:fldChar w:fldCharType="begin" w:dirty="false" />"#,
+        instr,
+        r#"<w:fldChar w:fldCharType="separate" w:dirty="false" />"#,
+        cached,
+        r#"<w:fldChar w:fldCharType="end" w:dirty="false" />"#,
+    ]
+}
+
+const TITLE_INSTR: &str = r"<w:instrText> TITLE  \* MERGEFORMAT </w:instrText>";
 
 const SAMPLE: &str = "\
 ---
 title: Sample
+version: 2.1
 lang: ru-RU
 ---
 # One
@@ -184,4 +279,202 @@ fn invalid_language_is_an_error() {
         .unwrap()
         .to_string();
     assert_eq!(err, "lang: invalid language tag 'ru_RU'");
+}
+
+const TITLE_PAGE: &str = "\
+---
+title: A & B
+subtitle: Subtitle
+author: Author
+version: 1.0
+date: 2026-01-01
+lang: en
+---
+# One
+";
+
+#[test]
+fn title_page_uses_styles_and_title_field() {
+    let document = render_parts(TITLE_PAGE).unwrap()("word/document.xml");
+    let title = between(&document, r#"<w:pStyle w:val="Title" />"#, "</w:p>");
+    assert_in_order(
+        title,
+        &field_parts(TITLE_INSTR, r#"<w:t xml:space="preserve">A &amp; B</w:t>"#),
+    );
+    for (style, text) in [
+        ("Subtitle", "Subtitle"),
+        ("DocumentVersion", "Version 1.0"),
+        ("DocumentAuthor", "Author"),
+        ("DocumentDate", "2026-01-01"),
+    ] {
+        let p = between(
+            &document,
+            &format!(r#"<w:pStyle w:val="{style}" />"#),
+            "</w:p>",
+        );
+        assert!(
+            p.contains(&format!(r#"<w:t xml:space="preserve">{text}</w:t>"#)),
+            "{p}"
+        );
+    }
+
+    // The logo paragraph is the first body child. The Title paragraph
+    // follows it.
+    let logo = between(&document, "<w:body>", "</w:p>");
+    assert!(
+        logo.contains(r#"<wp:extent cx="1712058" cy="331470" />"#),
+        "{logo}"
+    );
+    let start = document.find(logo).unwrap() + logo.len();
+    let to_title = &document[start..document.find(r#"w:val="Title""#).unwrap()];
+    assert_eq!(to_title.matches("<w:p ").count(), 1, "{to_title}");
+}
+
+#[test]
+fn core_properties_have_title() {
+    let core = render_parts(TITLE_PAGE).unwrap()("docProps/core.xml");
+    assert!(
+        core.contains("<cp:revision>1</cp:revision><dc:title>A &amp; B</dc:title>"),
+        "{core}"
+    );
+
+    let core = render_parts("# One\n").unwrap()("docProps/core.xml");
+    assert!(!core.contains("dc:title"), "{core}");
+}
+
+#[test]
+fn header_has_logo_and_title_field() {
+    let bytes = render_package(SAMPLE).unwrap().into_bytes().unwrap();
+    let names = entry_names(&bytes);
+    let part = parts(bytes);
+
+    let header = part("word/header1.xml");
+    assert!(
+        header.contains(r#"<w:pStyle w:val="Header" />"#),
+        "{header}"
+    );
+    assert!(header.contains("<w:drawing>"), "{header}");
+    assert!(
+        header.contains(r#"<wp:extent cx="688759" cy="133350" />"#),
+        "{header}"
+    );
+    let mut header_parts = vec!["</w:drawing>", "<w:tab />", "<w:tab />"];
+    header_parts.extend(field_parts(
+        TITLE_INSTR,
+        r#"<w:t xml:space="preserve">Sample</w:t>"#,
+    ));
+    assert_in_order(&header, &header_parts);
+
+    let embed = Regex::new(r#"r:embed="([^"]+)""#).unwrap();
+    let id = &embed.captures(&header).unwrap()[1];
+    let rels = part("word/_rels/header1.xml.rels");
+    let target = format!(
+        r#"Id="{id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/{id}.png""#
+    );
+    assert!(rels.contains(&target), "{rels}");
+    assert!(id.starts_with("header"), "{id}");
+    assert!(names.contains(&format!("word/media/{id}.png")), "{names:?}");
+
+    let footer = part("word/footer1.xml");
+    assert!(
+        footer.contains(r#"<w:pStyle w:val="Footer" />"#),
+        "{footer}"
+    );
+    let mut footer_parts = field_parts(
+        r"<w:instrText> DOCPROPERTY Version \* MERGEFORMAT </w:instrText>",
+        r#"<w:t xml:space="preserve">2.1</w:t>"#,
+    )
+    .to_vec();
+    footer_parts.extend(["<w:tab />", "<w:tab />"]);
+    footer_parts.extend(field_parts(
+        "<w:instrText>PAGE</w:instrText>",
+        r#"<w:t xml:space="preserve">1</w:t>"#,
+    ));
+    assert_in_order(&footer, &footer_parts);
+}
+
+#[test]
+fn header_without_logo() {
+    let bytes = render_package_with_logo(SAMPLE, None)
+        .unwrap()
+        .into_bytes()
+        .unwrap();
+    let names = entry_names(&bytes);
+    let part = parts(bytes);
+
+    let header = part("word/header1.xml");
+    assert!(!header.contains("<w:drawing>"), "{header}");
+    assert_in_order(&header, &field_parts(TITLE_INSTR, "Sample"));
+    let rels = part("word/_rels/header1.xml.rels");
+    assert!(!rels.contains("image"), "{rels}");
+    assert!(
+        !names.iter().any(|n| n.starts_with("word/media/")),
+        "{names:?}"
+    );
+    let document = part("word/document.xml");
+    assert!(!document.contains("<w:drawing>"), "{document}");
+}
+
+#[test]
+fn empty_toc_has_two_paragraphs_and_no_sdt() {
+    let document = render_parts("#### Four\n").unwrap()("word/document.xml");
+    assert!(!document.contains("<w:sdt>"), "{document}");
+    let body = between(&document, "<w:body>", "<w:sectPr");
+    let paragraph = Regex::new(r"(?s)<w:p .*?</w:p>").unwrap();
+    let paragraphs: Vec<_> = paragraph.find_iter(body).map(|m| m.as_str()).collect();
+    assert_in_order(
+        paragraphs[0],
+        &[
+            r#"<w:fldChar w:fldCharType="begin" w:dirty="true" />"#,
+            r#"<w:instrText>TOC \o &quot;1-3&quot; \h \u \z</w:instrText>"#,
+            r#"<w:fldChar w:fldCharType="separate" w:dirty="false" />"#,
+        ],
+    );
+    assert!(
+        !paragraphs[0].contains("fldCharType=\"end\""),
+        "{}",
+        paragraphs[0]
+    );
+    assert!(
+        paragraphs[1].contains(r#"<w:fldChar w:fldCharType="end" w:dirty="false" />"#),
+        "{}",
+        paragraphs[1]
+    );
+    assert!(
+        paragraphs[2].contains(r#"<w:br w:type="page" />"#),
+        "{}",
+        paragraphs[2]
+    );
+    assert_eq!(body.matches("TOC").count(), 1, "{body}");
+}
+
+#[test]
+fn toc_uses_toc_styles_in_sdt() {
+    let document = render_parts(SAMPLE).unwrap()("word/document.xml");
+    assert!(!document.contains("ToC"), "{document}");
+    let sdt = between(&document, "<w:sdt>", "</w:sdt>");
+    let styles = Regex::new(r#"<w:pStyle w:val="(TOC\d)" />"#).unwrap();
+    let in_sdt: Vec<_> = styles
+        .captures_iter(sdt)
+        .map(|c| c[1].to_string())
+        .collect();
+    assert_eq!(in_sdt, ["TOC1", "TOC2", "TOC3", "TOC3"]);
+    assert_eq!(styles.captures_iter(&document).count(), in_sdt.len());
+    assert!(
+        sdt.contains(r#"<w:instrText>TOC \o &quot;1-3&quot; \h \u \z</w:instrText>"#),
+        "{sdt}"
+    );
+
+    let anchor = Regex::new(r#"<w:hyperlink w:anchor="([^"]+)""#).unwrap();
+    let anchors: Vec<_> = anchor
+        .captures_iter(sdt)
+        .map(|c| c[1].to_string())
+        .collect();
+    let bookmark = Regex::new(r#"<w:bookmarkStart w:id="\d+" w:name="([^"]+)""#).unwrap();
+    let bookmarks: Vec<_> = bookmark
+        .captures_iter(&document)
+        .map(|c| c[1].to_string())
+        .collect();
+    assert_eq!(anchors.len(), 3);
+    assert_eq!(anchors, bookmarks);
 }

@@ -54,21 +54,11 @@ const STYLE_PROPERTIES: &[&str] = &[
 const ALWAYS_ALLOWED: &[&str] = &[];
 
 /// The groups that can set the properties from [`STYLE_PROPERTIES`].
-const ALLOWED_GROUPS: &[Group] = &[
-    Group::Paragraphs,
-    Group::Code,
-    Group::Blocks,
-    Group::Tables,
-    Group::Lists,
-];
+const ALLOWED_GROUPS: &[Group] = &[Group::Code, Group::Blocks, Group::Tables, Group::Lists];
 
 /// The style IDs that a group can refer to without a style definition.
 /// The IDs must match exactly.
-const UNDEFINED_STYLES: &[(Group, &str)] = &[
-    (Group::Paragraphs, "ToC1"),
-    (Group::Paragraphs, "ToC2"),
-    (Group::Paragraphs, "ToC3"),
-];
+const UNDEFINED_STYLES: &[(Group, &str)] = &[];
 
 /// The elements that refer to a style with the attribute `w:val`.
 const STYLE_REFERENCES: &[&str] = &["w:pStyle", "w:rStyle", "w:tblStyle"];

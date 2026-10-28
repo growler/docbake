@@ -9,7 +9,7 @@ use crate::caption::{Caption, CaptionText};
 
 use super::numbering::{BULLET_NUMBERING_ID, ORDERED_NUMBERING_ID};
 use super::toc::TOC_DEPTH;
-use super::{DocxRenderer, RenderContext, ACCENT_ORANGE, CODE_BG};
+use super::{DocxRenderer, RenderContext, CODE_BG};
 
 /// Code block border colour (slightly darker grey).
 const CODE_BORDER: &str = "D9D9D9";
@@ -30,18 +30,7 @@ impl<'a> DocxRenderer<'a> {
                 let style = format!("Heading{level}");
                 let heading_text = Self::collect_inline_text(arena, source, node_ref);
 
-                let mut para = Paragraph::new().style(&style).keep_next(true);
-                if level == 1 {
-                    let border = ParagraphBorders::with_empty().set(
-                        ParagraphBorder::new(ParagraphBorderPosition::Bottom)
-                            .val(BorderType::Single)
-                            .size(4)
-                            .space(1)
-                            .color(ACCENT_ORANGE),
-                    );
-                    para.property = para.property.set_borders(border);
-                    para = para.color(ACCENT_ORANGE);
-                }
+                let mut para = Paragraph::new().style(&style);
 
                 let mut has_bookmark = false;
                 let eligible_for_toc_bookmark = level <= TOC_DEPTH
@@ -60,11 +49,7 @@ impl<'a> DocxRenderer<'a> {
                 for child in arena[node_ref].children(arena) {
                     let runs = self.render_inline_runs(context, child);
                     for run in runs {
-                        if level == 1 {
-                            para = para.add_run(run.color(ACCENT_ORANGE));
-                        } else {
-                            para = para.add_run(run);
-                        }
+                        para = para.add_run(run);
                     }
                 }
                 if has_bookmark {

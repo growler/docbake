@@ -5,57 +5,46 @@
 //! DOCX package writer.
 //!
 //! [`Package`] holds the parts that `docx-rs` makes, with `word/styles.xml`
-//! and `word/fontTable.xml` from the style parameters of the theme. It writes
+//! and `word/fontTable.xml` from the style parameters of the theme, and
+//! `docProps/core.xml` with the document title. It writes
 //! the parts to a ZIP file in the entry order of the `docx-rs` zipper. The
 //! XML parts are Deflated. The images in `word/media/` and the directories
 //! are Stored. All entries have the time 1980-01-01 00:00, thus the same
 //! input gives the same file.
-//!
-//! In `word/document.xml`, the writer sets the position of the TOC tab stop
-//! to the text width. `docx-rs` writes this position as 80000 twips.
 
-use std::io::{self, Cursor, Seek, Write};
+use std::io::{Cursor, Seek, Write};
 
 use anyhow::{Context, Result};
 use docx_rs::{Docx, XMLDocx};
 use zip::write::FileOptions;
 use zip::{CompressionMethod, DateTime, ZipWriter};
 
+use super::doc_props::core_xml;
 use super::font_table::font_table_xml;
 use super::params::DocxParams;
 use super::stylesheet::styles_xml;
 
-/// The right tab stop of each TOC entry, as `docx-rs` writes it.
-const TOC_TAB: &[u8] = br#"<w:tab w:val="right" w:leader="dot" w:pos="80000" />"#;
-
 /// The parts of a DOCX file, ready to be packed.
 pub(crate) struct Package {
     xml: XMLDocx,
-    /// The position of the TOC tab stop in twips.
-    toc_tab_pos: u32,
 }
 
 impl Package {
     /// Builds the parts of `docx` and replaces the style sheet and the font
-    /// table with the parts made from `params`. `lang` must be a valid
-    /// language tag.
-    pub(super) fn new(docx: Docx, params: &DocxParams, lang: &str) -> Self {
+    /// table with the parts made from `params`, and the core properties
+    /// with the parts made from `title`. `lang` must be a valid language
+    /// tag.
+    pub(super) fn new(docx: Docx, params: &DocxParams, lang: &str, title: &str) -> Self {
         let mut xml = docx.build();
         xml.styles = styles_xml(params, lang);
         xml.font_table = font_table_xml(params);
-        Self {
-            xml,
-            toc_tab_pos: params.page.text_width(),
-        }
+        xml.doc_props.core = core_xml(title);
+        Self { xml }
     }
 
     /// Writes the DOCX file to `out` and gives `out` back.
     pub(crate) fn write_to<W: Write + Seek>(self, out: W) -> Result<W> {
-        let toc_tab = format!(
-            r#"<w:tab w:val="right" w:leader="dot" w:pos="{}" />"#,
-            self.toc_tab_pos
-        );
-        zip(out, self.xml, toc_tab.as_bytes()).context("failed to pack DOCX")
+        zip(out, self.xml).context("failed to pack DOCX")
     }
 
     /// Gives the DOCX file as bytes.
@@ -72,9 +61,8 @@ impl Package {
     }
 }
 
-/// Writes the parts to a ZIP file. Each occurrence of [`TOC_TAB`] in
-/// `word/document.xml` becomes `toc_tab`.
-fn zip<W>(w: W, xml: XMLDocx, toc_tab: &[u8]) -> zip::result::ZipResult<W>
+/// Writes the parts to a ZIP file.
+fn zip<W>(w: W, xml: XMLDocx) -> zip::result::ZipResult<W>
 where
     W: Write + Seek,
 {
@@ -104,7 +92,7 @@ where
     zip.start_file("word/_rels/document.xml.rels", options)?;
     zip.write_all(&xml.document_rels)?;
     zip.start_file("word/document.xml", options)?;
-    write_spliced(&mut zip, &xml.document, TOC_TAB, toc_tab)?;
+    zip.write_all(&xml.document)?;
     zip.start_file("word/styles.xml", options)?;
     zip.write_all(&xml.styles)?;
     zip.start_file("word/settings.xml", options)?;
@@ -183,23 +171,6 @@ where
     }
 
     zip.finish()
-}
-
-/// Writes `data` to `w` with each occurrence of `needle` replaced by
-/// `replacement`. The slices between the occurrences go to `w` directly.
-fn write_spliced<W: Write>(
-    w: &mut W,
-    data: &[u8],
-    needle: &[u8],
-    replacement: &[u8],
-) -> io::Result<()> {
-    let mut last = 0;
-    for i in memchr::memmem::find_iter(data, needle) {
-        w.write_all(&data[last..i])?;
-        w.write_all(replacement)?;
-        last = i + needle.len();
-    }
-    w.write_all(&data[last..])
 }
 
 #[cfg(test)]
@@ -286,7 +257,7 @@ mod tests {
     }
 
     fn pack(xml: XMLDocx) -> Vec<Entry> {
-        let out = zip(Cursor::new(Vec::new()), xml, TOC_TAB).unwrap();
+        let out = zip(Cursor::new(Vec::new()), xml).unwrap();
         entries(out.into_inner())
     }
 
@@ -325,28 +296,13 @@ mod tests {
     #[test]
     fn generated_parts_replace_docx_rs_parts() {
         let params = Theme::Embedded("blank").docx_params().unwrap();
-        let bytes = Package::new(Docx::new(), &params, "ru-RU")
+        let bytes = Package::new(Docx::new(), &params, "ru-RU", "Title")
             .into_bytes()
             .unwrap();
         let entries = entries(bytes);
         let data = |name: &str| &entries.iter().find(|e| e.0 == name).unwrap().5;
         assert_eq!(data("word/styles.xml"), &styles_xml(&params, "ru-RU"));
         assert_eq!(data("word/fontTable.xml"), &font_table_xml(&params));
-    }
-
-    #[test]
-    fn write_spliced_replaces_each_occurrence() {
-        let splice = |data: &str| {
-            let mut out = Vec::new();
-            write_spliced(&mut out, data.as_bytes(), b"ab", b"XYZ").unwrap();
-            String::from_utf8(out).unwrap()
-        };
-        assert_eq!(splice("ab-"), "XYZ-");
-        assert_eq!(splice("-ab-"), "-XYZ-");
-        assert_eq!(splice("-ab"), "-XYZ");
-        assert_eq!(splice("-a-b-"), "-a-b-");
-        assert_eq!(splice(""), "");
-        assert_eq!(splice("abab"), "XYZXYZ");
-        assert_eq!(splice("aabb"), "aXYZb");
+        assert_eq!(data("docProps/core.xml"), &core_xml("Title"));
     }
 }

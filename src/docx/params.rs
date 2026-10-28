@@ -48,6 +48,7 @@ const CHARACTER_STYLES: &[&str] = &[
 #[derive(Debug)]
 pub(crate) struct DocxParams {
     pub page: Page,
+    pub logo: Logo,
     /// Font role (for example `body`, `heading`, `mono`) to font name.
     pub fonts: BTreeMap<String, String>,
     pub table: TableParams,
@@ -80,6 +81,17 @@ impl Page {
         let (width, _) = self.size.dimensions();
         width - self.margins.left.0 - self.margins.right.0
     }
+}
+
+/// The heights of the theme logo. The width keeps the aspect ratio of the
+/// image.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Logo {
+    /// The logo height on the title page.
+    pub title_height: Twips,
+    /// The logo height in the page header.
+    pub header_height: Twips,
 }
 
 /// Page margins. `header` and `footer` are the distances from the page edge.
@@ -306,6 +318,7 @@ type Colors = BTreeMap<String, Rgb>;
 #[serde(deny_unknown_fields)]
 struct RawParams {
     page: Page,
+    logo: Logo,
     #[serde(deserialize_with = "fonts_map")]
     fonts: BTreeMap<String, String>,
     #[serde(default, deserialize_with = "colors_map")]
@@ -428,6 +441,14 @@ impl RawParams {
         if margins.top.0 + margins.bottom.0 >= height {
             bail!("page.margins: top and bottom margins must be less than the page height ({height} tw)");
         }
+        for (key, height) in [
+            ("title_height", self.logo.title_height),
+            ("header_height", self.logo.header_height),
+        ] {
+            if height.0 == 0 {
+                bail!("logo.{key}: the logo height must be more than 0");
+            }
+        }
         if !self.fonts.contains_key("body") {
             bail!("fonts: missing font role 'body'");
         }
@@ -463,6 +484,7 @@ impl RawParams {
 
         Ok(DocxParams {
             page: self.page,
+            logo: self.logo,
             fonts: self.fonts,
             table: TableParams {
                 cell_margins: self.table.cell_margins,
@@ -1080,6 +1102,7 @@ mod tests {
 page:
   size: a4
   margins: {top: 2cm, bottom: 2cm, left: 2cm, right: 1cm, header: 1.5cm, footer: 1.75cm}
+logo: {title_height: 0.92cm, header_height: 10.5pt}
 fonts: {body: PT Sans, heading: PT Sans, mono: PT Mono}
 colors: {accent: EE721C, code_border: D9D9D9, code_fill: F2F2F2}
 table:
@@ -1620,6 +1643,41 @@ lists:
             ),
         ] {
             let text = yaml(&BASE.replace(from, to), "  Normal: {}\n");
+            assert_starts(&error(&text), message);
+        }
+    }
+
+    #[test]
+    fn logo_heights() {
+        let params = parse("  Normal: {}\n");
+        assert_eq!(params.logo.title_height, Twips(522));
+        assert_eq!(params.logo.header_height, Twips(210));
+
+        let logo = "logo: {title_height: 0.92cm, header_height: 10.5pt}\n";
+        for (to, message) in [
+            ("", "missing field `logo`"),
+            (
+                "logo: {title_height: 0.92cm}\n",
+                "logo: missing field `header_height`",
+            ),
+            (
+                "logo: {title_height: 0.92cm, header_height: 10.5pt, width: 2cm}\n",
+                "logo: unknown field `width`",
+            ),
+            (
+                "logo: {title_height: 0cm, header_height: 10.5pt}\n",
+                "logo.title_height: the logo height must be more than 0",
+            ),
+            (
+                "logo: {title_height: 0.92cm, header_height: 0pt}\n",
+                "logo.header_height: the logo height must be more than 0",
+            ),
+            (
+                "logo: {title_height: 0.92, header_height: 10.5pt}\n",
+                "logo.title_height: missing unit in '0.92'",
+            ),
+        ] {
+            let text = yaml(&BASE.replace(logo, to), "  Normal: {}\n");
             assert_starts(&error(&text), message);
         }
     }
