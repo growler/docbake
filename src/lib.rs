@@ -8,6 +8,7 @@ pub(crate) mod conditional;
 pub(crate) mod confluence;
 pub(crate) mod credentials;
 pub(crate) mod diagram;
+mod docx;
 mod fmt;
 pub(crate) mod gdoc;
 pub(crate) mod graph;
@@ -18,7 +19,6 @@ mod html_site;
 pub(crate) mod multiline_table;
 mod publish;
 mod render_confluence;
-mod render_docx;
 mod render_html;
 mod render_html_common;
 mod render_html_multi;
@@ -663,7 +663,7 @@ pub(crate) fn build_command(
             d2: theme.d2_theme()?,
         };
         let logo_asset = theme.logo_asset()?;
-        let renderer = render_docx::DocxRenderer::new(
+        let renderer = docx::DocxRenderer::new(
             cache,
             &diagram_themes,
             logger,

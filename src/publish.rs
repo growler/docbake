@@ -452,7 +452,7 @@ pub(crate) fn publish_gdoc_command(
     let logo_asset = theme.logo_asset()?;
 
     // ── render to DOCX ──────────────────────────────────────────────────
-    let renderer = crate::render_docx::DocxRenderer::new(
+    let renderer = crate::docx::DocxRenderer::new(
         cache,
         &diagram_themes,
         logger,

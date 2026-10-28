@@ -24,6 +24,11 @@ Typst), or publish the compiled document to Confluence or Google Docs.
 - **Typst/PDF renderer** (`src/render_typst.rs`): emits `.typ` markup, then shells
   out to external `typst compile` to produce PDF. **`typst` must be installed on
   PATH.**
+- **DOCX renderer** (`src/docx/`): DOCX for `build -f docx-gdoc` and
+  `publish gdoc`, uses `docx-rs`. `mod.rs` holds `DocxRenderer` and `render`;
+  one file for each element group (blocks, inline, tables, admonitions, media,
+  title page, header and footer, TOC, numbering) and the parallel diagram
+  prefetch.
 - **Theme** (`src/theme.rs`): loads theme from a directory or embedded default.
   Convention-based file names.
 - **Build helpers** (`src/build.rs`): markdown parser construction, template

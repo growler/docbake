@@ -65,6 +65,14 @@ impl Cache {
         fs::read(&path).ok()
     }
 
+    /// Returns `true` when the cache holds an artifact for `content` and
+    /// `renderer`, without reading it.
+    pub fn contains(&self, content: &[u8], renderer: &str) -> bool {
+        self.dir
+            .as_ref()
+            .is_some_and(|dir| cache_path(dir, content, renderer).is_file())
+    }
+
     /// Store an artifact in the cache.
     ///
     /// Creates the cache directory on first call. Returns `Ok(())` silently
