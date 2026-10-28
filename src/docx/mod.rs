@@ -38,6 +38,8 @@ mod header_footer;
 mod inline;
 mod media;
 mod numbering;
+#[allow(dead_code)] // The renderer does not read these parameters yet.
+mod params;
 mod prefetch;
 mod tables;
 mod title_page;
