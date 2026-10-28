@@ -9,10 +9,7 @@ use crate::caption::{Caption, CaptionText};
 
 use super::numbering::{BULLET_NUMBERING_ID, ORDERED_NUMBERING_ID};
 use super::toc::TOC_DEPTH;
-use super::{DocxRenderer, RenderContext, CODE_BG};
-
-/// Code block border colour (slightly darker grey).
-const CODE_BORDER: &str = "D9D9D9";
+use super::{DocxRenderer, RenderContext};
 
 impl<'a> DocxRenderer<'a> {
     pub(super) fn render_block(
@@ -288,62 +285,15 @@ impl<'a> DocxRenderer<'a> {
         Ok(docx)
     }
 
-    /// Render code block lines as monospace paragraphs with grey background
-    /// and a light border box (matching MS Office code block styling).
+    /// Render code block lines as `CodeBlock` paragraphs, one for each line.
+    /// The style carries the font, fill and border box. Adjacent paragraphs
+    /// with identical borders merge into a continuous box in Word and
+    /// Google Docs.
     fn render_code_block_paragraphs(&self, mut docx: Docx, code_text: &str) -> Docx {
-        let mono_fonts = RunFonts::new()
-            .ascii("Courier New")
-            .hi_ansi("Courier New")
-            .east_asia("Courier New")
-            .cs("Courier New");
-
-        // Paragraph-level borders: light grey single border on all sides.
-        // Adjacent paragraphs with identical borders merge into a
-        // continuous box in Word and Google Docs.
-        let code_borders = ParagraphBorders::with_empty()
-            .set(
-                ParagraphBorder::new(ParagraphBorderPosition::Top)
-                    .val(BorderType::Single)
-                    .size(4)
-                    .space(1)
-                    .color(CODE_BORDER),
-            )
-            .set(
-                ParagraphBorder::new(ParagraphBorderPosition::Bottom)
-                    .val(BorderType::Single)
-                    .size(4)
-                    .space(1)
-                    .color(CODE_BORDER),
-            )
-            .set(
-                ParagraphBorder::new(ParagraphBorderPosition::Left)
-                    .val(BorderType::Single)
-                    .size(4)
-                    .space(4)
-                    .color(CODE_BORDER),
-            )
-            .set(
-                ParagraphBorder::new(ParagraphBorderPosition::Right)
-                    .val(BorderType::Single)
-                    .size(4)
-                    .space(4)
-                    .color(CODE_BORDER),
-            );
-
         for line in code_text.lines() {
-            let run = Run::new()
-                .add_text(line)
-                .fonts(mono_fonts.clone())
-                .size(20) // 10pt
-                .shading(Shading::new().fill(CODE_BG));
-            let mut para = Paragraph::new()
-                .add_run(run)
-                .line_spacing(LineSpacing::new().before(0).after(0).line(240));
-            // Apply paragraph-level shading and borders.
-            para.property = para
-                .property
-                .shading(Shading::new().fill(CODE_BG))
-                .set_borders(code_borders.clone());
+            let para = Paragraph::new()
+                .style("CodeBlock")
+                .add_run(Run::new().add_text(line));
             docx = docx.add_paragraph(para);
         }
         docx

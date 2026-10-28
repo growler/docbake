@@ -441,6 +441,7 @@ styles:
 
   Hyperlink:
     color: link
+    underline: true
 
   FootnoteReference: {}
 

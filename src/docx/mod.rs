@@ -52,9 +52,6 @@ mod tables;
 mod title_page;
 mod toc;
 
-/// Code block background fill colour (light grey).
-const CODE_BG: &str = "F2F2F2";
-
 pub(crate) struct DocxRenderer<'a> {
     cache: &'a Cache,
     diagram_themes: &'a DiagramThemes,

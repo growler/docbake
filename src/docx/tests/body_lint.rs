@@ -5,7 +5,9 @@
 //!
 //! - Each style reference has a style definition in `word/styles.xml`.
 //! - The body does not set a property that a style must carry. The lint
-//!   does not check the groups in [`ALLOWED_GROUPS`].
+//!   does not check the groups in [`ALLOWED_GROUPS`]. The groups in
+//!   [`MARKUP_GROUPS`] can set the properties from
+//!   [`MARKUP_PROPERTIES`].
 //!
 //! A document without title-page front matter starts with the TOC and the
 //! page break after it. These blocks are in the Paragraphs group in all
@@ -46,6 +48,8 @@ const STYLE_PROPERTIES: &[&str] = &[
     "w:pBdr",
     "w:b",
     "w:i",
+    "w:strike",
+    "w:u",
     "w:spacing",
 ];
 
@@ -54,7 +58,15 @@ const STYLE_PROPERTIES: &[&str] = &[
 const ALWAYS_ALLOWED: &[&str] = &[];
 
 /// The groups that can set the properties from [`STYLE_PROPERTIES`].
-const ALLOWED_GROUPS: &[Group] = &[Group::Code, Group::Blocks, Group::Tables, Group::Lists];
+const ALLOWED_GROUPS: &[Group] = &[Group::Blocks, Group::Tables, Group::Lists];
+
+/// The properties from [`STYLE_PROPERTIES`] that Markdown inline markup
+/// sets on one run: bold, italic and strikethrough.
+const MARKUP_PROPERTIES: &[&str] = &["w:b", "w:i", "w:strike"];
+
+/// The groups with Markdown inline markup in the fixture. These groups can
+/// set the properties from [`MARKUP_PROPERTIES`].
+const MARKUP_GROUPS: &[Group] = &[Group::Code];
 
 /// The style IDs that a group can refer to without a style definition.
 /// The IDs must match exactly.
@@ -463,6 +475,7 @@ fn body_has_no_direct_formatting() {
         if hit.val.is_some()
             || ALWAYS_ALLOWED.contains(&hit.name)
             || ALLOWED_GROUPS.contains(&group)
+            || (MARKUP_GROUPS.contains(&group) && MARKUP_PROPERTIES.contains(&hit.name))
         {
             return None;
         }

@@ -478,3 +478,60 @@ fn toc_uses_toc_styles_in_sdt() {
     assert_eq!(anchors.len(), 3);
     assert_eq!(anchors, bookmarks);
 }
+
+#[test]
+fn code_block_lines_use_code_block_style() {
+    let document =
+        render_parts("```\nfn main() {\n\n    x();\n}\n```\n").unwrap()("word/document.xml");
+    let style = r#"<w:pStyle w:val="CodeBlock" />"#;
+    assert_eq!(document.matches(style).count(), 4, "{document}");
+    assert_in_order(
+        &document,
+        &[
+            style,
+            ">fn main() {</w:t>",
+            style,
+            style,
+            r#"<w:t xml:space="preserve">    x();</w:t>"#,
+            style,
+            ">}</w:t>",
+        ],
+    );
+    for part in [
+        "<w:rFonts",
+        "<w:sz ",
+        "<w:shd",
+        "<w:pBdr",
+        "<w:spacing",
+        "<w:b ",
+        "<w:i ",
+        "<w:strike",
+        "<w:u ",
+    ] {
+        assert!(!document.contains(part), "{part} in {document}");
+    }
+}
+
+#[test]
+fn inline_code_and_links_use_character_styles() {
+    let document = render_parts(
+        "Text with `code`, a [link](https://example.com), **`bold code`** and ~~s~~.\n",
+    )
+    .unwrap()("word/document.xml");
+    let code = r#"<w:rStyle w:val="InlineCode" />"#;
+    let link = r#"<w:rStyle w:val="Hyperlink" />"#;
+    assert_eq!(document.matches(code).count(), 2, "{document}");
+    assert_eq!(document.matches(link).count(), 1, "{document}");
+    for run in [
+        r#"<w:rPr><w:rStyle w:val="InlineCode" /></w:rPr><w:t xml:space="preserve">code</w:t>"#,
+        r#"<w:rPr><w:rStyle w:val="Hyperlink" /></w:rPr><w:t xml:space="preserve">link</w:t>"#,
+    ] {
+        assert!(document.contains(run), "{run} not in {document}");
+    }
+    let bold = between(&document, "<w:b />", "</w:rPr>");
+    assert!(bold.contains(code), "{bold}");
+    assert!(document.contains("<w:strike />"), "{document}");
+    for part in ["<w:rFonts", "<w:shd", "<w:color", "<w:u "] {
+        assert!(!document.contains(part), "{part} in {document}");
+    }
+}

@@ -1,7 +1,7 @@
 use docx_rs::*;
 use rushdown::ast::{Arena, KindData, NodeRef, TextQualifier};
 
-use super::{DocxRenderer, RenderContext, CODE_BG};
+use super::{DocxRenderer, RenderContext};
 
 impl<'a> DocxRenderer<'a> {
     /// Render an inline node to one or more `Run`s.
@@ -25,15 +25,9 @@ impl<'a> DocxRenderer<'a> {
             }
             KindData::CodeSpan(cs) => {
                 let content = cs.str(source);
-                let mono_fonts = RunFonts::new()
-                    .ascii("Courier New")
-                    .hi_ansi("Courier New")
-                    .east_asia("Courier New")
-                    .cs("Courier New");
                 vec![Run::new()
-                    .add_text(&*content)
-                    .fonts(mono_fonts)
-                    .shading(Shading::new().fill(CODE_BG))]
+                    .add_text(content.into_owned())
+                    .style("InlineCode")]
             }
             KindData::Emphasis(_) => {
                 let children_runs = self.collect_child_runs(context, node_ref);
@@ -47,16 +41,9 @@ impl<'a> DocxRenderer<'a> {
                 let children_runs = self.collect_child_runs(context, node_ref);
                 children_runs.into_iter().map(|r| r.strike()).collect()
             }
-            KindData::Link(link) => {
+            KindData::Link(_) => {
                 let text = Self::collect_inline_text(arena, source, node_ref);
-                let _dest = context
-                    .graph
-                    .link_target(context.doc_id, node_ref)
-                    .unwrap_or(link.destination_str(source));
-                vec![Run::new()
-                    .add_text(&text)
-                    .color("0563C1")
-                    .underline("single")]
+                vec![Run::new().add_text(text).style("Hyperlink")]
             }
             KindData::Image(_) => {
                 if let Some(pic) = self.resolve_graph_image(context, node_ref) {

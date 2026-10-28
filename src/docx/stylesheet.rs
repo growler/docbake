@@ -519,6 +519,7 @@ fn run_properties<W: Write>(w: &mut Writer<W>, style: &Style) -> io::Result<()> 
         || s.char_spacing.is_some()
         || s.kern.is_some()
         || s.size.is_some()
+        || s.underline.is_some()
         || fill.is_some();
     if !set {
         return Ok(());
@@ -543,6 +544,9 @@ fn run_properties<W: Write>(w: &mut Writer<W>, style: &Style) -> io::Result<()> 
         }
         if let Some(size) = s.size {
             font_size(w, size.0)?;
+        }
+        if let Some(underline) = s.underline {
+            val(w, "w:u", if underline { "single" } else { "none" })?;
         }
         if let Some(fill) = fill {
             shading(w, fill)?;
@@ -997,7 +1001,7 @@ styles:
         );
         assert_has(
             style(&xml, "Hyperlink"),
-            r#"<w:unhideWhenUsed/><w:rPr><w:color w:val="0563C1"/></w:rPr></w:style>"#,
+            r#"<w:unhideWhenUsed/><w:rPr><w:color w:val="0563C1"/><w:u w:val="single"/></w:rPr></w:style>"#,
         );
         assert_has(
             style(&xml, "FootnoteReference"),
@@ -1376,6 +1380,7 @@ styles:
             "    size: 11pt\n",
             "    bold: true\n",
             "    italic: true\n",
+            "    underline: true\n",
             "    color: accent\n",
             "    align: justify\n",
             "    before: 6pt\n",
@@ -1397,6 +1402,7 @@ styles:
             "    size: 10pt\n",
             "    bold: true\n",
             "    italic: true\n",
+            "    underline: false\n",
             "    color: accent\n",
             "    fill: accent\n",
             "    char_spacing: 1pt\n",
@@ -1423,6 +1429,7 @@ styles:
             "<w:spacing w:val",
             "<w:kern ",
             "<w:sz ",
+            r#"<w:u w:val="single"/>"#,
         ] {
             assert_has(normal, part);
         }
@@ -1438,7 +1445,10 @@ styles:
         }
         assert_has(
             style(&xml, "InlineCode"),
-            r#"<w:spacing w:val="20"/><w:kern w:val="20"/><w:sz w:val="20"/><w:szCs w:val="20"/><w:shd "#,
+            concat!(
+                r#"<w:spacing w:val="20"/><w:kern w:val="20"/><w:sz w:val="20"/><w:szCs w:val="20"/>"#,
+                r#"<w:u w:val="none"/><w:shd "#,
+            ),
         );
         assert_schema_order(&xml);
     }

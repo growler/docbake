@@ -230,6 +230,7 @@ pub(crate) struct Style {
     pub size: Option<HalfPoints>,
     pub bold: Option<bool>,
     pub italic: Option<bool>,
+    pub underline: Option<bool>,
     pub color: Option<Rgb>,
     pub align: Option<Align>,
     pub before: Option<Twips>,
@@ -375,6 +376,8 @@ struct RawStyle {
     bold: Option<bool>,
     #[serde(default, deserialize_with = "present")]
     italic: Option<bool>,
+    #[serde(default, deserialize_with = "present")]
+    underline: Option<bool>,
     #[serde(default, deserialize_with = "present")]
     color: Option<ColorRef>,
     #[serde(default, deserialize_with = "present")]
@@ -583,6 +586,7 @@ impl RawStyle {
             size: self.size,
             bold: self.bold,
             italic: self.italic,
+            underline: self.underline,
             color: color("color", self.color)?,
             align: self.align,
             before: self.before,
@@ -1593,6 +1597,10 @@ lists:
             "styles.Normal.bold: invalid type",
         );
         assert_starts(
+            &style_error("  Hyperlink:\n    underline:\n"),
+            "styles.Hyperlink.underline: invalid type",
+        );
+        assert_starts(
             &style_error("  Normal: {before: ~}\n"),
             "styles.Normal.before: invalid number in '~'",
         );
@@ -1720,6 +1728,7 @@ lists:
     based_on: Normal
     align: right
     size: 28pt
+    underline: false
     char_spacing: -0.5pt
     kern: 14pt
     after: 0pt
@@ -1744,6 +1753,9 @@ lists:
     fill: D4E9F9
     border: {width: 0.5pt, color: 6CB4EE, space: 1pt 4pt}
     contextual_spacing: true
+  Hyperlink:
+    color: accent
+    underline: true
 "#,
         );
 
@@ -1775,11 +1787,13 @@ lists:
         assert_eq!(h1.after, Some(Twips(0)));
         assert_eq!(h1.bold, Some(true));
         assert_eq!(h1.italic, None);
+        assert_eq!(h1.underline, None);
 
         let title = &params.styles["Title"];
         assert_eq!(title.char_spacing, Some(SignedTwips(-10)));
         assert_eq!(title.kern, Some(HalfPoints(28)));
         assert_eq!(title.align, Some(Align::Right));
+        assert_eq!(title.underline, Some(false));
 
         let code = &params.styles["CodeBlock"];
         assert_eq!(code.size, Some(HalfPoints(20)));
@@ -1793,6 +1807,8 @@ lists:
         let note = &params.styles["AdmonitionNoteBody"];
         assert_eq!(note.contextual_spacing, Some(true));
         assert_eq!(note.borders.left.unwrap().color.to_string(), "6CB4EE");
+
+        assert_eq!(params.styles["Hyperlink"].underline, Some(true));
     }
 
     #[test]
