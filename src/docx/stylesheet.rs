@@ -24,7 +24,7 @@ use quick_xml::Writer;
 
 use super::params::{Align, Border, DocxParams, LineSpacing, Rgb, Style, StyleKind, TableParams};
 
-const W_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+pub(crate) const W_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 
 /// The ID of the default character style.
 pub(crate) const DEFAULT_PARAGRAPH_FONT: &str = "DefaultParagraphFont";

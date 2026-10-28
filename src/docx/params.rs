@@ -908,14 +908,18 @@ impl ColorRef {
 
 impl Text {
     /// A YAML null (`~`, `null`, `Null` or `NULL`) is an empty value. A
-    /// control character is not permitted, because XML cannot contain most
-    /// of them.
+    /// control character, U+FFFE and U+FFFF are not permitted, because XML
+    /// cannot contain most control characters and cannot contain U+FFFE or
+    /// U+FFFF.
     fn parse(s: &str) -> Result<Self, String> {
         if s.trim().is_empty() || matches!(s, "~" | "null" | "Null" | "NULL") {
             return Err("empty value".to_owned());
         }
-        if s.chars().any(char::is_control) {
-            return Err("control character in value".to_owned());
+        if let Some(c) = s
+            .chars()
+            .find(|&c| c.is_control() || matches!(c, '\u{FFFE}' | '\u{FFFF}'))
+        {
+            return Err(format!("invalid character U+{:04X} in value", u32::from(c)));
         }
         Ok(Text(s.to_owned()))
     }
@@ -1521,13 +1525,17 @@ lists:
             &error(&yaml(&BASE.replace("\"▪\"]", "\"\"]"), "  Normal: {}\n")),
             "lists.bullets[5]: empty value",
         );
-        for name in [r#""A\x01B""#, r#""A\nB""#, r#""A\tB""#] {
+        for (name, code) in [
+            (r#""A\x01B""#, "U+0001"),
+            (r#""A\nB""#, "U+000A"),
+            (r#""A\tB""#, "U+0009"),
+        ] {
             assert_starts(
                 &error(&yaml(
                     &BASE.replace("mono: PT Mono", &format!("mono: {name}")),
                     "  Normal: {}\n",
                 )),
-                "fonts.mono: control character in value",
+                &format!("fonts.mono: invalid character {code} in value"),
             );
         }
         assert_starts(
@@ -1546,6 +1554,19 @@ lists:
             &style_error("  Normal: {before: ~}\n"),
             "styles.Normal.before: invalid number in '~'",
         );
+    }
+
+    #[test]
+    fn xml_noncharacter_in_text() {
+        for (name, code) in [(r#""A\uFFFEB""#, "U+FFFE"), (r#""A\uFFFFB""#, "U+FFFF")] {
+            assert_starts(
+                &error(&yaml(
+                    &BASE.replace("mono: PT Mono", &format!("mono: {name}")),
+                    "  Normal: {}\n",
+                )),
+                &format!("fonts.mono: invalid character {code} in value"),
+            );
+        }
     }
 
     #[test]

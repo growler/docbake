@@ -34,6 +34,8 @@ use self::title_page::TitleFields;
 
 mod admonition;
 mod blocks;
+#[allow(dead_code)] // The renderer does not use the font table yet.
+mod font_table;
 mod header_footer;
 mod inline;
 mod media;
