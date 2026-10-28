@@ -58,7 +58,7 @@ const STYLE_PROPERTIES: &[&str] = &[
 const ALWAYS_ALLOWED: &[&str] = &[];
 
 /// The groups that can set the properties from [`STYLE_PROPERTIES`].
-const ALLOWED_GROUPS: &[Group] = &[Group::Tables, Group::Lists];
+const ALLOWED_GROUPS: &[Group] = &[Group::Lists];
 
 /// The properties from [`STYLE_PROPERTIES`] that Markdown inline markup
 /// sets on one run: bold, italic and strikethrough.
@@ -179,6 +179,20 @@ lang: en
 |------|------:|
 | one  | 1     |
 | two  | 2     |
+
++------+-------+-------+
+| Group                |
++------+-------+-------+
+| Left | Mid   | Right |
++:=====+:=====:+======:+
+| a    | b     | c     |
++------+-------+-------+
+
+-----  -----
+one    1
+
+two    2
+-----  -----
 ";
 
 const LISTS: &str = "\

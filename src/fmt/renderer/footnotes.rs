@@ -5,8 +5,9 @@ use rushdown::as_extension_data;
 use rushdown::ast::{Arena, NodeRef};
 use rushdown_footnote::FootnoteDefinition;
 
-use super::source_recovery::{footnote_has_inline_body, source_tail_at_pos};
+use super::source_recovery::footnote_has_inline_body;
 use super::{FootnoteLabels, MarkdownFmtRenderer};
+use crate::table_source::source_tail_at_pos;
 
 impl MarkdownFmtRenderer {
     pub(super) fn render_footnote_definition(

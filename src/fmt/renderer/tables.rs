@@ -2,11 +2,11 @@ use anyhow::Result;
 use rushdown::as_kind_data;
 use rushdown::ast::{Arena, KindData, NodeRef, TableCellAlignment, TextQualifier};
 
-use super::source_recovery::{
+use super::MarkdownFmtRenderer;
+use crate::table_source::{
     grid_table_column_widths, is_any_dash_rule_line, is_grid_border_line,
     multiline_table_separator_extents, source_line_at_pos,
 };
-use super::MarkdownFmtRenderer;
 
 #[derive(Clone, Copy, Debug)]
 struct TableEdgeStyle {

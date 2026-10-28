@@ -6,7 +6,8 @@
 //!
 //! [`Package`] holds the parts that `docx-rs` makes, with `word/styles.xml`
 //! and `word/fontTable.xml` from the style parameters of the theme, and
-//! `docProps/core.xml` with the document title. It writes
+//! `docProps/core.xml` with the document title. It adds the table
+//! properties that `docx-rs` cannot write to `word/document.xml`. It writes
 //! the parts to a ZIP file in the entry order of the `docx-rs` zipper. The
 //! XML parts are Deflated. The images in `word/media/` and the directories
 //! are Stored. All entries have the time 1980-01-01 00:00, thus the same
@@ -23,6 +24,7 @@ use super::doc_props::core_xml;
 use super::font_table::font_table_xml;
 use super::params::DocxParams;
 use super::stylesheet::styles_xml;
+use super::tables::{splice_tables, TableLayout};
 
 /// The parts of a DOCX file, ready to be packed.
 pub(crate) struct Package {
@@ -32,14 +34,22 @@ pub(crate) struct Package {
 impl Package {
     /// Builds the parts of `docx` and replaces the style sheet and the font
     /// table with the parts made from `params`, and the core properties
-    /// with the parts made from `title`. `lang` must be a valid language
-    /// tag.
-    pub(super) fn new(docx: Docx, params: &DocxParams, lang: &str, title: &str) -> Self {
+    /// with the parts made from `title`. Adds the table properties from
+    /// `tables` to the document part. `lang` must be a valid language tag.
+    pub(super) fn new(
+        docx: Docx,
+        params: &DocxParams,
+        lang: &str,
+        title: &str,
+        tables: &[TableLayout],
+    ) -> Result<Self> {
         let mut xml = docx.build();
         xml.styles = styles_xml(params, lang);
         xml.font_table = font_table_xml(params);
         xml.doc_props.core = core_xml(title);
-        Self { xml }
+        xml.document = splice_tables(std::mem::take(&mut xml.document), tables)
+            .context("failed to add table properties")?;
+        Ok(Self { xml })
     }
 
     /// Writes the DOCX file to `out` and gives `out` back.
@@ -296,7 +306,8 @@ mod tests {
     #[test]
     fn generated_parts_replace_docx_rs_parts() {
         let params = Theme::Embedded("blank").docx_params().unwrap();
-        let bytes = Package::new(Docx::new(), &params, "ru-RU", "Title")
+        let bytes = Package::new(Docx::new(), &params, "ru-RU", "Title", &[])
+            .unwrap()
             .into_bytes()
             .unwrap();
         let entries = entries(bytes);

@@ -1059,7 +1059,7 @@ fn escape_typst_markup(value: &str) -> String {
     out
 }
 
-fn cell_colspan(arena: &Arena, source: &str, cell: NodeRef) -> usize {
+pub(crate) fn cell_colspan(arena: &Arena, source: &str, cell: NodeRef) -> usize {
     arena[cell]
         .attributes()
         .get("colspan")
@@ -1067,7 +1067,7 @@ fn cell_colspan(arena: &Arena, source: &str, cell: NodeRef) -> usize {
         .unwrap_or(1)
 }
 
-fn cell_rowspan(arena: &Arena, source: &str, cell: NodeRef) -> usize {
+pub(crate) fn cell_rowspan(arena: &Arena, source: &str, cell: NodeRef) -> usize {
     arena[cell]
         .attributes()
         .get("rowspan")

@@ -32,6 +32,7 @@ use crate::DebugDumper;
 
 use self::package::Package;
 use self::params::DocxParams;
+use self::tables::TableLayout;
 use self::title_page::TitleFields;
 
 mod admonition;
@@ -63,6 +64,8 @@ pub(crate) struct DocxRenderer<'a> {
     diagram_counter: RefCell<u32>,
     toc_heading_keys: RefCell<VecDeque<String>>,
     bookmark_counter: RefCell<usize>,
+    /// The layout of each rendered table, in document order.
+    tables: RefCell<Vec<TableLayout>>,
     profile: RenderProfile,
 }
 
@@ -98,6 +101,7 @@ impl<'a> DocxRenderer<'a> {
             diagram_counter: RefCell::new(0),
             toc_heading_keys: RefCell::new(VecDeque::new()),
             bookmark_counter: RefCell::new(0),
+            tables: RefCell::new(Vec::new()),
             profile,
         }
     }
@@ -157,7 +161,7 @@ impl<'a> DocxRenderer<'a> {
         // each top-level block.  render_block handles its own children.
         docx = self.render_graph_document(docx, graph, graph.root_id, 0)?;
 
-        Ok(Package::new(docx, self.params, lang, fields.title))
+        Package::new(docx, self.params, lang, fields.title, &self.tables.take())
     }
 
     /// Walk a document occurrence, resolving includes and rendering

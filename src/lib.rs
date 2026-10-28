@@ -27,6 +27,7 @@ mod render_typst;
 mod search_index;
 mod serve;
 pub(crate) mod table_cell_breaks;
+mod table_source;
 pub(crate) mod theme;
 mod watch;
 

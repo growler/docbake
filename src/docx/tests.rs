@@ -25,6 +25,7 @@ use super::params::Twips;
 use super::DocxRenderer;
 
 mod body_lint;
+mod tables;
 
 /// PNG signature followed by an IHDR chunk for a 2x3 image, then bytes
 /// that are not valid PNG chunk data.
