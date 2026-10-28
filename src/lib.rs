@@ -1279,4 +1279,21 @@ mod tests {
             Some(&json!({ "space": "OVERRIDE" }))
         );
     }
+
+    #[test]
+    fn init_theme_writes_docx_yaml() {
+        use clap::Parser;
+        use std::ffi::OsStr;
+
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("theme");
+        let cli = crate::cli::Cli::parse_from([
+            OsStr::new("docbake"),
+            OsStr::new("--no-cache"),
+            OsStr::new("init-theme"),
+            target.as_os_str(),
+        ]);
+        crate::run(cli).unwrap();
+        assert!(target.join("docx.yaml").is_file());
+    }
 }

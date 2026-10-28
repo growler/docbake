@@ -99,6 +99,7 @@ theme-dir/
   theme.puml                 # PlantUML theme (inserted after @start* in diagrams)
   theme.mmd                  # Mermaid theme (prepended to diagrams)
   theme.d2                   # D2 theme (prepended to diagrams)
+  docx.yaml                  # DOCX style parameters (page, fonts, colours, styles)
   assets/                    # Static files referenced by templates
 ```
 

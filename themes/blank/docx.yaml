@@ -1,0 +1,445 @@
+# DOCX style parameters of the theme: the page, the fonts, the colours,
+# the tables, the lists and the paragraph and character styles.
+#
+# Units:
+#   - A length has a unit: pt, cm, mm, in or tw (twips).
+#     1 pt = 20 tw, 1 cm = 567 tw, 1 mm = 56.7 tw, 1 in = 1440 tw.
+#   - A font size, `kern`, a border width and a border space use pt.
+#   - `line` without a unit is a multiple of the single line height.
+#     `line` with a unit is an exact line height.
+#   - A colour is a name from `colors` or six hex digits (RRGGBB).
+#     Put hex values that contain only digits in quotes.
+#
+# The schema and the checks are in src/docx/params.rs.
+
+page:
+  size: a4
+  margins:
+    top: 2cm # 1134 tw
+    bottom: 2cm # 1134 tw
+    left: 2cm # 1134 tw
+    right: 1cm # 567 tw
+    header: 1.5cm # 851 tw
+    footer: 1.75cm # 992 tw
+
+fonts:
+  body: PT Sans
+  heading: PT Sans
+  mono: PT Mono
+
+colors:
+  accent: EE721C
+  dark: "333333"
+  muted: "888888"
+  subtle: "666666"
+  caption: "0E2841"
+  link: 0563C1
+  rule: "000000"
+  code_fill: F2F2F2
+  code_border: D9D9D9
+  note_border: 6CB4EE
+  note_header: A6D1F2
+  note_body: D4E9F9
+  tip_border: 8DD873
+  tip_header: B3E5A1
+  tip_body: D9F2D0
+  warning_border: E8895C
+  warning_header: F2C4A6
+  warning_body: F9E2D4
+  caution_border: E8B95C
+  caution_header: F2DCA6
+  caution_body: F9EED4
+  important_border: E86C6C
+  important_header: F2ADAD
+  important_body: F9D6D6
+  related_border: 8CA1B8
+  related_header: BCCBDA
+  related_body: DDE5ED
+
+table:
+  cell_margins: {top: 0tw, bottom: 0tw, left: 10tw, right: 10tw}
+  border: {width: 0.25pt, color: rule, space: 0pt}
+  header: {bold: true, fill: code_fill}
+
+lists:
+  indent: 720tw # 0.5 in for each level
+  hanging: 360tw # 0.25 in
+  bullets: ["•", "◦", "▪", "•", "◦", "▪"]
+  numbers: [decimal, lower_letter, lower_roman, decimal, lower_letter, lower_roman]
+
+styles:
+  # Document text
+
+  Normal:
+    font: body
+    size: 11pt
+    after: 6pt
+    line: 1
+    align: justify
+
+  # Title page
+
+  Title:
+    based_on: Normal
+    font: heading
+    size: 28pt
+    bold: false
+    align: right
+    char_spacing: -0.5pt
+    kern: 14pt
+    before: 72pt
+    after: 0pt
+    contextual_spacing: true
+    border_bottom: {width: 0.5pt, color: accent, space: 1pt}
+
+  Subtitle:
+    based_on: Normal
+    font: heading
+    size: 18pt
+    color: subtle
+    align: center
+    after: 10pt
+
+  DocumentAuthor:
+    based_on: Normal
+    font: heading
+    size: 12pt
+    color: subtle
+    align: center
+
+  DocumentDate:
+    based_on: Normal
+    font: heading
+    size: 12pt
+    color: muted
+    align: center
+
+  DocumentVersion:
+    based_on: Normal
+    font: heading
+    size: 14pt
+    color: muted
+    align: right
+
+  # Table of contents. The number in the ID is the heading level.
+
+  TOC1:
+    based_on: Normal
+    font: body
+    align: justify
+    after: 5pt
+    line: 1.15
+    snap_to_grid: false
+    indent: 0pt
+
+  TOC2:
+    based_on: Normal
+    font: body
+    align: justify
+    after: 5pt
+    line: 1.15
+    snap_to_grid: false
+    indent: 10pt
+
+  TOC3:
+    based_on: Normal
+    font: body
+    align: justify
+    after: 5pt
+    line: 1.15
+    snap_to_grid: false
+    indent: 20pt
+
+  TOC4:
+    based_on: Normal
+    font: body
+    align: justify
+    after: 5pt
+    line: 1.15
+    snap_to_grid: false
+    indent: 30pt
+
+  TOC5:
+    based_on: Normal
+    font: body
+    align: justify
+    after: 5pt
+    line: 1.15
+    snap_to_grid: false
+    indent: 40pt
+
+  TOC6:
+    based_on: Normal
+    font: body
+    align: justify
+    after: 5pt
+    line: 1.15
+    snap_to_grid: false
+    indent: 50pt
+
+  TOC7:
+    based_on: Normal
+    font: body
+    align: justify
+    after: 5pt
+    line: 1.15
+    snap_to_grid: false
+    indent: 60pt
+
+  TOC8:
+    based_on: Normal
+    font: body
+    align: justify
+    after: 5pt
+    line: 1.15
+    snap_to_grid: false
+    indent: 70pt
+
+  TOC9:
+    based_on: Normal
+    font: body
+    align: justify
+    after: 5pt
+    line: 1.15
+    snap_to_grid: false
+    indent: 80pt
+
+  # Page header and footer
+
+  Header:
+    based_on: Normal
+    size: 9pt
+    color: accent
+    after: 0pt
+    border_bottom: {width: 0.5pt, color: accent, space: 1pt}
+
+  Footer:
+    based_on: Normal
+    size: 9pt
+    color: accent
+    after: 0pt
+    border_top: {width: 0.5pt, color: accent, space: 1pt}
+
+  # Headings. The number in the ID is the heading level.
+
+  Heading1:
+    based_on: Normal
+    font: heading
+    size: 28pt
+    bold: true
+    color: accent
+    align: left
+    before: 18pt
+    after: 6pt
+    line: 1
+    keep_next: true
+    border_bottom: {width: 0.5pt, color: accent, space: 1pt}
+
+  Heading2:
+    based_on: Normal
+    font: heading
+    size: 22pt
+    bold: true
+    align: left
+    before: 14pt
+    after: 5pt
+    line: 1
+    keep_next: true
+
+  Heading3:
+    based_on: Normal
+    font: heading
+    size: 16pt
+    bold: true
+    align: left
+    before: 12pt
+    after: 4pt
+    line: 1
+    keep_next: true
+
+  Heading4:
+    based_on: Normal
+    font: heading
+    size: 14pt
+    bold: true
+    color: dark
+    align: left
+    before: 10pt
+    after: 3pt
+    line: 1
+    keep_next: true
+
+  Heading5:
+    based_on: Normal
+    font: heading
+    size: 12pt
+    bold: true
+    color: dark
+    align: left
+    before: 10pt
+    after: 3pt
+    line: 1
+    keep_next: true
+
+  Heading6:
+    based_on: Normal
+    font: heading
+    size: 11pt
+    bold: true
+    color: dark
+    align: left
+    before: 10pt
+    after: 3pt
+    line: 1
+    keep_next: true
+
+  # Text blocks
+
+  Quote:
+    based_on: Normal
+    indent: 12pt
+
+  ThematicBreak:
+    based_on: Normal
+    border_bottom: {width: 1pt, color: rule, space: 1pt}
+
+  InlineCode:
+    font: mono
+    size: 10pt
+    bold: false
+    italic: false
+    fill: code_fill
+    proofing: false
+
+  CodeBlock:
+    based_on: Normal
+    font: mono
+    size: 10pt
+    align: left
+    after: 0pt
+    contextual_spacing: true
+    fill: code_fill
+    border: {width: 0.5pt, color: code_border, space: 1pt 4pt}
+    hyphenate: false
+    proofing: false
+
+  Caption:
+    based_on: Normal
+    size: 9pt
+    italic: true
+    color: caption
+    after: 10pt
+
+  # Lists
+
+  ListParagraph:
+    based_on: Normal
+
+  DefinitionTerm:
+    based_on: Normal
+    bold: true
+    keep_next: true
+
+  DefinitionBody:
+    based_on: Normal
+    indent: 720tw
+
+  # Tables and images
+
+  TableCell:
+    based_on: Normal
+    align: left
+
+  TableHeader:
+    based_on: TableCell
+
+  ImageBlock:
+    based_on: Normal
+    align: center
+
+  # Admonitions. Each type has a header style and a body style.
+
+  AdmonitionHeader:
+    based_on: Normal
+    bold: true
+    before: 6pt
+    after: 3pt
+    keep_next: true
+
+  AdmonitionBody:
+    based_on: Normal
+    keep_next: true
+    contextual_spacing: true
+
+  AdmonitionNoteHeader:
+    based_on: AdmonitionHeader
+    fill: note_header
+    border: {width: 0.5pt, color: note_border, space: 1pt 4pt}
+
+  AdmonitionNoteBody:
+    based_on: AdmonitionBody
+    fill: note_body
+    border: {width: 0.5pt, color: note_border, space: 1pt 4pt}
+
+  AdmonitionTipHeader:
+    based_on: AdmonitionHeader
+    fill: tip_header
+    border: {width: 0.5pt, color: tip_border, space: 1pt 4pt}
+
+  AdmonitionTipBody:
+    based_on: AdmonitionBody
+    fill: tip_body
+    border: {width: 0.5pt, color: tip_border, space: 1pt 4pt}
+
+  AdmonitionWarningHeader:
+    based_on: AdmonitionHeader
+    fill: warning_header
+    border: {width: 0.5pt, color: warning_border, space: 1pt 4pt}
+
+  AdmonitionWarningBody:
+    based_on: AdmonitionBody
+    fill: warning_body
+    border: {width: 0.5pt, color: warning_border, space: 1pt 4pt}
+
+  AdmonitionCautionHeader:
+    based_on: AdmonitionHeader
+    fill: caution_header
+    border: {width: 0.5pt, color: caution_border, space: 1pt 4pt}
+
+  AdmonitionCautionBody:
+    based_on: AdmonitionBody
+    fill: caution_body
+    border: {width: 0.5pt, color: caution_border, space: 1pt 4pt}
+
+  AdmonitionImportantHeader:
+    based_on: AdmonitionHeader
+    fill: important_header
+    border: {width: 0.5pt, color: important_border, space: 1pt 4pt}
+
+  AdmonitionImportantBody:
+    based_on: AdmonitionBody
+    fill: important_body
+    border: {width: 0.5pt, color: important_border, space: 1pt 4pt}
+
+  AdmonitionRelatedHeader:
+    based_on: AdmonitionHeader
+    fill: related_header
+    border: {width: 0.5pt, color: related_border, space: 1pt 4pt}
+
+  AdmonitionRelatedBody:
+    based_on: AdmonitionBody
+    fill: related_body
+    border: {width: 0.5pt, color: related_border, space: 1pt 4pt}
+
+  # Links and footnotes
+
+  Hyperlink:
+    color: link
+
+  FootnoteReference: {}
+
+  FootnoteText:
+    based_on: Normal
+    size: 9pt
+    align: left
+    after: 0pt

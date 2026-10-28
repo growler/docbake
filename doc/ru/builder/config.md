@@ -13,12 +13,17 @@ theme-dir/
   theme.puml                 Тема PlantUML (вставляется в каждую диаграмму)
   theme.mmd                  Тема Mermaid (вставляется в каждую диаграмму)
   theme.d2                   Тема D2 (вставляется в каждую диаграмму)
+  docx.yaml                  Параметры стилей DOCX (страница, шрифты, цвета, стили)
   assets/                    Статические файлы, на которые ссылаются шаблоны
 ~~~
 
 Все файлы являются опциональными: для сборки в конкретном формате достаточно
 наличия соответствующего шаблона. Например, для сборки в формате HTML достаточно
 `template.html`.
+
+Если в пользовательской теме нет файла `docx.yaml`, Сборщик использует файл
+`docx.yaml` темы `blank`, а команда `init-theme` записывает этот файл в
+экспортированную тему.
 
 ## Тема по умолчанию
 
@@ -36,7 +41,7 @@ theme-dir/
 ~~~
 $ docbake init-theme my-theme
 $ ls my-theme/
-assets/  style.css  template-multipage.html  template.html
+assets/  docx.yaml  style.css  template-multipage.html  template.html
 template.typ  theme.d2  theme.mmd  theme.puml
 ~~~
 

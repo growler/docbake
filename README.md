@@ -83,6 +83,7 @@ my-theme/
   theme.puml                 # Тема PlantUML-диаграмм
   theme.mmd                  # Тема Mermaid-диаграмм
   theme.d2                   # Тема D2-диаграмм
+  docx.yaml                  # Параметры стилей DOCX
   assets/                    # Статические файлы, доступные из шаблонов
 ```
 
