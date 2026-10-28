@@ -51,6 +51,7 @@ pub(crate) struct DocxParams {
     /// Font role (for example `body`, `heading`, `mono`) to font name.
     pub fonts: BTreeMap<String, String>,
     pub table: TableParams,
+    #[allow(dead_code)] // The renderer does not read the list parameters yet.
     pub lists: Lists,
     /// Style ID to style properties.
     pub styles: BTreeMap<String, Style>,
@@ -70,6 +71,15 @@ impl DocxParams {
 pub(crate) struct Page {
     pub size: PageSize,
     pub margins: PageMargins,
+}
+
+impl Page {
+    /// Gives the width of the text area in twips: the page width minus the
+    /// left and right margins.
+    pub(crate) fn text_width(&self) -> u32 {
+        let (width, _) = self.size.dimensions();
+        width - self.margins.left.0 - self.margins.right.0
+    }
 }
 
 /// Page margins. `header` and `footer` are the distances from the page edge.
@@ -130,6 +140,7 @@ pub(crate) struct TableHeader {
 }
 
 /// List parameters. Each array has one item for each list level.
+#[allow(dead_code)] // The renderer does not read the list parameters yet.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Lists {
@@ -408,6 +419,14 @@ impl RawParams {
             if Rgb::from_hex(name).is_some() {
                 bail!("colors.{name}: colour name is also a hex value");
             }
+        }
+        let (width, height) = self.page.size.dimensions();
+        let margins = &self.page.margins;
+        if margins.left.0 + margins.right.0 >= width {
+            bail!("page.margins: left and right margins must be less than the page width ({width} tw)");
+        }
+        if margins.top.0 + margins.bottom.0 >= height {
+            bail!("page.margins: top and bottom margins must be less than the page height ({height} tw)");
         }
         if !self.fonts.contains_key("body") {
             bail!("fonts: missing font role 'body'");
@@ -1716,5 +1735,45 @@ lists:
         let note = &params.styles["AdmonitionNoteBody"];
         assert_eq!(note.contextual_spacing, Some(true));
         assert_eq!(note.borders.left.unwrap().color.to_string(), "6CB4EE");
+    }
+
+    #[test]
+    fn text_width() {
+        let params = crate::theme::Theme::Embedded("blank")
+            .docx_params()
+            .unwrap();
+        assert_eq!(params.page.text_width(), 10205);
+    }
+
+    #[test]
+    fn margins_must_leave_text_area() {
+        let margins = "margins: {top: 2cm, bottom: 2cm, left: 2cm, right: 1cm,";
+        let wide = BASE.replace(
+            margins,
+            "margins: {top: 2cm, bottom: 2cm, left: 11906tw, right: 0tw,",
+        );
+        assert_starts(
+            &error(&yaml(&wide, "  Normal: {}\n")),
+            "page.margins: left and right margins must be less than the page width (11906 tw)",
+        );
+        let tall = BASE.replace(
+            margins,
+            "margins: {top: 8419tw, bottom: 8419tw, left: 2cm, right: 1cm,",
+        );
+        assert_starts(
+            &error(&yaml(&tall, "  Normal: {}\n")),
+            "page.margins: top and bottom margins must be less than the page height (16838 tw)",
+        );
+        let fits = BASE.replace(
+            margins,
+            "margins: {top: 8418tw, bottom: 8419tw, left: 11905tw, right: 0tw,",
+        );
+        assert_eq!(
+            DocxParams::from_yaml(&yaml(&fits, "  Normal: {}\n"))
+                .unwrap()
+                .page
+                .text_width(),
+            1
+        );
     }
 }

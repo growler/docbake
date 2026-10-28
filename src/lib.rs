@@ -31,6 +31,7 @@ pub(crate) mod theme;
 mod watch;
 
 use std::fs;
+use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 
 use crate::build::{build_template_context, compile_typst, copy_assets, render_pdf_template};
@@ -663,17 +664,28 @@ pub(crate) fn build_command(
             d2: theme.d2_theme()?,
         };
         let logo_asset = theme.logo_asset()?;
+        let docx_params = theme.docx_params()?;
         let renderer = docx::DocxRenderer::new(
             cache,
             &diagram_themes,
             logger,
             &base_dir,
             logo_asset,
+            &docx_params,
             render_profile.clone(),
         );
-        let docx_bytes = renderer.render(&build)?;
-        fs::write(&output_file, docx_bytes)
-            .with_context(|| format!("failed to write {}", output_file.display()))?;
+        let package = renderer.render(&build, &metadata)?;
+        let file = fs::File::create(&output_file)
+            .with_context(|| format!("failed to create {}", output_file.display()))?;
+        let written = package
+            .write_to(BufWriter::new(file))
+            .and_then(|w| w.into_inner().map_err(|e| e.into_error().into()))
+            .with_context(|| format!("failed to write {}", output_file.display()));
+        if let Err(e) = written {
+            // Do not leave a partial DOCX file at the output path.
+            let _ = fs::remove_file(&output_file);
+            return Err(e);
+        }
         logger.log(format!("wrote {}", output_file.display()));
         return Ok(());
     }

@@ -149,7 +149,6 @@ impl Theme {
     ///
     /// A theme without `docx.yaml` uses the file of the embedded default
     /// theme.
-    #[allow(dead_code)] // Only the tests read the parameters.
     pub fn docx_params(&self) -> Result<DocxParams> {
         let (owner, text) = self.docx_yaml()?;
         DocxParams::from_yaml(&text)

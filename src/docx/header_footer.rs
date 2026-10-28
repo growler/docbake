@@ -12,13 +12,14 @@ impl<'a> DocxRenderer<'a> {
                 .color(ACCENT_ORANGE),
         );
 
+        let text_width = self.params.page.text_width() as usize;
         let mut para = Paragraph::new();
         para.property = para
             .property
             .style("Header")
             .set_borders(header_border)
-            .add_tab(Tab::new().val(TabValueType::Center).pos(4680))
-            .add_tab(Tab::new().val(TabValueType::Right).pos(9360));
+            .add_tab(Tab::new().val(TabValueType::Center).pos(text_width / 2))
+            .add_tab(Tab::new().val(TabValueType::Right).pos(text_width));
 
         let run_style = Run::new().color(ACCENT_ORANGE).size(18);
 
@@ -57,13 +58,14 @@ impl<'a> DocxRenderer<'a> {
                 .color(ACCENT_ORANGE),
         );
 
+        let text_width = self.params.page.text_width() as usize;
         let mut para = Paragraph::new();
         para.property = para
             .property
             .style("Footer")
             .set_borders(footer_border)
-            .add_tab(Tab::new().val(TabValueType::Center).pos(4680))
-            .add_tab(Tab::new().val(TabValueType::Right).pos(9360));
+            .add_tab(Tab::new().val(TabValueType::Center).pos(text_width / 2))
+            .add_tab(Tab::new().val(TabValueType::Right).pos(text_width));
 
         let run_style = Run::new().color(ACCENT_ORANGE).size(18);
 

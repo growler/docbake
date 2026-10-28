@@ -450,6 +450,7 @@ pub(crate) fn publish_gdoc_command(
         d2: theme.d2_theme()?,
     };
     let logo_asset = theme.logo_asset()?;
+    let docx_params = theme.docx_params()?;
 
     // ── render to DOCX ──────────────────────────────────────────────────
     let renderer = crate::docx::DocxRenderer::new(
@@ -458,9 +459,10 @@ pub(crate) fn publish_gdoc_command(
         logger,
         &base_dir,
         logo_asset,
+        &docx_params,
         render_profile,
     );
-    let docx_bytes = renderer.render(&build)?;
+    let docx_bytes = renderer.render(&build, &metadata)?.into_bytes()?;
 
     logger.log(format!("rendered: {} bytes DOCX", docx_bytes.len()));
 

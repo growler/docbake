@@ -17,12 +17,12 @@
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::io::Cursor;
 use std::path::Path;
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use docx_rs::*;
 use rushdown::ast::Arena;
+use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::cache::Cache;
 use crate::conditional::RenderProfile;
@@ -30,39 +30,27 @@ use crate::diagram::DiagramThemes;
 use crate::graph::{DocumentGraph, PreparedDocument};
 use crate::DebugDumper;
 
+use self::package::Package;
+use self::params::DocxParams;
 use self::title_page::TitleFields;
 
 mod admonition;
 mod blocks;
-#[allow(dead_code)] // The renderer does not use the font table yet.
 mod font_table;
 mod header_footer;
 mod inline;
+mod lang;
 mod media;
 mod numbering;
-#[allow(dead_code)] // The renderer does not read these parameters yet.
+mod package;
 pub(crate) mod params;
 mod prefetch;
-#[allow(dead_code)] // The renderer does not use the style sheet yet.
 mod stylesheet;
 mod tables;
 mod title_page;
 mod toc;
 
 const ACCENT_ORANGE: &str = "EE721C";
-
-/// Standard body font family.
-const BODY_FONT: &str = "Calibri";
-
-/// Heading font sizes in half-points, indexed by heading level (1-based).
-/// H1=28pt, H2=22pt, H3=16pt, H4=14pt, H5=12pt, H6=11pt.
-const HEADING_SIZES: [usize; 7] = [0, 56, 44, 32, 28, 24, 22];
-
-/// Space before heading in twips, by level.
-const HEADING_BEFORE: [u32; 7] = [0, 360, 280, 240, 200, 200, 200];
-
-/// Space after heading in twips, by level.
-const HEADING_AFTER: [u32; 7] = [0, 120, 100, 80, 60, 60, 60];
 
 /// Code block background fill colour (light grey).
 const CODE_BG: &str = "F2F2F2";
@@ -73,6 +61,7 @@ pub(crate) struct DocxRenderer<'a> {
     logger: &'a DebugDumper,
     base_dir: &'a Path,
     logo_asset: Option<(Vec<u8>, String)>,
+    params: &'a DocxParams,
     #[allow(dead_code)]
     diagram_counter: RefCell<u32>,
     toc_heading_keys: RefCell<VecDeque<String>>,
@@ -96,6 +85,7 @@ impl<'a> DocxRenderer<'a> {
         logger: &'a DebugDumper,
         base_dir: &'a Path,
         logo_asset: Option<(Vec<u8>, String)>,
+        params: &'a DocxParams,
         profile: RenderProfile,
     ) -> Self {
         Self {
@@ -104,6 +94,7 @@ impl<'a> DocxRenderer<'a> {
             logger,
             base_dir,
             logo_asset,
+            params,
             diagram_counter: RefCell::new(0),
             toc_heading_keys: RefCell::new(VecDeque::new()),
             bookmark_counter: RefCell::new(0),
@@ -111,66 +102,36 @@ impl<'a> DocxRenderer<'a> {
         }
     }
 
-    /// Render the document graph to DOCX bytes.
-    pub fn render(&self, prepared: &PreparedDocument) -> Result<Vec<u8>> {
+    /// Render the document graph to a DOCX package. `metadata` is the
+    /// document metadata after the command-line changes.
+    pub fn render(
+        &self,
+        prepared: &PreparedDocument,
+        metadata: &JsonMap<String, JsonValue>,
+    ) -> Result<Package> {
         let graph = prepared.graph();
-        let metadata = prepared.document_metadata();
+        let lang = lang::document_lang(metadata)?;
 
-        let body_fonts = RunFonts::new()
-            .ascii(BODY_FONT)
-            .hi_ansi(BODY_FONT)
-            .east_asia(BODY_FONT)
-            .cs(BODY_FONT);
-
-        let mut docx = Docx::new()
-            // ── Document-wide defaults ──────────────────────────────────
-            // 1.15x line spacing (276/240), 6pt after each paragraph.
-            .default_line_spacing(
-                LineSpacing::new()
-                    .after(120) // 6pt after
-                    .line(276) // 1.15x
-                    .line_rule(LineSpacingType::Auto),
-            )
-            .default_fonts(body_fonts)
-            .default_size(22); // 11pt body text (half-points)
-
-        // ── Register heading styles ─────────────────────────────────────
-        let heading_fonts = RunFonts::new()
-            .ascii("Calibri")
-            .hi_ansi("Calibri")
-            .east_asia("Calibri")
-            .cs("Calibri");
-
-        for level in 1..=6usize {
-            let style_id = format!("Heading{level}");
-            let style_name = format!("heading {level}");
-
-            let spacing = LineSpacing::new()
-                .before(HEADING_BEFORE[level])
-                .after(HEADING_AFTER[level])
-                .line(240) // single-spaced headings
-                .line_rule(LineSpacingType::Auto);
-
-            let mut style = Style::new(&style_id, StyleType::Paragraph)
-                .name(&style_name)
-                .size(HEADING_SIZES[level])
-                .bold()
-                .fonts(heading_fonts.clone())
-                .outline_lvl(level - 1)
-                .line_spacing(spacing);
-
-            if level >= 4 {
-                style = style.color("333333");
-            }
-
-            docx = docx.add_style(style);
-        }
+        // ── Page size and margins ───────────────────────────────────────
+        let page = &self.params.page;
+        let (width, height) = page.size.dimensions();
+        let margins = &page.margins;
+        let mut docx = Docx::new().page_size(width, height).page_margin(
+            PageMargin::new()
+                .top(margins.top.0 as i32)
+                .right(margins.right.0 as i32)
+                .bottom(margins.bottom.0 as i32)
+                .left(margins.left.0 as i32)
+                .header(margins.header.0 as i32)
+                .footer(margins.footer.0 as i32)
+                .gutter(0),
+        );
 
         // ── Define list numbering styles ────────────────────────────────
         docx = numbering::add_list_numbering(docx);
 
         // ── Title page ──────────────────────────────────────────────────
-        let fields = TitleFields::from_metadata(&metadata);
+        let fields = TitleFields::from_metadata(metadata);
 
         if !fields.version.is_empty() {
             docx = docx.custom_property("Version", &fields.version);
@@ -199,12 +160,7 @@ impl<'a> DocxRenderer<'a> {
         // each top-level block.  render_block handles its own children.
         docx = self.render_graph_document(docx, graph, graph.root_id, 0)?;
 
-        // Serialize to bytes.
-        let mut buf = Cursor::new(Vec::new());
-        docx.build()
-            .pack(&mut buf)
-            .map_err(|e| anyhow!("failed to pack DOCX: {e}"))?;
-        Ok(buf.into_inner())
+        Ok(Package::new(docx, self.params, lang))
     }
 
     /// Walk a document occurrence, resolving includes and rendering

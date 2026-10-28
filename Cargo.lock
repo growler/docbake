@@ -258,6 +258,7 @@ dependencies = [
  "docx-rs",
  "include_dir",
  "jsonwebtoken",
+ "memchr",
  "mermaid-rs-renderer",
  "notify",
  "notify-debouncer-mini",
@@ -284,6 +285,7 @@ dependencies = [
  "tiny_http",
  "ureq",
  "which",
+ "zip",
 ]
 
 [[package]]
