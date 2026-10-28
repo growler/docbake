@@ -41,6 +41,8 @@ mod numbering;
 #[allow(dead_code)] // The renderer does not read these parameters yet.
 pub(crate) mod params;
 mod prefetch;
+#[allow(dead_code)] // The renderer does not use the style sheet yet.
+mod stylesheet;
 mod tables;
 mod title_page;
 mod toc;

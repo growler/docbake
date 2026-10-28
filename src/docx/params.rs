@@ -16,7 +16,7 @@
 //! path to the error.
 
 use std::collections::btree_map::Entry;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{hash_map, BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::marker::PhantomData;
 
@@ -24,11 +24,22 @@ use anyhow::{anyhow, bail, Result};
 use serde::de::{self, Deserializer, MapAccess, Visitor};
 use serde::Deserialize;
 
+use super::stylesheet::{self, RESERVED_STYLES};
+
 /// The largest length in twips (22 in).
 const MAX_TWIPS: i128 = 31680;
 
 /// The largest number of digits in a number.
 const MAX_DIGITS: usize = 30;
+
+/// The IDs of the character styles. All other styles are paragraph styles.
+const CHARACTER_STYLES: &[&str] = &[
+    "InlineCode",
+    "Hyperlink",
+    "FootnoteReference",
+    "Strong",
+    "Emphasis",
+];
 
 /// The DOCX style parameters of a theme, with all references resolved.
 ///
@@ -152,10 +163,43 @@ pub(crate) enum Align {
     Justify,
 }
 
+/// The type of a style. [`CHARACTER_STYLES`] are character styles. All
+/// other styles are paragraph styles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StyleKind {
+    Paragraph,
+    Character,
+}
+
+impl StyleKind {
+    fn of(id: &str) -> Self {
+        if CHARACTER_STYLES.contains(&id) {
+            StyleKind::Character
+        } else {
+            StyleKind::Paragraph
+        }
+    }
+
+    /// Gives the `w:type` value of the style.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            StyleKind::Paragraph => "paragraph",
+            StyleKind::Character => "character",
+        }
+    }
+}
+
+impl fmt::Display for StyleKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// The properties of one style. `None` means that the style does not set
 /// the property.
 #[derive(Debug)]
 pub(crate) struct Style {
+    pub kind: StyleKind,
     /// The ID of the parent style. It is a key of [`DocxParams::styles`].
     pub based_on: Option<String>,
     /// The font name (resolved from the font role).
@@ -368,6 +412,10 @@ impl RawParams {
         if !self.fonts.contains_key("body") {
             bail!("fonts: missing font role 'body'");
         }
+        for name in self.styles.keys() {
+            check_style_id(name)?;
+        }
+        check_style_names(&self.styles)?;
         check_based_on(&self.styles)?;
 
         let table = &self.table;
@@ -384,6 +432,14 @@ impl RawParams {
         for (name, raw) in self.styles {
             let style = raw.resolve(&name, &self.fonts, colors)?;
             styles.insert(name, style);
+        }
+        check_kinds(&styles)?;
+        match styles.get("Normal") {
+            None => bail!("styles: missing style 'Normal'"),
+            Some(normal) if normal.based_on.is_some() => {
+                bail!("styles.Normal.based_on: Normal cannot have a base style")
+            }
+            Some(_) => {}
         }
 
         Ok(DocxParams {
@@ -427,6 +483,27 @@ impl RawStyle {
             })
         };
 
+        let kind = StyleKind::of(name);
+        if kind == StyleKind::Character {
+            let paragraph = [
+                ("align", self.align.is_some()),
+                ("before", self.before.is_some()),
+                ("after", self.after.is_some()),
+                ("line", self.line.is_some()),
+                ("indent", self.indent.is_some()),
+                ("keep_next", self.keep_next.is_some()),
+                ("border", self.border.is_some()),
+                ("border_top", self.border_top.is_some()),
+                ("border_bottom", self.border_bottom.is_some()),
+                ("hyphenate", self.hyphenate.is_some()),
+                ("snap_to_grid", self.snap_to_grid.is_some()),
+                ("contextual_spacing", self.contextual_spacing.is_some()),
+            ];
+            if let Some((field, _)) = paragraph.iter().find(|(_, set)| *set) {
+                bail!("styles.{name}.{field}: paragraph property in a character style");
+            }
+        }
+
         let font = self
             .font
             .map(|role| {
@@ -459,6 +536,7 @@ impl RawStyle {
         }
 
         Ok(Style {
+            kind,
             based_on: self.based_on,
             font,
             size: self.size,
@@ -490,6 +568,64 @@ fn lookup_color(colors: &Colors, value: &ColorRef) -> Result<Rgb, String> {
         return Ok(rgb);
     }
     Rgb::from_hex(&value.0).ok_or_else(|| format!("unknown colour '{}'", value.0))
+}
+
+/// Makes sure that a style ID is ASCII letters and digits that start with a
+/// letter, and that the ID is not reserved.
+fn check_style_id(name: &str) -> Result<()> {
+    let mut bytes = name.bytes();
+    let valid = bytes.next().is_some_and(|b| b.is_ascii_alphabetic())
+        && bytes.all(|b| b.is_ascii_alphanumeric());
+    if !valid {
+        bail!("styles.'{name}': invalid style ID; use ASCII letters and digits that start with a letter");
+    }
+    if RESERVED_STYLES.contains(&name) {
+        bail!("styles.{name}: reserved style ID");
+    }
+    Ok(())
+}
+
+/// Makes sure that no two styles have the same display name (`w:name`).
+/// Case is not significant. The names of all built-in styles are taken,
+/// also when the theme does not define the style.
+fn check_style_names(styles: &BTreeMap<String, RawStyle>) -> Result<()> {
+    let mut owners: HashMap<String, &str> = stylesheet::builtin_styles()
+        .map(|(id, name)| (name.to_ascii_lowercase(), id))
+        .collect();
+    for id in styles.keys() {
+        let name = stylesheet::style_name(id);
+        match owners.entry(name.to_ascii_lowercase()) {
+            hash_map::Entry::Occupied(owner) if *owner.get() != id => {
+                bail!(
+                    "styles.{id}: name '{name}' is also the name of style '{}'",
+                    owner.get()
+                )
+            }
+            hash_map::Entry::Occupied(_) => {}
+            hash_map::Entry::Vacant(slot) => {
+                slot.insert(id);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Makes sure that each style has the same type as its base style.
+fn check_kinds(styles: &BTreeMap<String, Style>) -> Result<()> {
+    for (name, style) in styles {
+        let Some(parent) = style.based_on.as_deref() else {
+            continue;
+        };
+        let parent_kind = styles[parent].kind;
+        if parent_kind != style.kind {
+            bail!(
+                "styles.{name}.based_on: '{parent}' is a {parent_kind} style; a {} style must be based on a {} style",
+                style.kind,
+                style.kind
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Makes sure that each `based_on` names a style in `styles` and that no
@@ -771,10 +907,15 @@ impl ColorRef {
 }
 
 impl Text {
-    /// A YAML null (`~`, `null`, `Null` or `NULL`) is an empty value.
+    /// A YAML null (`~`, `null`, `Null` or `NULL`) is an empty value. A
+    /// control character is not permitted, because XML cannot contain most
+    /// of them.
     fn parse(s: &str) -> Result<Self, String> {
         if s.trim().is_empty() || matches!(s, "~" | "null" | "Null" | "NULL") {
             return Err("empty value".to_owned());
+        }
+        if s.chars().any(char::is_control) {
+            return Err("control character in value".to_owned());
         }
         Ok(Text(s.to_owned()))
     }
@@ -1132,6 +1273,7 @@ lists:
     fn resolves_references() {
         let params = parse(
             r##"
+  Normal: {}
   Heading1:
     font: heading
     color: accent
@@ -1242,6 +1384,79 @@ lists:
     }
 
     #[test]
+    fn style_checks() {
+        assert_starts(
+            &style_error("  Heading1: {size: 28pt}\n"),
+            "styles: missing style 'Normal'",
+        );
+        assert_starts(
+            &style_error("  Normal: {based_on: Base}\n  Base: {}\n"),
+            "styles.Normal.based_on: Normal cannot have a base style",
+        );
+        for id in ["DataTable", "TableNormal", "DefaultParagraphFont", "NoList"] {
+            assert_starts(
+                &style_error(&format!("  Normal: {{}}\n  {id}: {{}}\n")),
+                &format!("styles.{id}: reserved style ID"),
+            );
+        }
+        for id in [
+            "1Heading",
+            "Heading_1",
+            "\"Heading 1\"",
+            "\"\"",
+            "Überschrift",
+        ] {
+            let err = style_error(&format!("  Normal: {{}}\n  {id}: {{}}\n"));
+            assert!(
+                err.starts_with("styles.'") && err.contains("': invalid style ID;"),
+                "{id}: {err}"
+            );
+        }
+        assert_starts(
+            &style_error("  Normal: {}\n  A.B: {}\n"),
+            "styles.'A.B': invalid style ID;",
+        );
+        assert_starts(
+            &style_error("  Normal: {}\n  header: {}\n"),
+            "styles.header: name 'header' is also the name of style 'Header'",
+        );
+        assert_starts(
+            &style_error("  Normal: {}\n  NormalTable: {}\n"),
+            "styles.NormalTable: name 'Normal Table' is also the name of style 'TableNormal'",
+        );
+        assert_starts(
+            &style_error("  Normal: {}\n  CodeBlock: {}\n  Codeblock: {}\n  codeBlock: {}\n"),
+            "styles.codeBlock: name 'code Block' is also the name of style 'CodeBlock'",
+        );
+        assert_starts(
+            &style_error("  Normal: {}\n  InlineCode: {font: mono, align: left}\n"),
+            "styles.InlineCode.align: paragraph property in a character style",
+        );
+        assert_starts(
+            &style_error(
+                "  Normal: {}\n  Hyperlink:\n    border_bottom: {width: 1pt, color: accent}\n",
+            ),
+            "styles.Hyperlink.border_bottom: paragraph property in a character style",
+        );
+        assert_starts(
+            &style_error("  Normal: {}\n  InlineCode: {based_on: Normal}\n"),
+            "styles.InlineCode.based_on: 'Normal' is a paragraph style; a character style must be based on a character style",
+        );
+        assert_starts(
+            &style_error("  Normal: {}\n  InlineCode: {}\n  Code: {based_on: InlineCode}\n"),
+            "styles.Code.based_on: 'InlineCode' is a character style; a paragraph style must be based on a paragraph style",
+        );
+
+        let params = parse(
+            "  Normal: {}\n  InlineCode: {fill: code_fill}\n  Hyperlink: {based_on: InlineCode}\n  Strong: {bold: true}\n  Emphasis: {}\n  Header: {}\n  CodeBlock: {}\n  Codeblock: {}\n",
+        );
+        assert_eq!(params.styles["Normal"].kind, StyleKind::Paragraph);
+        for id in ["InlineCode", "Hyperlink", "Strong", "Emphasis"] {
+            assert_eq!(params.styles[id].kind, StyleKind::Character, "{id}");
+        }
+    }
+
+    #[test]
     fn yaml_errors_have_paths() {
         assert_starts(
             &style_error("  Heading1: {colour: accent}\n"),
@@ -1306,6 +1521,15 @@ lists:
             &error(&yaml(&BASE.replace("\"▪\"]", "\"\"]"), "  Normal: {}\n")),
             "lists.bullets[5]: empty value",
         );
+        for name in [r#""A\x01B""#, r#""A\nB""#, r#""A\tB""#] {
+            assert_starts(
+                &error(&yaml(
+                    &BASE.replace("mono: PT Mono", &format!("mono: {name}")),
+                    "  Normal: {}\n",
+                )),
+                "fonts.mono: control character in value",
+            );
+        }
         assert_starts(
             &style_error("  H:\n    border_bottom: {width: 1pt, color: accent, space: 3pt 9pt}\n"),
             "styles.H.border_bottom.space: invalid value '3pt 9pt'",

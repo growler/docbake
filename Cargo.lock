@@ -263,6 +263,7 @@ dependencies = [
  "notify-debouncer-mini",
  "open",
  "pathdiff",
+ "quick-xml 0.39.4",
  "rand 0.10.1",
  "regex",
  "resvg",
