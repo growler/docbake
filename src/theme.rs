@@ -14,7 +14,7 @@ use crate::docx::params::DocxParams;
 static EMBEDDED_THEMES_ROOT: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/themes");
 
 pub(crate) const EMBEDDED_DEFAULT_THEME: &str = "blank";
-const EMBEDDED_THEME_NAMES: &[&str] = &["blank", "blank", "digitaltide"];
+pub(crate) const EMBEDDED_THEME_NAMES: &[&str] = &["blank", "blank", "digitaltide"];
 
 // ============================================================================
 // Convention file names

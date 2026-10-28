@@ -5,6 +5,7 @@ use std::thread;
 
 use anyhow::Result;
 use rushdown::ast::{Arena, KindData, NodeRef};
+use rushdown_definition_list::{DefinitionList, TermDefinition};
 use rushdown_fenced_div::FencedDiv;
 
 use crate::caption::{Caption, CaptionText};
@@ -57,7 +58,7 @@ impl<'a> DocxRenderer<'a> {
 
     /// Collect the diagram jobs of a document occurrence with the include
     /// and visibility rules of `render_graph_document`.
-    fn collect_graph_diagrams(
+    pub(super) fn collect_graph_diagrams(
         &self,
         graph: &DocumentGraph,
         doc_id: usize,
@@ -139,6 +140,15 @@ impl<'a> DocxRenderer<'a> {
                 {
                     for child in arena[node_ref].children(arena) {
                         self.collect_block_diagrams(arena, source, child, jobs)?;
+                    }
+                } else if rushdown::matches_extension_kind!(arena, node_ref, DefinitionList) {
+                    for child in arena[node_ref].children(arena) {
+                        if !rushdown::matches_extension_kind!(arena, child, TermDefinition) {
+                            continue;
+                        }
+                        for def_child in arena[child].children(arena) {
+                            self.collect_block_diagrams(arena, source, def_child, jobs)?;
+                        }
                     }
                 }
             }

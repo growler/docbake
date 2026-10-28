@@ -57,19 +57,13 @@ impl<'a> DocxRenderer<'a> {
             }
             KindData::Paragraph(_) => {
                 let mut para = Paragraph::new();
+                if let Some(style) = context.paragraph_style {
+                    para = para.style(style);
+                }
                 for child in arena[node_ref].children(arena) {
-                    match arena[child].kind_data() {
-                        KindData::Image(_) => {
-                            if let Some(pic) = self.resolve_graph_image(context, child) {
-                                para = para.add_run(Run::new().add_image(pic));
-                            }
-                        }
-                        _ => {
-                            let runs = self.render_inline_runs(context, child);
-                            for run in runs {
-                                para = para.add_run(run);
-                            }
-                        }
+                    let runs = self.render_inline_runs(context, child);
+                    for run in runs {
+                        para = para.add_run(run);
                     }
                 }
                 docx = docx.add_paragraph(para);
@@ -82,8 +76,12 @@ impl<'a> DocxRenderer<'a> {
                 docx = self.render_code_block_paragraphs(docx, &code_text);
             }
             KindData::Blockquote(_) => {
+                let context = RenderContext {
+                    paragraph_style: Some("Quote"),
+                    ..*context
+                };
                 for child in arena[node_ref].children(arena) {
-                    docx = self.render_block(docx, context, child)?;
+                    docx = self.render_block(docx, &context, child)?;
                 }
             }
             KindData::List(list) => {
@@ -100,7 +98,9 @@ impl<'a> DocxRenderer<'a> {
                 docx = self.render_table(docx, context, node_ref)?;
             }
             KindData::ThematicBreak(_) => {
-                let para = Paragraph::new().add_run(Run::new().add_text(""));
+                let para = Paragraph::new()
+                    .style("ThematicBreak")
+                    .add_run(Run::new().add_text(""));
                 docx = docx.add_paragraph(para);
             }
             _ => {
@@ -127,8 +127,8 @@ impl<'a> DocxRenderer<'a> {
     /// Render a fenced div, with special handling for admonition blocks.
     ///
     /// For admonition types (`note`, `warning`, `tip`, etc.) the first
-    /// child heading is rendered as bold text (not a real heading) to
-    /// avoid polluting the document outline / TOC.
+    /// child heading is rendered as the admonition header paragraph (not a
+    /// real heading) to avoid polluting the document outline / TOC.
     fn render_fenced_div(
         &self,
         mut docx: Docx,
@@ -151,7 +151,8 @@ impl<'a> DocxRenderer<'a> {
         if let Some(adm_type) = adm_type {
             docx = self.render_admonition(docx, context, node_ref, adm_type)?;
         } else {
-            // Non-admonition fenced div: render children as normal blocks.
+            // Non-admonition fenced div: render children as normal blocks
+            // with the paragraph style of the enclosing block.
             for child in arena[node_ref].children(arena) {
                 docx = self.render_block(docx, context, child)?;
             }
@@ -159,7 +160,9 @@ impl<'a> DocxRenderer<'a> {
         Ok(docx)
     }
 
-    /// Render list items recursively, handling nested lists.
+    /// Render list items recursively, handling nested lists. The blocks
+    /// in a list item do not use the paragraph style of the enclosing
+    /// block.
     fn render_list_items(
         &self,
         mut docx: Docx,
@@ -168,6 +171,10 @@ impl<'a> DocxRenderer<'a> {
         numbering_id: usize,
         indent_level: usize,
     ) -> Result<Docx> {
+        let context = &RenderContext {
+            paragraph_style: None,
+            ..*context
+        };
         let arena = context.arena;
         for item_ref in arena[list_ref].children(arena) {
             if !matches!(arena[item_ref].kind_data(), KindData::ListItem(_)) {
@@ -212,7 +219,9 @@ impl<'a> DocxRenderer<'a> {
         Ok(docx)
     }
 
-    /// Render a definition list.
+    /// Render a definition list. Terms use `DefinitionTerm`. The
+    /// paragraphs of a definition use `DefinitionBody`; the other blocks of
+    /// a definition keep their own styles.
     fn render_definition_list(
         &self,
         mut docx: Docx,
@@ -222,26 +231,21 @@ impl<'a> DocxRenderer<'a> {
         let arena = context.arena;
         for child in arena[node_ref].children(arena) {
             if rushdown::matches_extension_kind!(arena, child, Term) {
-                let mut para = Paragraph::new();
+                let mut para = Paragraph::new().style("DefinitionTerm");
                 for inline in arena[child].children(arena) {
                     let runs = self.render_inline_runs(context, inline);
                     for run in runs {
-                        para = para.add_run(run.bold());
+                        para = para.add_run(run);
                     }
                 }
                 docx = docx.add_paragraph(para);
             } else if rushdown::matches_extension_kind!(arena, child, TermDefinition) {
+                let context = RenderContext {
+                    paragraph_style: Some("DefinitionBody"),
+                    ..*context
+                };
                 for def_child in arena[child].children(arena) {
-                    if matches!(arena[def_child].kind_data(), KindData::Paragraph(_)) {
-                        let mut para = Paragraph::new().indent(Some(720), None, None, None);
-                        for inline in arena[def_child].children(arena) {
-                            let runs = self.render_inline_runs(context, inline);
-                            for run in runs {
-                                para = para.add_run(run);
-                            }
-                        }
-                        docx = docx.add_paragraph(para);
-                    }
+                    docx = self.render_block(docx, &context, def_child)?;
                 }
             }
         }

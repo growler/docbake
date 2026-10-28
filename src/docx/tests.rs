@@ -420,8 +420,7 @@ fn empty_toc_has_two_paragraphs_and_no_sdt() {
     let document = render_parts("#### Four\n").unwrap()("word/document.xml");
     assert!(!document.contains("<w:sdt>"), "{document}");
     let body = between(&document, "<w:body>", "<w:sectPr");
-    let paragraph = Regex::new(r"(?s)<w:p .*?</w:p>").unwrap();
-    let paragraphs: Vec<_> = paragraph.find_iter(body).map(|m| m.as_str()).collect();
+    let paragraphs: Vec<_> = PARAGRAPH.find_iter(body).map(|m| m.as_str()).collect();
     assert_in_order(
         paragraphs[0],
         &[
@@ -534,4 +533,298 @@ fn inline_code_and_links_use_character_styles() {
     for part in ["<w:rFonts", "<w:shd", "<w:color", "<w:u "] {
         assert!(!document.contains(part), "{part} in {document}");
     }
+}
+
+/// A paragraph of `word/document.xml`.
+static PARAGRAPH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)<w:p .*?</w:p>").unwrap());
+
+/// The style ID of a paragraph.
+static PARAGRAPH_STYLE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"<w:pStyle w:val="([^"]+)" />"#).unwrap());
+
+/// The text of a run.
+static RUN_TEXT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"<w:t(?: [^>]*)?>([^<]*)</w:t>").unwrap());
+
+/// Gives each paragraph of `document` that has text as
+/// `[<style ID>] <text>`. The style ID is empty for a paragraph without
+/// `w:pStyle`.
+fn text_paragraphs(document: &str) -> Vec<String> {
+    PARAGRAPH
+        .find_iter(document)
+        .filter_map(|p| {
+            let p = p.as_str();
+            let t: String = RUN_TEXT
+                .captures_iter(p)
+                .map(|c| c[1].to_string())
+                .collect();
+            let s = PARAGRAPH_STYLE
+                .captures(p)
+                .map_or("", |c| c.get(1).unwrap().as_str());
+            (!t.is_empty()).then(|| format!("[{s}] {t}"))
+        })
+        .collect()
+}
+
+/// Asserts that the runs of each paragraph of `document` that has a style
+/// ID that starts with `style_prefix` have no direct formatting. Skips the
+/// paragraphs that contain one of `skip`.
+#[track_caller]
+fn assert_runs_unformatted(document: &str, style_prefix: &str, skip: &[&str]) {
+    let style = format!(r#"<w:pStyle w:val="{style_prefix}"#);
+    let mut count = 0;
+    for p in PARAGRAPH.find_iter(document).map(|m| m.as_str()) {
+        if !p.contains(&style) || skip.iter().any(|s| p.contains(s)) {
+            continue;
+        }
+        assert!(!p.contains("<w:rPr>"), "direct formatting in {p}");
+        count += 1;
+    }
+    assert!(count > 0, "no {style_prefix} paragraph in {document}");
+}
+
+#[test]
+fn admonitions_use_type_styles() {
+    let document = render_parts(
+        "\
+:::note
+## Custom title
+Note text with **strong** text.
+:::
+
+:::warning
+Warning text.
+:::
+
+:::important
+Important text.
+:::
+
+:::caution
+Caution text.
+:::
+
+:::tip
+## Tip title
+Tip text.
+:::
+
+:::related
+Related text.
+:::
+",
+    )
+    .unwrap()("word/document.xml");
+    assert_eq!(
+        text_paragraphs(&document),
+        [
+            "[AdmonitionNoteHeader] Custom title",
+            "[AdmonitionNoteBody] Note text with strong text.",
+            "[AdmonitionWarningHeader] Warning",
+            "[AdmonitionWarningBody] Warning text.",
+            "[AdmonitionImportantHeader] Important",
+            "[AdmonitionImportantBody] Important text.",
+            "[AdmonitionCautionHeader] Caution",
+            "[AdmonitionCautionBody] Caution text.",
+            "[AdmonitionTipHeader] Tip title",
+            "[AdmonitionTipBody] Tip text.",
+            "[AdmonitionRelatedHeader] Related",
+            "[AdmonitionRelatedBody] Related text.",
+        ]
+    );
+    // The bold run of the strong text is the only direct formatting.
+    assert_runs_unformatted(&document, "Admonition", &[">strong</w:t>"]);
+    assert_eq!(document.matches("<w:b />").count(), 1, "{document}");
+    for part in [
+        "<w:i />",
+        "<w:strike />",
+        "<w:shd",
+        "<w:pBdr",
+        "<w:spacing",
+        "<w:sz ",
+        "<w:color",
+    ] {
+        assert!(!document.contains(part), "{part} in {document}");
+    }
+}
+
+#[test]
+fn admonition_nested_blocks_keep_their_styles() {
+    let document = render_parts(
+        "\
+::::note
+Before.
+
+```
+code
+```
+
+- Item
+
+  :::aside
+  In a list.
+  :::
+
+> Quoted.
+
+:::aside
+In a plain div.
+:::
+
+After.
+::::
+",
+    )
+    .unwrap()("word/document.xml");
+    assert_eq!(
+        text_paragraphs(&document),
+        [
+            "[AdmonitionNoteHeader] Note",
+            "[AdmonitionNoteBody] Before.",
+            "[CodeBlock] code",
+            "[] Item",
+            "[] In a list.",
+            "[Quote] Quoted.",
+            "[AdmonitionNoteBody] In a plain div.",
+            "[AdmonitionNoteBody] After.",
+        ]
+    );
+}
+
+#[test]
+fn block_quote_paragraphs_use_quote_style() {
+    let document = render_parts(
+        "\
+> Quoted.
+>
+> > Nested.
+>
+> ```
+> code
+> ```
+
+After.
+",
+    )
+    .unwrap()("word/document.xml");
+    assert_eq!(
+        text_paragraphs(&document),
+        [
+            "[Quote] Quoted.",
+            "[Quote] Nested.",
+            "[CodeBlock] code",
+            "[] After.",
+        ]
+    );
+}
+
+#[test]
+fn definition_lists_use_definition_styles() {
+    let document = render_parts(
+        "\
+Term
+Second term
+: First paragraph.
+
+  Second paragraph.
+",
+    )
+    .unwrap()("word/document.xml");
+    assert_eq!(
+        text_paragraphs(&document),
+        [
+            "[DefinitionTerm] Term",
+            "[DefinitionTerm] Second term",
+            "[DefinitionBody] First paragraph.",
+            "[DefinitionBody] Second paragraph.",
+        ]
+    );
+    assert_runs_unformatted(&document, "Definition", &[]);
+    for part in ["<w:ind", "<w:b />", "<w:i />", "<w:strike />"] {
+        assert!(!document.contains(part), "{part} in {document}");
+    }
+}
+
+#[test]
+fn definition_body_gives_alt_text_of_unresolved_image() {
+    let document = render_parts("Term\n: ![Remote def alt](https://example.com/y.png)\n").unwrap()(
+        "word/document.xml",
+    );
+    assert_eq!(
+        text_paragraphs(&document),
+        ["[DefinitionTerm] Term", "[DefinitionBody] Remote def alt"]
+    );
+    assert!(!document.contains("<w:drawing>"), "{document}");
+}
+
+#[test]
+fn definition_body_renders_nested_blocks() {
+    let document = render_parts(
+        "\
+Term
+: Text.
+
+  ```
+  code
+  ```
+
+  Inner term
+  : Inner text.
+",
+    )
+    .unwrap()("word/document.xml");
+    assert_eq!(
+        text_paragraphs(&document),
+        [
+            "[DefinitionTerm] Term",
+            "[DefinitionBody] Text.",
+            "[CodeBlock] code",
+            "[DefinitionTerm] Inner term",
+            "[DefinitionBody] Inner text.",
+        ]
+    );
+}
+
+#[test]
+fn thematic_break_uses_thematic_break_style() {
+    let document = render_parts("Before.\n\n***\n\nAfter.\n").unwrap()("word/document.xml");
+    let style = r#"<w:pStyle w:val="ThematicBreak" />"#;
+    assert_eq!(document.matches(style).count(), 1, "{document}");
+    assert_in_order(&document, &[">Before.</w:t>", style, ">After.</w:t>"]);
+    assert!(!document.contains("<w:pBdr"), "{document}");
+}
+
+/// Gives the cache tag and the cache key of each diagram job that the
+/// prefetch walk collects from `markdown`.
+fn diagram_jobs(markdown: &str) -> Vec<(&'static str, Vec<u8>)> {
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("index.md");
+    fs::write(&source, markdown).unwrap();
+    let prepared = prepare_document(
+        &DebugDumper::new(false),
+        temp.path(),
+        &source,
+        Some("index"),
+        BrokenLinkMode::Warn,
+    )
+    .unwrap();
+    let graph = prepared.graph();
+    let mut jobs = Vec::new();
+    with_renderer(None, |r| {
+        r.collect_graph_diagrams(graph, graph.root_id, &mut jobs)
+    })
+    .unwrap();
+    jobs.iter()
+        .map(|job| (job.cache_tag(), job.cache_key().to_vec()))
+        .collect()
+}
+
+#[test]
+fn prefetch_collects_diagram_in_definition_body() {
+    let diagram = "```mermaid\ngraph LR\n  A --> B\n```\n";
+    let top_level = diagram_jobs(diagram);
+    assert_eq!(top_level.len(), 1);
+    let indented = diagram.replace('\n', "\n  ");
+    let in_definition = diagram_jobs(&format!("Term\n: Text.\n\n  {indented}"));
+    assert_eq!(in_definition, top_level);
 }

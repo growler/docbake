@@ -73,6 +73,9 @@ struct RenderContext<'a> {
     doc_id: usize,
     heading_shift: usize,
     graph: &'a DocumentGraph,
+    /// The style of the body paragraphs in the block that is open, for
+    /// example `Quote` in a block quote. `None` gives the `Normal` style.
+    paragraph_style: Option<&'static str>,
 }
 
 impl<'a> DocxRenderer<'a> {
@@ -190,6 +193,7 @@ impl<'a> DocxRenderer<'a> {
                 doc_id,
                 heading_shift,
                 graph,
+                paragraph_style: None,
             };
             docx = self.render_block(docx, &context, child)?;
         }

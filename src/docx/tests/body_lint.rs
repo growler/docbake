@@ -58,15 +58,16 @@ const STYLE_PROPERTIES: &[&str] = &[
 const ALWAYS_ALLOWED: &[&str] = &[];
 
 /// The groups that can set the properties from [`STYLE_PROPERTIES`].
-const ALLOWED_GROUPS: &[Group] = &[Group::Blocks, Group::Tables, Group::Lists];
+const ALLOWED_GROUPS: &[Group] = &[Group::Tables, Group::Lists];
 
 /// The properties from [`STYLE_PROPERTIES`] that Markdown inline markup
 /// sets on one run: bold, italic and strikethrough.
 const MARKUP_PROPERTIES: &[&str] = &["w:b", "w:i", "w:strike"];
 
 /// The groups with Markdown inline markup in the fixture. These groups can
-/// set the properties from [`MARKUP_PROPERTIES`].
-const MARKUP_GROUPS: &[Group] = &[Group::Code];
+/// set the properties from [`MARKUP_PROPERTIES`]. The Blocks fixture has
+/// bold text in an admonition body.
+const MARKUP_GROUPS: &[Group] = &[Group::Code, Group::Blocks];
 
 /// The style IDs that a group can refer to without a style definition.
 /// The IDs must match exactly.
@@ -126,17 +127,46 @@ lang: en
 ---
 :::tip
 ## Admonition title
-Admonition text.
+Admonition text with **strong** text.
 :::
 
 :::note
 Admonition text without a title.
+
+```
+code
+```
+
+- Item
+
+Admonition text after a list.
+:::
+
+:::warning
+Warning text.
+:::
+
+:::important
+Important text.
+:::
+
+:::caution
+Caution text.
+:::
+
+:::related
+Related text.
 :::
 
 > Block quote.
+>
+> > Nested block quote.
 
 Term
+Second term
 : Definition.
+
+  Second definition paragraph.
 
 ***
 ";
