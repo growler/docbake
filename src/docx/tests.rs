@@ -16,7 +16,10 @@ use crate::graph::prepare_document;
 use crate::theme::Theme;
 use crate::DebugDumper;
 
+use super::package::Package;
 use super::DocxRenderer;
+
+mod body_lint;
 
 /// PNG signature followed by an IHDR chunk for a 2x3 image, then bytes
 /// that are not valid PNG chunk data.
@@ -82,9 +85,8 @@ fn front_logo_skips_png_file_that_is_not_an_image() {
     assert!(pic.is_none());
 }
 
-/// Renders `markdown` with the blank theme and gives the parts of the
-/// DOCX file by name.
-fn render_parts(markdown: &str) -> Result<impl Fn(&str) -> String> {
+/// Renders `markdown` with the blank theme.
+fn render_package(markdown: &str) -> Result<Package> {
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("index.md");
     fs::write(&source, markdown).unwrap();
@@ -97,7 +99,13 @@ fn render_parts(markdown: &str) -> Result<impl Fn(&str) -> String> {
     )
     .unwrap();
     let metadata = prepared.document_metadata();
-    let bytes = with_renderer(None, |r| r.render(&prepared, &metadata))?.into_bytes()?;
+    with_renderer(None, |r| r.render(&prepared, &metadata))
+}
+
+/// Renders `markdown` with the blank theme and gives the parts of the
+/// DOCX file by name.
+fn render_parts(markdown: &str) -> Result<impl Fn(&str) -> String> {
+    let bytes = render_package(markdown)?.into_bytes()?;
     Ok(move |name: &str| {
         let mut archive = ZipArchive::new(Cursor::new(&bytes)).unwrap();
         let mut text = String::new();

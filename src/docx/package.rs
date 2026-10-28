@@ -64,6 +64,14 @@ impl Package {
     }
 }
 
+#[cfg(test)]
+impl Package {
+    /// Gives the parts before they are packed.
+    pub(super) fn xml(&self) -> &XMLDocx {
+        &self.xml
+    }
+}
+
 /// Writes the parts to a ZIP file. Each occurrence of [`TOC_TAB`] in
 /// `word/document.xml` becomes `toc_tab`.
 fn zip<W>(w: W, xml: XMLDocx, toc_tab: &[u8]) -> zip::result::ZipResult<W>
