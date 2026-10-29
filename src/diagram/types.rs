@@ -32,6 +32,9 @@ pub struct Diagram {
     /// Optional 1-based page index within a multi-page `.drawio` file
     /// (extracted from a `#N` URL fragment, e.g. `diagram.drawio#2`).
     drawio_page: Option<u32>,
+    /// The image destination as the document gives it, for a diagram from
+    /// an image reference to a diagram file.
+    destination: Option<String>,
 }
 
 impl Diagram {
@@ -42,30 +45,35 @@ impl Diagram {
             file_source: None,
             drawio_path: None,
             drawio_page: None,
+            destination: None,
         }
     }
 
     /// Creates a new [`Diagram`] whose source was read from an external file.
-    pub fn from_file(diagram_type: DiagramType, content: String) -> Self {
+    /// `destination` is the image destination as the document gives it.
+    pub fn from_file(diagram_type: DiagramType, content: String, destination: String) -> Self {
         Self {
             diagram_type,
             value: text::Lines::default(),
             file_source: Some(content),
             drawio_path: None,
             drawio_page: None,
+            destination: Some(destination),
         }
     }
 
     /// Creates a new [`Diagram`] that references a `.drawio` file for
     /// deferred rendering.  The actual SVG/PDF conversion is performed at
     /// render time so that each renderer can choose the appropriate format.
-    pub fn from_drawio(path: PathBuf, page: Option<u32>) -> Self {
+    /// `destination` is the image destination as the document gives it.
+    pub fn from_drawio(path: PathBuf, page: Option<u32>, destination: String) -> Self {
         Self {
             diagram_type: DiagramType::DrawIo,
             value: text::Lines::default(),
             file_source: None,
             drawio_path: Some(path),
             drawio_page: page,
+            destination: Some(destination),
         }
     }
 
@@ -94,6 +102,12 @@ impl Diagram {
     /// file.
     pub fn drawio_page(&self) -> Option<u32> {
         self.drawio_page
+    }
+
+    /// Returns the image destination as the document gives it, for a
+    /// diagram from an image reference to a diagram file.
+    pub fn destination(&self) -> Option<&str> {
+        self.destination.as_deref()
     }
 
     /// Sets the diagram source lines (for code-block-based diagrams).

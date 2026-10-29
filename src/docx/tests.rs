@@ -15,10 +15,11 @@ use crate::cache::Cache;
 use crate::cli::BrokenLinkMode;
 use crate::conditional::{EffectiveFormat, RenderProfile};
 use crate::diagram::DiagramThemes;
-use crate::graph::prepare_document;
+use crate::graph::{prepare_document, PreparedDocument};
 use crate::theme::Theme;
 use crate::DebugDumper;
 
+use super::extent::extent;
 use super::media::logo_at_height;
 use super::package::Package;
 use super::params::Twips;
@@ -27,6 +28,7 @@ use super::DocxRenderer;
 mod body_lint;
 mod captions;
 mod footnotes;
+mod images;
 mod lists;
 mod tables;
 
@@ -40,6 +42,33 @@ fn png_header_with_corrupt_data() -> Vec<u8> {
     data.extend_from_slice(&3u32.to_be_bytes());
     data.extend_from_slice(&[8, 6, 0, 0, 0]);
     data.extend_from_slice(b"corrupt image data");
+    data
+}
+
+/// An empty PNG image of `width` x `height` pixels.
+fn png(width: u32, height: u32) -> Vec<u8> {
+    tiny_skia::Pixmap::new(width, height)
+        .unwrap()
+        .encode_png()
+        .unwrap()
+}
+
+/// A black 24-bit BMP image of `width` x `height` pixels.
+fn bmp(width: u32, height: u32) -> Vec<u8> {
+    let row = (width * 3).div_ceil(4) * 4;
+    let pixels = row * height;
+    let mut data = b"BM".to_vec();
+    for value in [54 + pixels, 0, 54, 40] {
+        data.extend_from_slice(&value.to_le_bytes());
+    }
+    data.extend_from_slice(&width.to_le_bytes());
+    data.extend_from_slice(&height.to_le_bytes());
+    data.extend_from_slice(&1u16.to_le_bytes());
+    data.extend_from_slice(&24u16.to_le_bytes());
+    for value in [0, pixels, 2835, 2835, 0, 0] {
+        data.extend_from_slice(&value.to_le_bytes());
+    }
+    data.resize(data.len() + pixels as usize, 0);
     data
 }
 
@@ -73,18 +102,28 @@ fn pic_from_png_skips_data_that_is_not_an_image() {
 #[test]
 fn pic_from_png_keeps_bytes_when_header_is_valid() {
     let data = png_header_with_corrupt_data();
-    let pic = with_renderer(None, |r| r.pic_from_png(data.clone())).unwrap();
+    let (pic, px) = with_renderer(None, |r| r.pic_from_png(data.clone())).unwrap();
     assert_eq!(pic.image, data);
-    assert_eq!(pic.size, (2 * 9525, 3 * 9525));
+    assert_eq!(px, (2, 3));
 }
 
 #[test]
-fn pic_from_png_keeps_encoded_png_and_caps_width() {
-    let pixmap = tiny_skia::Pixmap::new(1200, 300).unwrap();
-    let data = pixmap.encode_png().unwrap();
-    let pic = with_renderer(None, |r| r.pic_from_png(data.clone())).unwrap();
+fn pic_from_png_keeps_encoded_png_and_natural_size() {
+    let data = png(1200, 300);
+    let (pic, px) = with_renderer(None, |r| r.pic_from_png(data.clone())).unwrap();
     assert_eq!(pic.image, data);
-    assert_eq!(pic.size, (5_760_000, 1_440_000));
+    assert_eq!(px, (1200, 300));
+    assert_eq!(
+        extent(px, 96, None, None, (u64::MAX, u64::MAX)),
+        (11_430_000, 2_857_500)
+    );
+}
+
+#[test]
+fn pic_from_png_gives_decoded_size_of_other_formats() {
+    let (pic, px) = with_renderer(None, |r| r.pic_from_png(bmp(3, 2))).unwrap();
+    assert_eq!(px, (3, 2));
+    assert!(pic.image.starts_with(b"\x89PNG"), "{:?}", &pic.image[..8]);
 }
 
 #[test]
@@ -152,6 +191,48 @@ fn render_package_with_logo(
     .unwrap();
     let metadata = prepared.document_metadata();
     with_renderer(logo_asset, |r| r.render(&prepared, &metadata))
+}
+
+/// Renders `markdown` with the files `files` in the same directory. `edit`
+/// changes the prepared document before the render.
+fn render_with(
+    markdown: &str,
+    files: &[(&str, Vec<u8>)],
+    edit: impl FnOnce(&mut PreparedDocument),
+) -> Result<Package> {
+    let temp = TempDir::new().unwrap();
+    for (name, data) in files {
+        fs::write(temp.path().join(name), data).unwrap();
+    }
+    render_in(
+        temp.path(),
+        markdown,
+        &Cache::new(None, true).unwrap(),
+        edit,
+    )
+}
+
+/// Renders `markdown` as `index.md` in the directory `dir` with the
+/// blank theme, no logo and the artifact cache `cache`. `edit` changes
+/// the prepared document before the render.
+fn render_in(
+    dir: &Path,
+    markdown: &str,
+    cache: &Cache,
+    edit: impl FnOnce(&mut PreparedDocument),
+) -> Result<Package> {
+    let source = dir.join("index.md");
+    fs::write(&source, markdown).unwrap();
+    let logger = DebugDumper::new(false);
+    let mut prepared =
+        prepare_document(&logger, dir, &source, Some("index"), BrokenLinkMode::Warn).unwrap();
+    edit(&mut prepared);
+    let metadata = prepared.document_metadata();
+    let themes = DiagramThemes::default();
+    let profile = RenderProfile::from_metadata(EffectiveFormat::Docx, &JsonMap::new()).unwrap();
+    let params = Theme::Embedded("blank").docx_params().unwrap();
+    let renderer = DocxRenderer::new(cache, &themes, &logger, dir, None, &params, profile);
+    renderer.render(&prepared, &metadata)
 }
 
 /// Renders `markdown` with the blank theme and its logo, and gives the

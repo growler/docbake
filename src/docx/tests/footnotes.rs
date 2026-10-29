@@ -1,27 +1,12 @@
 //! Tests of the footnote output: `word/footnotes.xml`, the references in
 //! `word/document.xml`, and the package parts that refer to the footnotes.
 
-use std::fs;
 use std::sync::LazyLock;
 
-use anyhow::Result;
 use docx_rs::{BuildXML, Footnote, Run};
 use regex::Regex;
-use resvg::tiny_skia;
-use serde_json::Map as JsonMap;
-use tempfile::TempDir;
 
-use crate::cache::Cache;
-use crate::cli::BrokenLinkMode;
-use crate::conditional::{EffectiveFormat, RenderProfile};
-use crate::diagram::DiagramThemes;
-use crate::graph::{prepare_document, PreparedDocument};
-use crate::theme::Theme;
-use crate::DebugDumper;
-
-use super::super::package::Package;
-use super::super::DocxRenderer;
-use super::{assert_in_order, between, parts, render_parts};
+use super::{assert_in_order, between, parts, png, render_parts, render_with};
 
 /// A footnote of `word/footnotes.xml` with its ID. The separator footnotes
 /// have a `w:type` and do not match.
@@ -86,46 +71,6 @@ fn paragraphs(footnote: &str) -> Vec<String> {
             format!("[{style}] {text}")
         })
         .collect()
-}
-
-/// Renders `markdown` with the files `files` in the same directory. `edit`
-/// changes the prepared document before the render.
-fn render_with(
-    markdown: &str,
-    files: &[(&str, Vec<u8>)],
-    edit: impl FnOnce(&mut PreparedDocument),
-) -> Result<Package> {
-    let temp = TempDir::new().unwrap();
-    let source = temp.path().join("index.md");
-    fs::write(&source, markdown).unwrap();
-    for (name, data) in files {
-        fs::write(temp.path().join(name), data).unwrap();
-    }
-    let logger = DebugDumper::new(false);
-    let mut prepared = prepare_document(
-        &logger,
-        temp.path(),
-        &source,
-        Some("index"),
-        BrokenLinkMode::Warn,
-    )
-    .unwrap();
-    edit(&mut prepared);
-    let metadata = prepared.document_metadata();
-    let cache = Cache::new(None, true).unwrap();
-    let themes = DiagramThemes::default();
-    let profile = RenderProfile::from_metadata(EffectiveFormat::Docx, &JsonMap::new()).unwrap();
-    let params = Theme::Embedded("blank").docx_params().unwrap();
-    let renderer = DocxRenderer::new(
-        &cache,
-        &themes,
-        &logger,
-        temp.path(),
-        None,
-        &params,
-        profile,
-    );
-    renderer.render(&prepared, &metadata)
 }
 
 #[test]
@@ -299,7 +244,7 @@ Shown[^b].
 
 #[test]
 fn image_in_footnote_gives_alt_text_and_nested_reference_gives_nothing() {
-    let png = tiny_skia::Pixmap::new(2, 2).unwrap().encode_png().unwrap();
+    let png = png(2, 2);
     let package = render_with(
         "\
 Body ![body image](image.png) text[^a].

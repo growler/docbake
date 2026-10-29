@@ -80,6 +80,13 @@ impl Page {
         let (width, _) = self.size.dimensions();
         width - self.margins.left.0 - self.margins.right.0
     }
+
+    /// Gives the height of the text area in twips: the page height minus the
+    /// top and bottom margins.
+    pub(crate) fn text_height(&self) -> u32 {
+        let (_, height) = self.size.dimensions();
+        height - self.margins.top.0 - self.margins.bottom.0
+    }
 }
 
 /// The heights of the theme logo. The width keeps the aspect ratio of the
@@ -752,7 +759,7 @@ fn check_based_on(styles: &BTreeMap<String, RawStyle>) -> Result<()> {
 /// Splits a value into its number and the text after the number. The number
 /// is `-?[0-9]+(\.[0-9]+)?`. Gives `None` if the value does not start with
 /// such a number.
-fn split_number(s: &str) -> Option<(&str, &str)> {
+pub(super) fn split_number(s: &str) -> Option<(&str, &str)> {
     let bytes = s.as_bytes();
     let digits = |from: usize| {
         from + bytes[from..]
@@ -777,14 +784,14 @@ fn split_number(s: &str) -> Option<(&str, &str)> {
 
 /// A number times a unit factor, as the exact fraction `n / q` with `q > 0`.
 #[derive(Clone, Copy)]
-struct Scaled {
+pub(super) struct Scaled {
     n: i128,
     q: i128,
 }
 
 impl Scaled {
     /// Gives `number * num / den`. `number` is a number from [`split_number`].
-    fn new(number: &str, num: i128, den: i128) -> Result<Self, String> {
+    pub(super) fn new(number: &str, num: i128, den: i128) -> Result<Self, String> {
         let (int, fraction) = number.split_once('.').unwrap_or((number, ""));
         let (sign, int) = match int.strip_prefix('-') {
             Some(int) => (-1, int),
@@ -806,7 +813,7 @@ impl Scaled {
     }
 
     /// Gives the value rounded half away from zero.
-    fn round(self) -> i128 {
+    pub(super) fn round(self) -> i128 {
         (2 * self.n.abs() + self.q) / (2 * self.q) * self.n.signum()
     }
 
@@ -815,9 +822,16 @@ impl Scaled {
         (self.n % self.q == 0).then_some(self.n / self.q)
     }
 
-    /// Tells if the value is from `min` to `max`.
-    fn within(self, min: i128, max: i128) -> bool {
-        (min * self.q..=max * self.q).contains(&self.n)
+    /// Tells if the value is from `min` to `max`. A bound times `q` that
+    /// is out of the `i128` range saturates; the result stays correct
+    /// because `n` is in that range.
+    pub(super) fn within(self, min: i128, max: i128) -> bool {
+        (min.saturating_mul(self.q)..=max.saturating_mul(self.q)).contains(&self.n)
+    }
+
+    /// Gives -1, 0 or 1 for a negative, zero or positive value.
+    pub(super) fn signum(self) -> i128 {
+        self.n.signum()
     }
 }
 
@@ -1896,6 +1910,25 @@ lists:
             .docx_params()
             .unwrap();
         assert_eq!(params.page.text_width(), 10205);
+    }
+
+    #[test]
+    fn text_height() {
+        let params = crate::theme::Theme::Embedded("blank")
+            .docx_params()
+            .unwrap();
+        assert_eq!(params.page.text_height(), 14570);
+        let fits = BASE.replace(
+            "margins: {top: 2cm, bottom: 2cm,",
+            "margins: {top: 8418tw, bottom: 8419tw,",
+        );
+        assert_eq!(
+            DocxParams::from_yaml(&yaml(&fits, "  Normal: {}\n"))
+                .unwrap()
+                .page
+                .text_height(),
+            1
+        );
     }
 
     #[test]

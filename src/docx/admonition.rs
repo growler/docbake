@@ -54,7 +54,9 @@ impl<'a> DocxRenderer<'a> {
     /// - The styles carry the fill and the border. Adjacent paragraphs
     ///   with identical borders merge into a continuous box in Word and
     ///   Google Docs.
-    /// - Other body blocks (lists, tables, code, diagrams, block quotes)
+    /// - A sole image and a diagram take the body style and are in the
+    ///   box.
+    /// - Other body blocks (lists, tables, code, captions, block quotes)
     ///   keep their own styles and are out of the box.
     pub(super) fn render_admonition(
         &self,

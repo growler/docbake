@@ -11,7 +11,8 @@
 //! A document without title-page front matter starts with the TOC and the
 //! page break after it. These blocks are in the Paragraphs group in all
 //! fixtures. The lint also scans `word/footnotes.xml` of each fixture, and
-//! the header and footer parts of the Paragraphs fixture.
+//! the header and footer parts of the Paragraphs fixture. The Images
+//! fixture has the PNG file `image.png` in its directory.
 
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::Write;
@@ -21,7 +22,7 @@ use std::sync::LazyLock;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 
-use super::render_package;
+use super::{png, render_package, render_with};
 
 /// A group of elements that one part of the renderer makes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -42,6 +43,8 @@ enum Group {
     Diagrams,
     /// Footnotes.
     Footnotes,
+    /// Images.
+    Images,
 }
 
 /// The properties that a style must carry. The names must match exactly,
@@ -284,6 +287,19 @@ Text with a note[^a] and a second note[^b].
 [^c]: Table note.
 ";
 
+const IMAGES: &str = "\
+---
+lang: en
+---
+![Block image](image.png)
+
+![Sized image](image.png){width=50% height=2cm}
+
+Text with an ![inline image](image.png) image.
+
+> ![Quoted image](image.png)
+";
+
 const FIXTURES: &[(Group, &str)] = &[
     (Group::Paragraphs, PARAGRAPHS),
     (Group::Code, CODE),
@@ -293,6 +309,7 @@ const FIXTURES: &[(Group, &str)] = &[
     (Group::Captions, CAPTIONS),
     (Group::Diagrams, DIAGRAMS),
     (Group::Footnotes, FOOTNOTES),
+    (Group::Images, IMAGES),
 ];
 
 /// An element from [`STYLE_PROPERTIES`] or [`STYLE_REFERENCES`].
@@ -498,7 +515,11 @@ static RENDERED: LazyLock<Rendered> = LazyLock::new(|| {
     let style_ids = style_ids(&xml.styles);
     let mut parts = Vec::new();
     for &(group, markdown) in FIXTURES {
-        let package = render_package(markdown).unwrap();
+        let package = match group {
+            Group::Images => render_with(markdown, &[("image.png", png(40, 10))], |_| {}),
+            _ => render_package(markdown),
+        }
+        .unwrap();
         let xml = package.xml();
         let document = scan(&xml.document);
         let blocks = &document.blocks[..prefix.min(document.blocks.len())];
@@ -598,6 +619,24 @@ fn footnotes_fixture_footnotes_part_has_footnotes() {
     );
     assert!(part.text.contains(">Table<"), "{}", part.text);
     assert!(!part.scan.hits.is_empty());
+}
+
+#[test]
+fn images_fixture_has_images() {
+    let part = RENDERED
+        .parts
+        .iter()
+        .find(|p| p.group == Group::Images && p.name == "word/document.xml")
+        .unwrap();
+    assert_eq!(part.text.matches("<w:drawing>").count(), 4, "{}", part.text);
+    assert_eq!(
+        part.text
+            .matches(r#"<w:pStyle w:val="ImageBlock" />"#)
+            .count(),
+        2,
+        "{}",
+        part.text
+    );
 }
 
 #[test]

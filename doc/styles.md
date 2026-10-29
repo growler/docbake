@@ -102,7 +102,7 @@ Legend:
 | `figure.block` (dedicated figure container) |  x   |  x  |      |
 | `image.block`                               |  x   |  x  |  x   |
 | `image.inline`                              |  x   |  x  |  x   |
-| `image.size` (`width`/`height`)             |  x   |  x  |      |
+| `image.size` (`width`/`height`)             |  x   |  x  |  x   |
 | `diagram`                                   |  x   |  x  |  x   |
 | `diagram.mermaid`                           |  x   |  x  |  x   |
 | `diagram.plantuml`                          |  x   |  x  |  x   |
@@ -352,12 +352,19 @@ style). No semantic name refers to them.
 `image.block`
 
 :  `ImageBlock` -- paragraph style, based on `Normal`. The paragraph contains
-   only the image.
+   only the image. In a block quote, an admonition or a definition, the
+   paragraph has the paragraph style of that block.
 
 `image.inline`
 
 :  No style. The image is an inline drawing (`wp:inline`) in a run of the
    paragraph.
+
+`image.size`
+
+:  No style. The `width` and `height` attributes set the extent
+   (`wp:extent`) of the drawing of an image or a diagram. The extent fits
+   in the text area of the page.
 
 `diagram`
 `diagram.mermaid`
@@ -367,7 +374,8 @@ style). No semantic name refers to them.
 `diagram.d2`
 
 :  `ImageBlock` -- paragraph style, based on `Normal`. The diagram is a PNG
-   image in its own paragraph.
+   image in its own paragraph. In a block quote, an admonition or a
+   definition, the paragraph has the paragraph style of that block.
 
    `DiagramError` -- paragraph style, based on `Normal`. If the diagram
    tool cannot make the image, a paragraph with this style shows the error

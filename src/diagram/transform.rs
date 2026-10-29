@@ -119,15 +119,18 @@ pub(crate) fn transform_diagram_images(
 
     // Phase 2: replace each paragraph with a Diagram node.
     for (paragraph_ref, image_ref, diagram_type, file_path, drawio_page) in candidates {
+        let dest = as_kind_data!(arena[image_ref], Image)
+            .destination_str(source)
+            .to_owned();
         let diagram_node = if diagram_type == DiagramType::DrawIo {
             // Draw.io diagrams store the resolved path for deferred
             // rendering — the actual SVG/PDF conversion happens at render
             // time so that each renderer can choose the appropriate format.
-            arena.new_node(Diagram::from_drawio(file_path, drawio_page))
+            arena.new_node(Diagram::from_drawio(file_path, drawio_page, dest))
         } else {
             let content = fs::read_to_string(&file_path)
                 .with_context(|| format!("failed to read diagram file {}", file_path.display()))?;
-            arena.new_node(Diagram::from_file(diagram_type, content))
+            arena.new_node(Diagram::from_file(diagram_type, content, dest))
         };
         if let Some(pos) = arena[paragraph_ref].pos() {
             arena[diagram_node].set_pos(pos);

@@ -13,7 +13,9 @@
 //! Diagrams are rendered to PNG and embedded as inline images.  Before the
 //! body walk, the diagrams that the artifact cache does not hold are
 //! rendered in parallel into the cache.
-//! Regular images are read from disk and embedded directly.
+//! Regular images are read from disk and embedded directly.  The `width`
+//! and `height` attributes set the extent of an image or a diagram, and
+//! the extent fits in the text area.
 //!
 //! Each footnote reference gives a Word footnote in `word/footnotes.xml`.
 
@@ -42,6 +44,7 @@ use self::title_page::TitleFields;
 mod admonition;
 mod blocks;
 mod doc_props;
+mod extent;
 mod fields;
 mod font_table;
 mod footnotes;
@@ -65,6 +68,10 @@ pub(crate) struct DocxRenderer<'a> {
     base_dir: &'a Path,
     logo_asset: Option<(Vec<u8>, String)>,
     params: &'a DocxParams,
+    /// The width and the height of the text area in EMU.
+    text_area: (u64, u64),
+    /// `1em` in EMU.
+    em: u64,
     toc_heading_keys: RefCell<VecDeque<String>>,
     bookmark_counter: RefCell<usize>,
     /// The `w:numId` of the next list.
@@ -113,6 +120,8 @@ impl<'a> DocxRenderer<'a> {
             base_dir,
             logo_asset,
             params,
+            text_area: media::text_area(&params.page),
+            em: media::em(params),
             toc_heading_keys: RefCell::new(VecDeque::new()),
             bookmark_counter: RefCell::new(0),
             list_num_counter: RefCell::new(numbering::FIRST_LIST_NUM_ID),
@@ -174,7 +183,7 @@ impl<'a> DocxRenderer<'a> {
 
         docx = self.add_table_of_contents(docx, graph)?;
 
-        self.prefetch_diagrams(graph);
+        self.prefetch_diagrams(graph)?;
 
         // ── Walk the document graph (top-level children only) ───────────
         // Mirror the Typst renderer approach: iterate document-level

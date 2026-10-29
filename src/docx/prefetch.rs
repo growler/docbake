@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::num::NonZeroUsize;
+use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 
@@ -18,21 +19,19 @@ impl<'a> DocxRenderer<'a> {
     /// Render the diagrams that the body walk embeds and that the artifact
     /// cache does not hold, in parallel, and store them in the cache.
     ///
-    /// The body walk then reads these diagrams from the cache.  This step
-    /// does not log and ignores all errors: on a cache miss the walk renders
-    /// the diagram again and reports the error.  It does nothing when the
-    /// cache is disabled.
-    pub(super) fn prefetch_diagrams(&self, graph: &DocumentGraph) {
+    /// The body walk then reads these diagrams from the cache.  An error
+    /// of the walk that collects the diagrams stops the build before a
+    /// render: an invalid `width` or `height` of a diagram, or an invalid
+    /// visibility condition.  The body walk gives the same error.  This
+    /// step does not log and ignores render errors: on a cache miss the
+    /// walk renders the diagram again and reports the error.  It does
+    /// nothing when the cache is disabled.
+    pub(super) fn prefetch_diagrams(&self, graph: &DocumentGraph) -> Result<()> {
         if !self.cache.is_enabled() {
-            return;
+            return Ok(());
         }
         let mut jobs = Vec::new();
-        if self
-            .collect_graph_diagrams(graph, graph.root_id, &mut jobs)
-            .is_err()
-        {
-            return;
-        }
+        self.collect_graph_diagrams(graph, graph.root_id, &mut jobs)?;
         let mut seen = HashSet::new();
         jobs.retain(|job| {
             !self.cache.contains(job.cache_key(), job.cache_tag())
@@ -54,10 +53,12 @@ impl<'a> DocxRenderer<'a> {
                 });
             }
         });
+        Ok(())
     }
 
     /// Collect the diagram jobs of a document occurrence with the include
-    /// and visibility rules of `render_graph_document`.
+    /// and visibility rules of `render_graph_document`.  An invalid `width`
+    /// or `height` of a diagram is an error.
     pub(super) fn collect_graph_diagrams(
         &self,
         graph: &DocumentGraph,
@@ -76,24 +77,25 @@ impl<'a> DocxRenderer<'a> {
                 }
                 continue;
             }
-            self.collect_block_diagrams(&doc.arena, &doc.source, child, jobs)?;
+            self.collect_block_diagrams(&doc.arena, &doc.source, &doc.path, child, jobs)?;
         }
         Ok(())
     }
 
-    /// Collect the diagram jobs of a block with the traversal of
-    /// `render_block`.
+    /// Collect the diagram jobs of a block of the document `path` with the
+    /// traversal of `render_block`.
     fn collect_block_diagrams(
         &self,
         arena: &Arena,
         source: &str,
+        path: &Path,
         node_ref: NodeRef,
         jobs: &mut Vec<DiagramJob>,
     ) -> Result<()> {
         match arena[node_ref].kind_data() {
             KindData::Blockquote(_) => {
                 for child in arena[node_ref].children(arena) {
-                    self.collect_block_diagrams(arena, source, child, jobs)?;
+                    self.collect_block_diagrams(arena, source, path, child, jobs)?;
                 }
             }
             KindData::List(_) => {
@@ -102,7 +104,7 @@ impl<'a> DocxRenderer<'a> {
                         continue;
                     }
                     for child in arena[item_ref].children(arena) {
-                        self.collect_block_diagrams(arena, source, child, jobs)?;
+                        self.collect_block_diagrams(arena, source, path, child, jobs)?;
                     }
                 }
             }
@@ -120,13 +122,14 @@ impl<'a> DocxRenderer<'a> {
                         })
                         .next_back();
                     if let Some(br) = block_ref {
-                        self.collect_block_diagrams(arena, source, br, jobs)?;
+                        self.collect_block_diagrams(arena, source, path, br, jobs)?;
                     }
                 } else if rushdown::matches_extension_kind!(
                     arena,
                     node_ref,
                     crate::diagram::Diagram
                 ) {
+                    self.diagram_size(arena, source, path, node_ref)?;
                     if let Some(job) = self.diagram_job(arena, source, node_ref) {
                         jobs.push(job);
                     }
@@ -139,7 +142,7 @@ impl<'a> DocxRenderer<'a> {
                     )?
                 {
                     for child in arena[node_ref].children(arena) {
-                        self.collect_block_diagrams(arena, source, child, jobs)?;
+                        self.collect_block_diagrams(arena, source, path, child, jobs)?;
                     }
                 } else if rushdown::matches_extension_kind!(arena, node_ref, DefinitionList) {
                     for child in arena[node_ref].children(arena) {
@@ -147,7 +150,7 @@ impl<'a> DocxRenderer<'a> {
                             continue;
                         }
                         for def_child in arena[child].children(arena) {
-                            self.collect_block_diagrams(arena, source, def_child, jobs)?;
+                            self.collect_block_diagrams(arena, source, path, def_child, jobs)?;
                         }
                     }
                 }

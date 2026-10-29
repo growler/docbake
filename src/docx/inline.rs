@@ -49,7 +49,7 @@ impl<'a> DocxRenderer<'a> {
                 let pic = if context.footnote {
                     None
                 } else {
-                    self.resolve_graph_image(context, node_ref)
+                    self.resolve_graph_image(context, node_ref)?
                 };
                 if let Some(pic) = pic {
                     vec![Run::new().add_image(pic)]

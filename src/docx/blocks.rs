@@ -58,7 +58,11 @@ impl<'a> DocxRenderer<'a> {
             }
             KindData::Paragraph(_) => {
                 let mut para = Paragraph::new();
-                if let Some(style) = context.paragraph_style {
+                // A paragraph with only an image is an image block.
+                let style = context.paragraph_style.or_else(|| {
+                    crate::diagram::paragraph_has_sole_image(arena, node_ref).map(|_| "ImageBlock")
+                });
+                if let Some(style) = style {
                     para = para.style(style);
                 }
                 for child in arena[node_ref].children(arena) {
@@ -106,7 +110,7 @@ impl<'a> DocxRenderer<'a> {
                     node_ref,
                     crate::diagram::Diagram
                 ) {
-                    docx = self.render_diagram(docx, arena, source, node_ref)?;
+                    docx = self.render_diagram(docx, context, node_ref)?;
                 } else if rushdown::matches_extension_kind!(arena, node_ref, FencedDiv) {
                     docx = self.render_fenced_div(docx, context, node_ref)?;
                 } else if rushdown::matches_extension_kind!(arena, node_ref, DefinitionList) {
