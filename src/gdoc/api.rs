@@ -13,9 +13,6 @@ const DRIVE_UPLOAD_URL: &str = "https://www.googleapis.com/upload/drive/v3/files
 /// Google Drive API v3 metadata endpoint.
 const DRIVE_FILES_URL: &str = "https://www.googleapis.com/drive/v3/files";
 
-/// Google Docs API v1 document endpoint.
-const DOCS_DOCUMENTS_URL: &str = "https://docs.googleapis.com/v1/documents";
-
 /// Google Docs MIME type (target format for import conversion).
 const GOOGLE_DOCS_MIME: &str = "application/vnd.google-apps.document";
 
@@ -33,49 +30,6 @@ pub(crate) struct DriveFile {
     pub mime_type: Option<String>,
     #[serde(rename = "webViewLink")]
     pub web_view_link: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GDocDocument {
-    body: Option<GDocBody>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GDocBody {
-    content: Vec<GDocStructuralElement>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct GDocStructuralElement {
-    start_index: Option<i32>,
-    end_index: Option<i32>,
-    paragraph: Option<GDocParagraph>,
-    table_of_contents: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct GDocParagraph {
-    elements: Option<Vec<GDocParagraphElement>>,
-    paragraph_style: Option<GDocParagraphStyle>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct GDocParagraphElement {
-    text_run: Option<GDocTextRun>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GDocTextRun {
-    content: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct GDocParagraphStyle {
-    named_style_type: Option<String>,
 }
 
 /// Blocking HTTP client for the Google Drive v3 API.
@@ -159,111 +113,6 @@ impl GoogleDriveClient {
         Ok(file)
     }
 
-    /// Replace any existing TOC with a fresh native Google Docs TOC block.
-    pub fn ensure_native_toc(&self, file_id: &str) -> Result<()> {
-        let doc = self.get_document(file_id)?;
-        let content = doc
-            .body
-            .map(|b| b.content)
-            .context("Google Docs document body is missing")?;
-
-        let mut toc_start: Option<i32> = None;
-        let mut toc_end: Option<i32> = None;
-        let mut first_heading1_start: Option<i32> = None;
-
-        for element in &content {
-            let Some(start) = element.start_index else {
-                continue;
-            };
-            let end = element.end_index.unwrap_or(start);
-
-            if element.table_of_contents.is_some() {
-                toc_start = Some(start);
-                toc_end = Some(end);
-                continue;
-            }
-
-            if let Some(paragraph) = &element.paragraph {
-                if first_heading1_start.is_none()
-                    && paragraph
-                        .paragraph_style
-                        .as_ref()
-                        .and_then(|s| s.named_style_type.as_deref())
-                        == Some("HEADING_1")
-                {
-                    first_heading1_start = Some(start);
-                }
-
-                if toc_start.is_none() {
-                    let text = paragraph
-                        .elements
-                        .as_ref()
-                        .map(|items| {
-                            items
-                                .iter()
-                                .filter_map(|it| it.text_run.as_ref())
-                                .filter_map(|tr| tr.content.as_deref())
-                                .collect::<String>()
-                        })
-                        .unwrap_or_default();
-                    if text.contains("Table of Contents") || text.contains("Содержание") {
-                        toc_start = Some(start);
-                        toc_end = Some(end);
-                    }
-                }
-            }
-        }
-
-        let (delete_range, insert_index) = match (toc_start, toc_end, first_heading1_start) {
-            (Some(start), Some(end), _) if end > start => (Some((start, end)), start),
-            (Some(start), _, Some(h1)) if h1 > start => (Some((start, h1)), start),
-            (Some(start), _, _) => (None, start),
-            (None, _, _) => (None, 1),
-        };
-
-        let mut requests = Vec::new();
-        if let Some((start, end)) = delete_range {
-            requests.push(serde_json::json!({
-                "deleteContentRange": {
-                    "range": {
-                        "startIndex": start,
-                        "endIndex": end
-                    }
-                }
-            }));
-        }
-        requests.push(serde_json::json!({
-            "insertTableOfContents": {
-                "location": {
-                    "index": insert_index
-                }
-            }
-        }));
-
-        let url = format!("{DOCS_DOCUMENTS_URL}/{file_id}:batchUpdate");
-        let payload = serde_json::json!({ "requests": requests });
-
-        let req = self
-            .agent
-            .post(&url)
-            .header("Authorization", &format!("Bearer {}", self.access_token))
-            .header("Accept", "application/json");
-        let resp = req
-            .config()
-            .http_status_as_error(false)
-            .build()
-            .send_json(payload)
-            .with_context(|| format!("POST {url}"))?;
-
-        let status = resp.status().as_u16();
-        if status >= 400 {
-            let err_body: String = resp.into_body().read_to_string().unwrap_or_default();
-            bail!("Google Docs API batchUpdate error (HTTP {status}): {err_body}");
-        }
-
-        Ok(())
-    }
-
     /// Build and send a multipart/related upload request.
     fn multipart_upload(
         &self,
@@ -320,33 +169,6 @@ impl GoogleDriveClient {
             .read_json()
             .context("failed to parse Google Drive response")?;
         Ok(file)
-    }
-
-    fn get_document(&self, file_id: &str) -> Result<GDocDocument> {
-        let url = format!("{DOCS_DOCUMENTS_URL}/{file_id}");
-        let req = self
-            .agent
-            .get(&url)
-            .header("Authorization", &format!("Bearer {}", self.access_token))
-            .header("Accept", "application/json");
-        let resp = req
-            .config()
-            .http_status_as_error(false)
-            .build()
-            .call()
-            .with_context(|| format!("GET {url}"))?;
-
-        let status = resp.status().as_u16();
-        if status >= 400 {
-            let err_body: String = resp.into_body().read_to_string().unwrap_or_default();
-            bail!("Google Docs API error (HTTP {status}): {err_body}");
-        }
-
-        let doc: GDocDocument = resp
-            .into_body()
-            .read_json()
-            .context("failed to parse Google Docs document response")?;
-        Ok(doc)
     }
 }
 
@@ -494,10 +316,8 @@ mod tests {
 
     /// Upload `docs/research/docx-gdoc-probe/probe.docx` to My Drive with
     /// conversion to a Google Doc, the same as `publish gdoc`. Export the
-    /// Google Doc as DOCX and PDF to `result/probe-import.*`. Then replace the
-    /// TOC with a native Google Docs TOC, the same as `publish gdoc`, and
-    /// export again to `result/probe-toc.*`. Delete the Google Doc at the end,
-    /// also when an export fails.
+    /// Google Doc as DOCX and PDF to `result/probe-import.*`. Delete the
+    /// Google Doc at the end, also when an export fails.
     ///
     /// Needs stored Google Docs credentials and network access:
     /// `cargo test import_probe_and_export -- --ignored --nocapture`
@@ -512,12 +332,7 @@ mod tests {
         std::fs::create_dir_all(&out).expect("create result directory");
         // Remove the files of an earlier run, so that a failed export does
         // not leave old files next to new ones.
-        for name in [
-            "probe-import.docx",
-            "probe-import.pdf",
-            "probe-toc.docx",
-            "probe-toc.pdf",
-        ] {
+        for name in ["probe-import.docx", "probe-import.pdf"] {
             match std::fs::remove_file(out.join(name)) {
                 Err(err) if err.kind() != std::io::ErrorKind::NotFound => {
                     panic!("remove {name}: {err}")
@@ -533,25 +348,18 @@ mod tests {
             .expect("upload probe.docx");
         println!("Google Doc: {}", google_docs_url(&file.id));
 
-        let export_both = |stem: &str| -> Result<()> {
-            for (ext, mime) in [("docx", DOCX_MIME), ("pdf", "application/pdf")] {
-                let dest = out.join(format!("{stem}.{ext}"));
+        let exported = [("docx", DOCX_MIME), ("pdf", "application/pdf")]
+            .into_iter()
+            .try_for_each(|(ext, mime)| -> Result<()> {
+                let dest = out.join(format!("probe-import.{ext}"));
                 let n = client.export_to_file(&file.id, mime, &dest)?;
                 println!("wrote {} ({n} bytes)", dest.display());
-            }
-            Ok(())
-        };
-        let steps = export_both("probe-import").and_then(|()| {
-            // `publish gdoc` reports a TOC error as a warning and continues.
-            if let Err(err) = client.ensure_native_toc(&file.id) {
-                println!("Warning: failed to create native Google Docs TOC: {err}");
-            }
-            export_both("probe-toc")
-        });
+                Ok(())
+            });
 
         let deleted = client.delete(&file.id);
         println!("delete {}: {deleted:?}", file.id);
-        steps.expect("export Google Doc");
+        exported.expect("export Google Doc");
         deleted.expect("delete Google Doc");
     }
 }

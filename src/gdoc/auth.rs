@@ -19,7 +19,9 @@ use serde::{Deserialize, Serialize};
 const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const GOOGLE_AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 
-/// Scopes required for publishing and post-processing Google Docs.
+/// Scopes for the OAuth consent URL and the service-account token request.
+/// `drive.file` covers the Drive v3 upload that `publish gdoc` uses.
+/// `documents` gives access to the Google Docs API; no code here calls it.
 const GDOC_SCOPES: &str =
     "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/documents";
 const GDOC_SCOPES_URLENC: &str = "https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fdrive.file%20https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fdocuments";

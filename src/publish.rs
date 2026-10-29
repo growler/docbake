@@ -487,18 +487,6 @@ pub(crate) fn publish_gdoc_command(
         file
     };
 
-    if let Err(err) = client.ensure_native_toc(&result.id) {
-        let msg = err.to_string();
-        if msg.contains("insufficient") || msg.contains("permission") || msg.contains("scope") {
-            eprintln!(
-                "Warning: failed to create native Google Docs TOC: {msg}\n\
-                 Hint: re-run `docbake auth gdoc` to grant Docs API scope."
-            );
-        } else {
-            eprintln!("Warning: failed to create native Google Docs TOC: {msg}");
-        }
-    }
-
     // ── print URL ───────────────────────────────────────────────────────
     let url = result
         .web_view_link
