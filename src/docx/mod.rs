@@ -60,8 +60,6 @@ pub(crate) struct DocxRenderer<'a> {
     base_dir: &'a Path,
     logo_asset: Option<(Vec<u8>, String)>,
     params: &'a DocxParams,
-    #[allow(dead_code)]
-    diagram_counter: RefCell<u32>,
     toc_heading_keys: RefCell<VecDeque<String>>,
     bookmark_counter: RefCell<usize>,
     /// The `w:numId` of the next list.
@@ -100,7 +98,6 @@ impl<'a> DocxRenderer<'a> {
             base_dir,
             logo_asset,
             params,
-            diagram_counter: RefCell::new(0),
             toc_heading_keys: RefCell::new(VecDeque::new()),
             bookmark_counter: RefCell::new(0),
             list_num_counter: RefCell::new(numbering::FIRST_LIST_NUM_ID),

@@ -4,9 +4,8 @@
 //! does two checks on the parts:
 //!
 //! - Each style reference has a style definition in `word/styles.xml`.
-//! - The body does not set a property that a style must carry. The lint
-//!   does not check the groups in [`ALLOWED_GROUPS`]. The groups in
-//!   [`MARKUP_GROUPS`] can set the properties from
+//! - The body does not set a property that a style must carry. The groups
+//!   in [`MARKUP_GROUPS`] can set the properties from
 //!   [`MARKUP_PROPERTIES`].
 //!
 //! A document without title-page front matter starts with the TOC and the
@@ -53,13 +52,6 @@ const STYLE_PROPERTIES: &[&str] = &[
     "w:spacing",
 ];
 
-/// The properties from [`STYLE_PROPERTIES`] that the body can set in all
-/// groups.
-const ALWAYS_ALLOWED: &[&str] = &[];
-
-/// The groups that can set the properties from [`STYLE_PROPERTIES`].
-const ALLOWED_GROUPS: &[Group] = &[];
-
 /// The properties from [`STYLE_PROPERTIES`] that Markdown inline markup
 /// sets on one run: bold, italic and strikethrough.
 const MARKUP_PROPERTIES: &[&str] = &["w:b", "w:i", "w:strike"];
@@ -68,10 +60,6 @@ const MARKUP_PROPERTIES: &[&str] = &["w:b", "w:i", "w:strike"];
 /// set the properties from [`MARKUP_PROPERTIES`]. The Blocks fixture has
 /// bold text in an admonition body.
 const MARKUP_GROUPS: &[Group] = &[Group::Code, Group::Blocks];
-
-/// The style IDs that a group can refer to without a style definition.
-/// The IDs must match exactly.
-const UNDEFINED_STYLES: &[(Group, &str)] = &[];
 
 /// The elements that refer to a style with the attribute `w:val`.
 const STYLE_REFERENCES: &[&str] = &["w:pStyle", "w:rStyle", "w:tblStyle"];
@@ -510,9 +498,9 @@ fn fixtures_start_with_baseline_blocks() {
 #[test]
 fn style_references_are_defined() {
     let rendered = &*RENDERED;
-    let findings = findings(rendered, |group, hit| {
+    let findings = findings(rendered, |_, hit| {
         let id = hit.val.as_deref()?;
-        if rendered.style_ids.contains(id) || UNDEFINED_STYLES.contains(&(group, id)) {
+        if rendered.style_ids.contains(id) {
             return None;
         }
         Some(format!("{} '{id}'", hit.path))
@@ -528,8 +516,6 @@ fn style_references_are_defined() {
 fn body_has_no_direct_formatting() {
     let findings = findings(&RENDERED, |group, hit| {
         if hit.val.is_some()
-            || ALWAYS_ALLOWED.contains(&hit.name)
-            || ALLOWED_GROUPS.contains(&group)
             || (MARKUP_GROUPS.contains(&group) && MARKUP_PROPERTIES.contains(&hit.name))
         {
             return None;
