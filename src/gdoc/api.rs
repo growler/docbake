@@ -4,6 +4,8 @@
 //! Files are uploaded via the multipart/related protocol with automatic
 //! conversion to native Google Docs format.
 
+use std::io::Read;
+
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 
@@ -114,6 +116,10 @@ impl GoogleDriveClient {
     }
 
     /// Build and send a multipart/related upload request.
+    ///
+    /// The body is the metadata part and the content-part headers, then
+    /// `docx_data`, then the close boundary, read in sequence. The
+    /// Content-Length header is the exact body length.
     fn multipart_upload(
         &self,
         method: &str,
@@ -127,22 +133,20 @@ impl GoogleDriveClient {
             serde_json::to_string(metadata).context("failed to serialize file metadata")?;
 
         // Build multipart/related body (RFC 2387).
-        let mut body = Vec::with_capacity(metadata_json.len() + docx_data.len() + 256);
-
-        // -- metadata part
-        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
-        body.extend_from_slice(b"Content-Type: application/json; charset=UTF-8\r\n\r\n");
-        body.extend_from_slice(metadata_json.as_bytes());
-        body.extend_from_slice(b"\r\n");
-
-        // -- content part
-        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
-        body.extend_from_slice(format!("Content-Type: {DOCX_MIME}\r\n\r\n").as_bytes());
-        body.extend_from_slice(docx_data);
-        body.extend_from_slice(b"\r\n");
-
-        // -- close boundary
-        body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+        // -- metadata part, then the headers of the content part
+        let head = format!(
+            "--{boundary}\r\n\
+             Content-Type: application/json; charset=UTF-8\r\n\r\n\
+             {metadata_json}\r\n\
+             --{boundary}\r\n\
+             Content-Type: {DOCX_MIME}\r\n\r\n"
+        );
+        // -- end of content part, then close boundary
+        let tail = format!("\r\n--{boundary}--\r\n");
+        // The reader must give exactly `content_length` bytes, thus both come
+        // from the same three slices. With fewer bytes, ureq waits without end.
+        let content_length = head.len() + docx_data.len() + tail.len();
+        let mut body = head.as_bytes().chain(docx_data).chain(tail.as_bytes());
 
         let content_type = format!("multipart/related; boundary={boundary}");
 
@@ -155,7 +159,8 @@ impl GoogleDriveClient {
             .header("Authorization", &format!("Bearer {}", self.access_token))
             .header("Accept", "application/json")
             .content_type(&content_type)
-            .send(body.as_slice())
+            .header("Content-Length", content_length)
+            .send(ureq::SendBody::from_reader(&mut body))
             .with_context(|| format!("{method} {url}"))?;
 
         let status = resp.status().as_u16();
@@ -312,6 +317,135 @@ mod tests {
     #[test]
     fn parse_folder_id_raw() {
         assert_eq!(parse_folder_id("1XyZ_AbC"), "1XyZ_AbC");
+    }
+
+    /// Read one HTTP request: return the head (up to and with CRLFCRLF) as
+    /// text and the body of `Content-Length` bytes.
+    fn read_request(stream: &mut std::net::TcpStream) -> (String, Vec<u8>) {
+        let mut buf = Vec::new();
+        let mut byte = [0u8; 1];
+        while !buf.ends_with(b"\r\n\r\n") {
+            stream.read_exact(&mut byte).expect("read request head");
+            buf.push(byte[0]);
+        }
+        let head = String::from_utf8(buf).expect("request head is UTF-8");
+        let len: usize = header_values(&head, "content-length")
+            .first()
+            .expect("Content-Length header")
+            .parse()
+            .expect("Content-Length is a number");
+        let mut body = vec![0u8; len];
+        stream.read_exact(&mut body).expect("read request body");
+        (head, body)
+    }
+
+    /// Return the values of all headers in `head` with the name `name`
+    /// (case-insensitive).
+    fn header_values<'a>(head: &'a str, name: &str) -> Vec<&'a str> {
+        head.lines()
+            .skip(1)
+            .filter_map(|line| line.split_once(':'))
+            .filter(|(k, _)| k.trim().eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.trim())
+            .collect()
+    }
+
+    /// Accept one connection on `listener` in 10 s. Panic with the result of
+    /// `upload` if the thread ends before it connects.
+    fn accept_or_fail<T: std::fmt::Debug>(
+        listener: &std::net::TcpListener,
+        upload: std::thread::JoinHandle<T>,
+    ) -> (std::net::TcpStream, std::thread::JoinHandle<T>) {
+        use std::time::{Duration, Instant};
+
+        listener.set_nonblocking(true).expect("set non-blocking");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            match listener.accept() {
+                Ok((stream, _)) => {
+                    // An accepted socket can inherit non-blocking mode.
+                    stream.set_nonblocking(false).expect("set blocking");
+                    return (stream, upload);
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(e) => panic!("accept: {e}"),
+            }
+            if upload.is_finished() {
+                panic!("upload ended before it connected: {:?}", upload.join());
+            }
+            assert!(Instant::now() < deadline, "no connection in 10 s");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn multipart_upload_sends_exact_body_and_content_length() {
+        use std::io::Write;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let url = format!(
+            "http://{}/path?query",
+            listener.local_addr().expect("local address")
+        );
+        // Larger than the 128 KiB output buffer of ureq.
+        let docx: Vec<u8> = (0..300_000).map(|i| (i % 251) as u8).collect();
+        let metadata = serde_json::json!({ "mimeType": GOOGLE_DOCS_MIME });
+
+        let upload = {
+            let (url, metadata, docx) = (url.clone(), metadata.clone(), docx.clone());
+            std::thread::spawn(move || {
+                // No proxy from the environment.
+                let config = ureq::Agent::config_builder().proxy(None).build();
+                let client = GoogleDriveClient {
+                    access_token: "test-token".into(),
+                    agent: ureq::Agent::new_with_config(config),
+                };
+                client.multipart_upload("PATCH", &url, &metadata, &docx)
+            })
+        };
+
+        let (mut stream, upload) = accept_or_fail(&listener, upload);
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+            .expect("set read timeout");
+        let (head, body) = read_request(&mut stream);
+        let reply = r#"{"id":"doc-1","name":"Test"}"#;
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\n\
+             Content-Type: application/json\r\n\
+             Content-Length: {}\r\n\
+             Connection: close\r\n\r\n{reply}",
+            reply.len()
+        )
+        .expect("write response");
+
+        let file = upload.join().expect("upload thread").expect("upload");
+        assert_eq!(file.id, "doc-1");
+
+        assert_eq!(head.lines().next(), Some("PATCH /path?query HTTP/1.1"));
+        assert_eq!(header_values(&head, "authorization"), ["Bearer test-token"]);
+        assert!(header_values(&head, "transfer-encoding").is_empty());
+        let content_type = header_values(&head, "content-type");
+        let boundary = content_type
+            .first()
+            .and_then(|v| v.strip_prefix("multipart/related; boundary="))
+            .expect("multipart/related content type");
+
+        let mut expected = Vec::new();
+        expected.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        expected.extend_from_slice(b"Content-Type: application/json; charset=UTF-8\r\n\r\n");
+        expected.extend_from_slice(format!(r#"{{"mimeType":"{GOOGLE_DOCS_MIME}"}}"#).as_bytes());
+        expected.extend_from_slice(format!("\r\n--{boundary}\r\n").as_bytes());
+        expected.extend_from_slice(format!("Content-Type: {DOCX_MIME}\r\n\r\n").as_bytes());
+        expected.extend_from_slice(&docx);
+        expected.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+
+        assert_eq!(
+            header_values(&head, "content-length"),
+            [expected.len().to_string()]
+        );
+        assert!(body == expected, "request body differs from expected body");
     }
 
     /// Upload `docs/research/docx-gdoc-probe/probe.docx` to My Drive with
