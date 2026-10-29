@@ -706,8 +706,11 @@ table:
 lists:
   indent: 720tw
   hanging: 360tw
-  bullets: ["•", "◦", "▪", "•", "◦", "▪"]
-  numbers: [decimal, lower_letter, lower_roman, decimal, lower_letter, lower_roman]
+  BulletList: ["•", "◦", "▪", "•", "◦", "▪"]
+  OrderedList: [decimal, lower_letter, lower_roman, decimal, lower_letter, lower_roman]
+  TaskList:
+    checked: "☒"
+    unchecked: "☐"
 styles:
 "#;
 

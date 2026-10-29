@@ -70,8 +70,11 @@ table:
 lists:
   indent: 720tw # 0.5 in for each level
   hanging: 360tw # 0.25 in
-  bullets: ["•", "◦", "▪", "•", "◦", "▪"]
-  numbers: [decimal, lower_letter, lower_roman, decimal, lower_letter, lower_roman]
+  BulletList: ["•", "◦", "▪", "•", "◦", "▪"]
+  OrderedList: [decimal, lower_letter, lower_roman, decimal, lower_letter, lower_roman]
+  TaskList:
+    checked: "☒"
+    unchecked: "☐"
 
 styles:
   # Document text

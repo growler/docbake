@@ -64,6 +64,8 @@ pub(crate) struct DocxRenderer<'a> {
     diagram_counter: RefCell<u32>,
     toc_heading_keys: RefCell<VecDeque<String>>,
     bookmark_counter: RefCell<usize>,
+    /// The `w:numId` of the next list.
+    list_num_counter: RefCell<usize>,
     /// The layout of each rendered table, in document order.
     tables: RefCell<Vec<TableLayout>>,
     profile: RenderProfile,
@@ -101,6 +103,7 @@ impl<'a> DocxRenderer<'a> {
             diagram_counter: RefCell::new(0),
             toc_heading_keys: RefCell::new(VecDeque::new()),
             bookmark_counter: RefCell::new(0),
+            list_num_counter: RefCell::new(numbering::FIRST_LIST_NUM_ID),
             tables: RefCell::new(Vec::new()),
             profile,
         }
@@ -132,7 +135,7 @@ impl<'a> DocxRenderer<'a> {
         );
 
         // ── Define list numbering styles ────────────────────────────────
-        docx = numbering::add_list_numbering(docx);
+        docx = numbering::add_list_numbering(docx, &self.params.lists);
 
         // ── Title page ──────────────────────────────────────────────────
         let fields = TitleFields::from_metadata(metadata);

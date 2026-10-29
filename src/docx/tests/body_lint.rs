@@ -58,7 +58,7 @@ const STYLE_PROPERTIES: &[&str] = &[
 const ALWAYS_ALLOWED: &[&str] = &[];
 
 /// The groups that can set the properties from [`STYLE_PROPERTIES`].
-const ALLOWED_GROUPS: &[Group] = &[Group::Lists];
+const ALLOWED_GROUPS: &[Group] = &[];
 
 /// The properties from [`STYLE_PROPERTIES`] that Markdown inline markup
 /// sets on one run: bold, italic and strikethrough.
@@ -206,8 +206,19 @@ lang: en
 1. First
 2. Second
 
+Text.
+
+3. Third
+
+- Item
+  1. Nested ordered item
+
+Text.
+
 - [ ] Open task
 - [x] Done task
+  - [ ] Nested open task
+  - [x] Nested done task
 ";
 
 const FIXTURES: &[(Group, &str)] = &[

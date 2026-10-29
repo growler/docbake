@@ -1,13 +1,13 @@
 use anyhow::Result;
 use docx_rs::*;
 use rushdown::as_kind_data;
-use rushdown::ast::{KindData, NodeRef};
+use rushdown::ast::{KindData, NodeRef, Task};
 use rushdown_definition_list::{DefinitionList, Term, TermDefinition};
 use rushdown_fenced_div::FencedDiv;
 
 use crate::caption::{Caption, CaptionText};
 
-use super::numbering::{BULLET_NUMBERING_ID, ORDERED_NUMBERING_ID};
+use super::numbering::{ListKind, LIST_LEVELS};
 use super::toc::TOC_DEPTH;
 use super::{DocxRenderer, RenderContext};
 
@@ -84,15 +84,8 @@ impl<'a> DocxRenderer<'a> {
                     docx = self.render_block(docx, &context, child)?;
                 }
             }
-            KindData::List(list) => {
-                let is_ordered = list.is_ordered();
-                let numbering_id = if is_ordered {
-                    ORDERED_NUMBERING_ID
-                } else {
-                    BULLET_NUMBERING_ID
-                };
-
-                docx = self.render_list_items(docx, context, node_ref, numbering_id, 0)?;
+            KindData::List(_) => {
+                docx = self.render_list(docx, context, node_ref, 0)?;
             }
             KindData::Table(_) => {
                 docx = self.render_table(docx, context, node_ref)?;
@@ -160,34 +153,95 @@ impl<'a> DocxRenderer<'a> {
         Ok(docx)
     }
 
-    /// Render list items recursively, handling nested lists. The blocks
-    /// in a list item do not use the paragraph style of the enclosing
+    /// Render a list at the list level `level` and its nested lists. The
+    /// list gets its own `w:num`. An ordered list starts at its start
+    /// number. A list below the sixth level uses the sixth level.
+    ///
+    /// An unordered list with a task item is a task list. A task item
+    /// starts with a box character. A list item without a task in a task
+    /// list starts with the bullet character of the level.
+    ///
+    /// The first paragraph of an item has the marker. An item that is
+    /// empty or starts with another block gets an empty paragraph with the
+    /// marker first. The next paragraphs of the item use a `w:num` of
+    /// `TaskList` at the same level, thus they have the indent of the item
+    /// and no marker. A task list uses its own `w:num` for them. The other
+    /// blocks in an item do not use the paragraph style of the enclosing
     /// block.
-    fn render_list_items(
+    fn render_list(
         &self,
         mut docx: Docx,
         context: &RenderContext<'_>,
         list_ref: NodeRef,
-        numbering_id: usize,
-        indent_level: usize,
+        level: usize,
     ) -> Result<Docx> {
         let context = &RenderContext {
             paragraph_style: None,
             ..*context
         };
         let arena = context.arena;
-        for item_ref in arena[list_ref].children(arena) {
-            if !matches!(arena[item_ref].kind_data(), KindData::ListItem(_)) {
-                continue;
+        let list = as_kind_data!(arena[list_ref], List);
+        let items: Vec<_> = arena[list_ref]
+            .children(arena)
+            .filter_map(|item_ref| match arena[item_ref].kind_data() {
+                KindData::ListItem(item) => Some((item_ref, item.task())),
+                _ => None,
+            })
+            .collect();
+        let kind = if list.is_ordered() {
+            ListKind::Ordered
+        } else if items.iter().any(|(_, task)| task.is_some()) {
+            ListKind::Task
+        } else {
+            ListKind::Bullet
+        };
+        let ilvl = level.min(LIST_LEVELS - 1);
+        let start = list.is_ordered().then(|| list.start().max(1) as usize);
+        let num_id;
+        (docx, num_id) = self.add_list_num(docx, kind, ilvl, start);
+        // The `w:num` of the next paragraphs of the items.
+        let mut next_num_id = (kind == ListKind::Task).then_some(num_id);
+        let list_paragraph = |id: usize, marker: Option<&str>| {
+            let para = Paragraph::new()
+                .style("ListParagraph")
+                .numbering(NumberingId::new(id), IndentLevel::new(ilvl));
+            match marker {
+                Some(marker) => para.add_run(Run::new().add_text(format!("{marker} "))),
+                None => para,
             }
+        };
 
+        let lists = &self.params.lists;
+        for (item_ref, task) in items {
+            let mut marker = match task {
+                Some(Task::Completed) => Some(lists.task_list.checked.as_str()),
+                Some(Task::Active) => Some(lists.task_list.unchecked.as_str()),
+                _ if kind == ListKind::Task => Some(lists.bullet_list[ilvl].as_str()),
+                _ => None,
+            };
+            let starts_with_paragraph = arena[item_ref]
+                .children(arena)
+                .next()
+                .is_some_and(|child| matches!(arena[child].kind_data(), KindData::Paragraph(_)));
+            if !starts_with_paragraph {
+                docx = docx.add_paragraph(list_paragraph(num_id, marker.take()));
+            }
+            let mut first = starts_with_paragraph;
             for child in arena[item_ref].children(arena) {
                 match arena[child].kind_data() {
                     KindData::Paragraph(_) => {
-                        let mut para = Paragraph::new().numbering(
-                            NumberingId::new(numbering_id),
-                            IndentLevel::new(indent_level),
-                        );
+                        let id = if first {
+                            num_id
+                        } else if let Some(id) = next_num_id {
+                            id
+                        } else {
+                            let id;
+                            (docx, id) = self.add_list_num(docx, ListKind::Task, ilvl, None);
+                            next_num_id = Some(id);
+                            id
+                        };
+                        first = false;
+                        let mut para = list_paragraph(id, marker.take());
                         for inline in arena[child].children(arena) {
                             let runs = self.render_inline_runs(context, inline);
                             for run in runs {
@@ -196,19 +250,8 @@ impl<'a> DocxRenderer<'a> {
                         }
                         docx = docx.add_paragraph(para);
                     }
-                    KindData::List(nested_list) => {
-                        let nested_id = if nested_list.is_ordered() {
-                            ORDERED_NUMBERING_ID
-                        } else {
-                            BULLET_NUMBERING_ID
-                        };
-                        docx = self.render_list_items(
-                            docx,
-                            context,
-                            child,
-                            nested_id,
-                            indent_level + 1,
-                        )?;
+                    KindData::List(_) => {
+                        docx = self.render_list(docx, context, child, level + 1)?;
                     }
                     _ => {
                         docx = self.render_block(docx, context, child)?;
@@ -217,6 +260,23 @@ impl<'a> DocxRenderer<'a> {
             }
         }
         Ok(docx)
+    }
+
+    /// Add a `w:num` of the numbering definition `kind` and give its ID.
+    /// `start` is the start number of the level `ilvl`.
+    fn add_list_num(
+        &self,
+        docx: Docx,
+        kind: ListKind,
+        ilvl: usize,
+        start: Option<usize>,
+    ) -> (Docx, usize) {
+        let id = self.list_num_counter.replace_with(|id| *id + 1);
+        let mut num = Numbering::new(id, kind.abstract_num_id());
+        if let Some(start) = start {
+            num = num.add_override(LevelOverride::new(ilvl).start(start));
+        }
+        (docx.add_numbering(num), id)
     }
 
     /// Render a definition list. Terms use `DefinitionTerm`. The

@@ -1,108 +1,74 @@
 use docx_rs::*;
 
-/// Numbering ID for unordered (bullet) lists.
-pub(super) const BULLET_NUMBERING_ID: usize = 1;
-/// Numbering ID for ordered (decimal) lists.
-pub(super) const ORDERED_NUMBERING_ID: usize = 2;
+use super::params::Lists;
 
-/// Add the bullet and ordered list numbering definitions (levels 0 to 2).
-pub(super) fn add_list_numbering(docx: Docx) -> Docx {
-    docx.add_abstract_numbering(
-        AbstractNumbering::new(BULLET_NUMBERING_ID)
-            .add_level(
+/// The number of list levels in each numbering definition.
+pub(super) const LIST_LEVELS: usize = 6;
+
+/// The `w:numId` of the first list. docx-rs writes its own `w:num` with
+/// ID 1.
+pub(super) const FIRST_LIST_NUM_ID: usize = 2;
+
+/// A list numbering definition (`w:abstractNum`). The key of a definition
+/// in the renderer and in `docx.yaml` is `BulletList`, `OrderedList` or
+/// `TaskList`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ListKind {
+    /// `BulletList`: a bullet character on each level.
+    Bullet,
+    /// `OrderedList`: a number on each level.
+    Ordered,
+    /// `TaskList`: no marker. The item text starts with a box character.
+    Task,
+}
+
+impl ListKind {
+    const ALL: [ListKind; 3] = [ListKind::Bullet, ListKind::Ordered, ListKind::Task];
+
+    /// The fixed `w:abstractNumId`. docx-rs writes its own `w:abstractNum`
+    /// with ID 1.
+    pub(super) fn abstract_num_id(self) -> usize {
+        match self {
+            ListKind::Bullet => 2,
+            ListKind::Ordered => 3,
+            ListKind::Task => 4,
+        }
+    }
+}
+
+/// Add the `BulletList`, `OrderedList` and `TaskList` numbering
+/// definitions from `lists`.
+pub(super) fn add_list_numbering(docx: Docx, lists: &Lists) -> Docx {
+    ListKind::ALL.into_iter().fold(docx, |docx, kind| {
+        docx.add_abstract_numbering(abstract_numbering(kind, lists))
+    })
+}
+
+fn abstract_numbering(kind: ListKind, lists: &Lists) -> AbstractNumbering {
+    (0..LIST_LEVELS).fold(
+        AbstractNumbering::new(kind.abstract_num_id()),
+        |numbering, ilvl| {
+            let (format, text) = match kind {
+                ListKind::Bullet => ("bullet", lists.bullet_list[ilvl].clone()),
+                ListKind::Ordered => (lists.ordered_list[ilvl].ooxml(), format!("%{}.", ilvl + 1)),
+                ListKind::Task => ("none", String::new()),
+            };
+            let left = lists.indent.0 * (ilvl as u32 + 1);
+            numbering.add_level(
                 Level::new(
-                    0,
+                    ilvl,
                     Start::new(1),
-                    NumberFormat::new("bullet"),
-                    LevelText::new("\u{2022}"),
+                    NumberFormat::new(format),
+                    LevelText::new(text),
                     LevelJc::new("left"),
                 )
                 .indent(
-                    Some(720),
-                    Some(SpecialIndentType::Hanging(360)),
+                    Some(left as i32),
+                    Some(SpecialIndentType::Hanging(lists.hanging.0 as i32)),
                     None,
                     None,
                 ),
             )
-            .add_level(
-                Level::new(
-                    1,
-                    Start::new(1),
-                    NumberFormat::new("bullet"),
-                    LevelText::new("\u{25E6}"),
-                    LevelJc::new("left"),
-                )
-                .indent(
-                    Some(1440),
-                    Some(SpecialIndentType::Hanging(360)),
-                    None,
-                    None,
-                ),
-            )
-            .add_level(
-                Level::new(
-                    2,
-                    Start::new(1),
-                    NumberFormat::new("bullet"),
-                    LevelText::new("\u{25AA}"),
-                    LevelJc::new("left"),
-                )
-                .indent(
-                    Some(2160),
-                    Some(SpecialIndentType::Hanging(360)),
-                    None,
-                    None,
-                ),
-            ),
+        },
     )
-    .add_abstract_numbering(
-        AbstractNumbering::new(ORDERED_NUMBERING_ID)
-            .add_level(
-                Level::new(
-                    0,
-                    Start::new(1),
-                    NumberFormat::new("decimal"),
-                    LevelText::new("%1."),
-                    LevelJc::new("left"),
-                )
-                .indent(
-                    Some(720),
-                    Some(SpecialIndentType::Hanging(360)),
-                    None,
-                    None,
-                ),
-            )
-            .add_level(
-                Level::new(
-                    1,
-                    Start::new(1),
-                    NumberFormat::new("lowerLetter"),
-                    LevelText::new("%2."),
-                    LevelJc::new("left"),
-                )
-                .indent(
-                    Some(1440),
-                    Some(SpecialIndentType::Hanging(360)),
-                    None,
-                    None,
-                ),
-            )
-            .add_level(
-                Level::new(
-                    2,
-                    Start::new(1),
-                    NumberFormat::new("lowerRoman"),
-                    LevelText::new("%3."),
-                    LevelJc::new("left"),
-                )
-                .indent(
-                    Some(2160),
-                    Some(SpecialIndentType::Hanging(360)),
-                    None,
-                    None,
-                ),
-            ),
-    )
-    .add_numbering(Numbering::new(BULLET_NUMBERING_ID, BULLET_NUMBERING_ID))
-    .add_numbering(Numbering::new(ORDERED_NUMBERING_ID, ORDERED_NUMBERING_ID))
 }

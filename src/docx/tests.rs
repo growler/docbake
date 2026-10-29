@@ -25,6 +25,7 @@ use super::params::Twips;
 use super::DocxRenderer;
 
 mod body_lint;
+mod lists;
 mod tables;
 
 /// PNG signature followed by an IHDR chunk for a 2x3 image, then bytes
@@ -683,7 +684,7 @@ After.
             "[AdmonitionNoteHeader] Note",
             "[AdmonitionNoteBody] Before.",
             "[CodeBlock] code",
-            "[] Item",
+            "[ListParagraph] Item",
             "[] In a list.",
             "[Quote] Quoted.",
             "[AdmonitionNoteBody] In a plain div.",

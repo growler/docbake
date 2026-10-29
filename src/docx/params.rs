@@ -52,7 +52,6 @@ pub(crate) struct DocxParams {
     /// Font role (for example `body`, `heading`, `mono`) to font name.
     pub fonts: BTreeMap<String, String>,
     pub table: TableParams,
-    #[allow(dead_code)] // The renderer does not read the list parameters yet.
     pub lists: Lists,
     /// Style ID to style properties.
     pub styles: BTreeMap<String, Style>,
@@ -152,7 +151,6 @@ pub(crate) struct TableHeader {
 }
 
 /// List parameters. Each array has one item for each list level.
-#[allow(dead_code)] // The renderer does not read the list parameters yet.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Lists {
@@ -160,9 +158,25 @@ pub(crate) struct Lists {
     pub indent: Twips,
     /// The hanging indent of the list marker.
     pub hanging: Twips,
-    #[serde(deserialize_with = "bullets")]
-    pub bullets: [String; 6],
-    pub numbers: [NumberFormat; 6],
+    /// The bullet characters of the `BulletList` levels.
+    #[serde(rename = "BulletList", deserialize_with = "bullets")]
+    pub bullet_list: [String; 6],
+    /// The number formats of the `OrderedList` levels.
+    #[serde(rename = "OrderedList")]
+    pub ordered_list: [NumberFormat; 6],
+    /// The box characters of the task items.
+    #[serde(rename = "TaskList")]
+    pub task_list: TaskBoxes,
+}
+
+/// The box characters at the start of a task item.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TaskBoxes {
+    #[serde(deserialize_with = "text")]
+    pub checked: String,
+    #[serde(deserialize_with = "text")]
+    pub unchecked: String,
 }
 
 /// Number format of a numbered list level.
@@ -174,6 +188,19 @@ pub(crate) enum NumberFormat {
     UpperLetter,
     LowerRoman,
     UpperRoman,
+}
+
+impl NumberFormat {
+    /// The `w:numFmt` value.
+    pub(crate) fn ooxml(self) -> &'static str {
+        match self {
+            NumberFormat::Decimal => "decimal",
+            NumberFormat::LowerLetter => "lowerLetter",
+            NumberFormat::UpperLetter => "upperLetter",
+            NumberFormat::LowerRoman => "lowerRoman",
+            NumberFormat::UpperRoman => "upperRoman",
+        }
+    }
 }
 
 /// Paragraph alignment.
@@ -454,6 +481,13 @@ impl RawParams {
         }
         if !self.fonts.contains_key("body") {
             bail!("fonts: missing font role 'body'");
+        }
+        let lists = &self.lists;
+        if lists.hanging.0 > lists.indent.0 {
+            bail!(
+                "lists.hanging: the hanging indent must not be more than the indent ({} tw)",
+                lists.indent.0
+            );
         }
         for name in self.styles.keys() {
             check_style_id(name)?;
@@ -1098,6 +1132,10 @@ fn bullets<'de, D: Deserializer<'de>>(d: D) -> Result<[String; 6], D::Error> {
     <[Text; 6]>::deserialize(d).map(|bullets| bullets.map(|bullet| bullet.0))
 }
 
+fn text<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    Text::deserialize(d).map(|text| text.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1116,8 +1154,11 @@ table:
 lists:
   indent: 720tw
   hanging: 360tw
-  bullets: ["•", "◦", "▪", "•", "◦", "▪"]
-  numbers: [decimal, lower_letter, lower_roman, decimal, lower_letter, lower_roman]
+  BulletList: ["•", "◦", "▪", "•", "◦", "▪"]
+  OrderedList: [decimal, lower_letter, lower_roman, decimal, lower_letter, lower_roman]
+  TaskList:
+    checked: "☒"
+    unchecked: "☐"
 "#;
 
     /// Appends a `styles:` block to `base`.
@@ -1410,6 +1451,13 @@ lists:
         );
         assert_starts(
             &error(&yaml(
+                &BASE.replace("hanging: 360tw", "hanging: 721tw"),
+                "  Normal: {}\n",
+            )),
+            "lists.hanging: the hanging indent must not be more than the indent (720 tw)",
+        );
+        assert_starts(
+            &error(&yaml(
                 &BASE.replace("body: PT Sans, ", ""),
                 "  Normal: {}\n",
             )),
@@ -1565,11 +1613,25 @@ lists:
                 &BASE.replacen("\"•\", \"◦\", ", "", 1),
                 "  Normal: {}\n",
             )),
-            "lists.bullets: invalid length 4",
+            "lists.BulletList: invalid length 4",
         );
         assert_starts(
             &error(&yaml(&BASE.replace("\"▪\"]", "\"\"]"), "  Normal: {}\n")),
-            "lists.bullets[5]: empty value",
+            "lists.BulletList[5]: empty value",
+        );
+        assert_starts(
+            &error(&yaml(
+                &BASE.replace("checked: \"☒\"", "checked: ~"),
+                "  Normal: {}\n",
+            )),
+            "lists.TaskList.checked: empty value",
+        );
+        assert_starts(
+            &error(&yaml(
+                &BASE.replace("unchecked: \"☐\"", "unchecked: \"A\\x01\""),
+                "  Normal: {}\n",
+            )),
+            "lists.TaskList.unchecked: invalid character U+0001 in value",
         );
         for (name, code) in [
             (r#""A\x01B""#, "U+0001"),
@@ -1773,8 +1835,10 @@ lists:
         );
         assert_eq!(params.lists.indent, Twips(720));
         assert_eq!(params.lists.hanging, Twips(360));
-        assert_eq!(params.lists.bullets[1], "◦");
-        assert_eq!(params.lists.numbers[2], NumberFormat::LowerRoman);
+        assert_eq!(params.lists.bullet_list[1], "◦");
+        assert_eq!(params.lists.ordered_list[2], NumberFormat::LowerRoman);
+        assert_eq!(params.lists.task_list.checked, "☒");
+        assert_eq!(params.lists.task_list.unchecked, "☐");
 
         let normal = &params.styles["Normal"];
         assert_eq!(normal.align, Some(Align::Justify));
