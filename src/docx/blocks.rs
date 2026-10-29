@@ -5,8 +5,9 @@ use rushdown::ast::{KindData, NodeRef, Task};
 use rushdown_definition_list::{DefinitionList, Term, TermDefinition};
 use rushdown_fenced_div::FencedDiv;
 
-use crate::caption::{Caption, CaptionText};
+use crate::caption::{Caption, CaptionKind, CaptionText};
 
+use super::fields::add_field;
 use super::numbering::{ListKind, LIST_LEVELS};
 use super::toc::TOC_DEPTH;
 use super::{DocxRenderer, RenderContext};
@@ -312,7 +313,15 @@ impl<'a> DocxRenderer<'a> {
         Ok(docx)
     }
 
-    /// Render a Caption extension node.
+    /// Render a Caption extension node: the caption paragraph, then the
+    /// block.
+    ///
+    /// The caption paragraph has the `Caption` style. It holds the caption
+    /// word, a `SEQ` field with the number of the caption in its kind, the
+    /// separator and the caption text. A caption without text has no
+    /// separator. A hidden bookmark `_Ref` holds the caption content. A
+    /// caption of a block that is hidden for this output format gives no
+    /// output.
     fn render_caption(
         &self,
         mut docx: Docx,
@@ -331,15 +340,47 @@ impl<'a> DocxRenderer<'a> {
             }
         }
 
-        if let Some(ct_ref) = caption_text_ref {
-            let mut para = Paragraph::new().line_spacing(LineSpacing::new().after(60).line(240));
-            for child in arena[ct_ref].children(arena) {
-                let runs = self.render_inline_runs(context, child);
-                for run in runs {
-                    para = para.add_run(run.italic().color("444444"));
-                }
+        if let Some(br) = block_ref {
+            if !crate::conditional::node_is_visible(arena, br, context.source, &self.profile)? {
+                return Ok(docx);
             }
-            docx = docx.add_paragraph(para);
+        }
+
+        if let Some(ct_ref) = caption_text_ref {
+            let labels = self.caption_labels.get();
+            let caption = rushdown::as_extension_data!(arena, node_ref, Caption);
+            let (seq, word, slot) = match caption.kind() {
+                CaptionKind::Table => ("Table", labels.table, 0),
+                CaptionKind::Figure => ("Figure", labels.figure, 1),
+                CaptionKind::Listing => ("Listing", labels.listing, 2),
+            };
+            let number = {
+                let mut counters = self.caption_counters.borrow_mut();
+                counters[slot] += 1;
+                counters[slot]
+            };
+            let id = self.bookmark_counter.replace_with(|n| *n + 1);
+
+            let mut para = Paragraph::new()
+                .style("Caption")
+                .add_bookmark_start(id, format!("_Ref{id:09}"))
+                .add_run(Run::new().add_text(format!("{word} ")));
+            para = add_field(
+                para,
+                InstrText::Unsupported(format!(" SEQ {seq} \\* ARABIC ")),
+                &number.to_string(),
+            );
+            let runs: Vec<_> = arena[ct_ref]
+                .children(arena)
+                .flat_map(|child| self.render_inline_runs(context, child))
+                .collect();
+            if !runs.is_empty() {
+                para = para.add_run(Run::new().add_text(labels.separator));
+            }
+            for run in runs {
+                para = para.add_run(run);
+            }
+            docx = docx.add_paragraph(para.add_bookmark_end(id));
         }
 
         if let Some(br) = block_ref {

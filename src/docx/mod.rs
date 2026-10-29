@@ -15,7 +15,7 @@
 //! rendered in parallel into the cache.
 //! Regular images are read from disk and embedded directly.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::path::Path;
 
@@ -30,6 +30,7 @@ use crate::diagram::DiagramThemes;
 use crate::graph::{DocumentGraph, PreparedDocument};
 use crate::DebugDumper;
 
+use self::lang::CaptionLabels;
 use self::package::Package;
 use self::params::DocxParams;
 use self::tables::TableLayout;
@@ -66,6 +67,11 @@ pub(crate) struct DocxRenderer<'a> {
     list_num_counter: RefCell<usize>,
     /// The layout of each rendered table, in document order.
     tables: RefCell<Vec<TableLayout>>,
+    /// The caption labels of the document language.
+    caption_labels: Cell<&'static CaptionLabels>,
+    /// The number of the last caption of each kind: table, figure and
+    /// listing.
+    caption_counters: RefCell<[usize; 3]>,
     profile: RenderProfile,
 }
 
@@ -102,6 +108,8 @@ impl<'a> DocxRenderer<'a> {
             bookmark_counter: RefCell::new(0),
             list_num_counter: RefCell::new(numbering::FIRST_LIST_NUM_ID),
             tables: RefCell::new(Vec::new()),
+            caption_labels: Cell::new(lang::caption_labels(lang::DEFAULT_LANG)),
+            caption_counters: RefCell::new([0; 3]),
             profile,
         }
     }
@@ -115,6 +123,8 @@ impl<'a> DocxRenderer<'a> {
     ) -> Result<Package> {
         let graph = prepared.graph();
         let lang = lang::document_lang(metadata)?;
+        self.caption_labels.set(lang::caption_labels(lang));
+        *self.caption_counters.borrow_mut() = [0; 3];
 
         // ── Page size and margins ───────────────────────────────────────
         let page = &self.params.page;

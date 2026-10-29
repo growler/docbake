@@ -4,12 +4,37 @@
 //! tag must match the grammar of RFC 5646 section 2.1. The check is ASCII and
 //! ignores case. It does not use the subtag registry, and it rejects the
 //! irregular grandfathered tags (for example `i-klingon`).
+//!
+//! The language also sets the words of the captions.
 
 use anyhow::{bail, Result};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
 /// The language tag when the front matter has no `lang`.
-const DEFAULT_LANG: &str = "en";
+pub(super) const DEFAULT_LANG: &str = "en";
+
+/// The words before the caption number and the text between the number
+/// and the caption text.
+pub(super) struct CaptionLabels {
+    pub table: &'static str,
+    pub figure: &'static str,
+    pub listing: &'static str,
+    pub separator: &'static str,
+}
+
+static RUSSIAN_CAPTION_LABELS: CaptionLabels = CaptionLabels {
+    table: "Таблица",
+    figure: "Рисунок",
+    listing: "Листинг",
+    separator: ". ",
+};
+
+static ENGLISH_CAPTION_LABELS: CaptionLabels = CaptionLabels {
+    table: "Table",
+    figure: "Figure",
+    listing: "Listing",
+    separator: ": ",
+};
 
 /// Gives the document language tag from the metadata. An absent or null
 /// `lang` gives `en`. A valid tag is given as written.
@@ -19,6 +44,18 @@ pub(super) fn document_lang(metadata: &JsonMap<String, JsonValue>) -> Result<&st
         Some(JsonValue::String(tag)) if is_language_tag(tag) => Ok(tag),
         Some(JsonValue::String(tag)) => bail!("lang: invalid language tag '{tag}'"),
         Some(_) => bail!("lang: the language tag must be a string"),
+    }
+}
+
+/// Gives the caption labels of the language tag `lang`. The primary
+/// subtag `ru` in any case gives the Russian labels. All other tags give
+/// the English labels.
+pub(super) fn caption_labels(lang: &str) -> &'static CaptionLabels {
+    let primary = lang.split('-').next().unwrap_or_default();
+    if primary.eq_ignore_ascii_case("ru") {
+        &RUSSIAN_CAPTION_LABELS
+    } else {
+        &ENGLISH_CAPTION_LABELS
     }
 }
 
@@ -182,5 +219,24 @@ mod tests {
             let err = lang_of(Some(value)).unwrap_err().to_string();
             assert_eq!(err, "lang: the language tag must be a string");
         }
+    }
+
+    #[test]
+    fn caption_labels_follow_primary_subtag() {
+        for (tag, table, separator) in [
+            ("en", "Table", ": "),
+            ("ru", "Таблица", ". "),
+            ("ru-RU", "Таблица", ". "),
+            ("RU", "Таблица", ". "),
+            ("de", "Table", ": "),
+        ] {
+            let labels = caption_labels(tag);
+            assert_eq!(labels.table, table, "{tag}");
+            assert_eq!(labels.separator, separator, "{tag}");
+        }
+        let ru = caption_labels("ru");
+        assert_eq!([ru.figure, ru.listing], ["Рисунок", "Листинг"]);
+        let en = caption_labels("en");
+        assert_eq!([en.figure, en.listing], ["Figure", "Listing"]);
     }
 }

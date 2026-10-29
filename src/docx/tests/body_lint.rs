@@ -35,6 +35,10 @@ enum Group {
     Tables,
     /// Lists and task lists.
     Lists,
+    /// Captions.
+    Captions,
+    /// Diagrams.
+    Diagrams,
 }
 
 /// The properties that a style must carry. The names must match exactly,
@@ -209,12 +213,56 @@ Text.
   - [x] Nested done task
 ";
 
+const CAPTIONS: &str = "\
+---
+lang: en
+---
+Table: Table caption
+
+| Name | Value |
+|------|-------|
+| one  | 1     |
+
+Figure: Figure caption
+
+:::figure
+Figure text.
+:::
+
+Listing: Listing caption with `code`
+
+```
+fn main() {}
+```
+
+:::note
+Table: Table caption in an admonition
+
+| Name | Value |
+|------|-------|
+| two  | 2     |
+:::
+";
+
+/// The diagram always fails: `panic` stops the Typst compilation, and
+/// without `typst` the diagram has no renderer.
+const DIAGRAMS: &str = "\
+---
+lang: en
+---
+```typst
+#panic(\"diagram error\")
+```
+";
+
 const FIXTURES: &[(Group, &str)] = &[
     (Group::Paragraphs, PARAGRAPHS),
     (Group::Code, CODE),
     (Group::Blocks, BLOCKS),
     (Group::Tables, TABLES),
     (Group::Lists, LISTS),
+    (Group::Captions, CAPTIONS),
+    (Group::Diagrams, DIAGRAMS),
 ];
 
 /// An element from [`STYLE_PROPERTIES`] or [`STYLE_REFERENCES`].

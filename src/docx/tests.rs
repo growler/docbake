@@ -25,6 +25,7 @@ use super::params::Twips;
 use super::DocxRenderer;
 
 mod body_lint;
+mod captions;
 mod lists;
 mod tables;
 

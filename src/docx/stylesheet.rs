@@ -871,6 +871,7 @@ styles:
             ("Header", "header"),
             ("ListParagraph", "List Paragraph"),
             ("CodeBlock", "Code Block"),
+            ("DiagramError", "Diagram Error"),
             ("AdmonitionNoteHeader", "Admonition Note Header"),
             ("DataTable", "Data Table"),
         ] {

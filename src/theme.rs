@@ -431,6 +431,7 @@ mod tests {
         "TableHeader",
         "TableCell",
         "ImageBlock",
+        "DiagramError",
         "AdmonitionHeader",
         "AdmonitionBody",
         "AdmonitionNoteHeader",

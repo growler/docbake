@@ -61,6 +61,7 @@ colors:
   related_border: 8CA1B8
   related_header: BCCBDA
   related_body: DDE5ED
+  error: FF0000
 
 table:
   cell_margins: {top: 0tw, bottom: 0tw, left: 10tw, right: 10tw}
@@ -337,7 +338,9 @@ styles:
     size: 9pt
     italic: true
     color: caption
-    after: 10pt
+    before: 10pt
+    after: 3pt
+    keep_next: true
 
   # Lists
 
@@ -365,6 +368,11 @@ styles:
   ImageBlock:
     based_on: Normal
     align: center
+
+  DiagramError:
+    based_on: Normal
+    italic: true
+    color: error
 
   # Admonitions. Each type has a header style and a body style.
 

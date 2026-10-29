@@ -355,7 +355,13 @@ impl AstTransformer for CaptionAstTransformer {
                     let full_str = text_val.str(source);
                     if prefix_len >= full_str.len() {
                         // The entire text node is consumed by the prefix — delete it.
+                        // The next text node can start with the space after the
+                        // prefix.
+                        let next = arena[fc].next_sibling();
                         fc.delete(arena);
+                        if let Some(next) = next {
+                            trim_text_start(arena, next, source);
+                        }
                     } else {
                         // Trim the prefix: create a new text value with offset content.
                         let remaining = &full_str[prefix_len..];
@@ -398,6 +404,26 @@ impl AstTransformer for CaptionAstTransformer {
             caption_node.append_child(arena, caption_text_node);
             caption_node.append_child(arena, target);
         }
+    }
+}
+
+/// Removes the leading whitespace of the text node `node`. A node of another
+/// kind does not change.
+fn trim_text_start(arena: &mut Arena, node: NodeRef, source: &str) {
+    let KindData::Text(text_val) = arena[node].kind_data() else {
+        return;
+    };
+    let full_str = text_val.str(source);
+    let skip = full_str.len() - full_str.trim_start().len();
+    if skip == 0 {
+        return;
+    }
+    if let Some(idx) = text_val.index().cloned() {
+        rushdown::as_kind_data_mut!(arena, node, Text)
+            .set(text::Index::new(idx.start() + skip, idx.stop()));
+    } else {
+        let remaining_owned = full_str[skip..].to_string();
+        rushdown::as_kind_data_mut!(arena, node, Text).set(remaining_owned);
     }
 }
 
@@ -753,6 +779,21 @@ mod tests {
             matches!(arena[caption_children[1]].kind_data(), KindData::Table(_)),
             "second child should be Table"
         );
+    }
+
+    #[test]
+    fn one_word_caption_text_has_no_leading_space() {
+        let source = "Table: Values\n\n| A | B |\n|---|---|\n| 1 | 2 |\n";
+        let (arena, doc_ref) = parse(source);
+
+        let caption_ref = arena[doc_ref].children(&arena).next().unwrap();
+        let caption_text = arena[caption_ref].children(&arena).next().unwrap();
+        assert!(matches_extension_kind!(&arena, caption_text, CaptionText));
+        let texts: Vec<_> = arena[caption_text]
+            .children(&arena)
+            .map(|c| as_kind_data!(arena, c, Text).str(source).to_string())
+            .collect();
+        assert_eq!(texts, ["Values"]);
     }
 
     #[test]

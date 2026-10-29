@@ -369,6 +369,10 @@ style). No semantic name refers to them.
 :  `ImageBlock` -- paragraph style, based on `Normal`. The diagram is a PNG
    image in its own paragraph.
 
+   `DiagramError` -- paragraph style, based on `Normal`. If the diagram
+   tool cannot make the image, a paragraph with this style shows the error
+   text.
+
 `diagram.as_code`
 
 :  `CodeBlock` -- paragraph style, based on `Normal`. The diagram source shows

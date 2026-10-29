@@ -151,12 +151,9 @@ impl<'a> DocxRenderer<'a> {
             Err(e) => {
                 self.logger
                     .log(format!("warning: diagram rendering failed: {e}"));
-                let para = Paragraph::new().add_run(
-                    Run::new()
-                        .add_text(format!("[Diagram rendering error: {e}]"))
-                        .italic()
-                        .color("FF0000"),
-                );
+                let para = Paragraph::new()
+                    .style("DiagramError")
+                    .add_run(Run::new().add_text(format!("[Diagram rendering error: {e}]")));
                 Ok(docx.add_paragraph(para))
             }
         }
