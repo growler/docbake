@@ -434,6 +434,50 @@ style). No semantic name refers to them.
 :  `FootnoteText` -- paragraph style, based on `Normal`. The footnote text
    in `word/footnotes.xml` uses it.
 
+### Required Styles
+
+The `docx.yaml` file of a theme must define each style that the renderer
+refers to in `w:pStyle` or `w:rStyle`. It must also define `Normal`, the
+default paragraph style. If one or more of these styles are missing, the
+DOCX build and `publish gdoc` stop with an error. The tool checks the
+required styles before it checks the `based_on` values. Thus the error
+message gives the theme directory and all missing styles. Example:
+
+~~~
+Error: invalid docx.yaml in theme '<theme-dir>'
+
+Caused by:
+    styles: missing styles 'CodeBlock', 'Hyperlink'
+~~~
+
+The required styles are:
+
+- `Normal`
+- `Header` and `Footer`
+- `Title`, `Subtitle`, `DocumentVersion`, `DocumentAuthor` and
+  `DocumentDate`
+- `TOC1`, `TOC2` and `TOC3`
+- `Heading1` to `Heading6`
+- `Quote` and `ThematicBreak`
+- `InlineCode`, `CodeBlock` and `Caption`
+- `ListParagraph`, `DefinitionTerm` and `DefinitionBody`
+- `TableHeader` and `TableCell`
+- `ImageBlock` and `DiagramError`
+- `Admonition<Type>Header` and `Admonition<Type>Body` for each `<Type>`:
+  `Note`, `Tip`, `Warning`, `Caution`, `Important` and `Related`
+- `Hyperlink`, `FootnoteReference` and `FootnoteText`
+
+These styles are optional:
+
+- `TOC4` to `TOC9`. The TOC contains the heading levels 1 to 3.
+- `AdmonitionHeader` and `AdmonitionBody`. They are the base styles of
+  the admonition styles. If an admonition style has one of them in
+  `based_on`, the theme must define it.
+
+The renderer makes the table style `DataTable` from the table parameters.
+A theme cannot define a style with the ID `DataTable`, `TableNormal`,
+`DefaultParagraphFont` or `NoList`.
+
 ## Notes For Naming Consistency
 
 - Keep semantic names stable (`figure.caption`, `table.caption`, `code.caption`)

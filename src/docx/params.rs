@@ -1,7 +1,7 @@
 //! Style parameters for the DOCX renderer.
 //!
-//! A theme sets the DOCX look in a YAML document. [`DocxParams::from_yaml`]
-//! reads this document and gives the values in OOXML units: twips,
+//! A theme sets the DOCX look in a YAML document.
+//! [`DocxParams::from_theme_yaml`] reads this document and gives the values in OOXML units: twips,
 //! half-points, eighths of a point and RGB colours. It resolves colour names
 //! and font roles. Each error starts with the key path, for example
 //! `styles.Heading1.color: unknown colour 'acent'`.
@@ -41,6 +41,57 @@ const CHARACTER_STYLES: &[&str] = &[
     "Emphasis",
 ];
 
+/// The IDs of the styles that the renderer refers to in `w:pStyle` and
+/// `w:rStyle`, plus `Normal`, the default paragraph style. The `docx.yaml`
+/// file of a theme must define each of them.
+/// The table style `DataTable` comes from the table parameters.
+pub(crate) const REQUIRED_STYLES: &[&str] = &[
+    "Normal",
+    "Header",
+    "Footer",
+    "Title",
+    "Subtitle",
+    "DocumentVersion",
+    "DocumentAuthor",
+    "DocumentDate",
+    "TOC1",
+    "TOC2",
+    "TOC3",
+    "Heading1",
+    "Heading2",
+    "Heading3",
+    "Heading4",
+    "Heading5",
+    "Heading6",
+    "Quote",
+    "ThematicBreak",
+    "InlineCode",
+    "CodeBlock",
+    "Caption",
+    "ListParagraph",
+    "DefinitionTerm",
+    "DefinitionBody",
+    "TableHeader",
+    "TableCell",
+    "ImageBlock",
+    "DiagramError",
+    "AdmonitionNoteHeader",
+    "AdmonitionNoteBody",
+    "AdmonitionTipHeader",
+    "AdmonitionTipBody",
+    "AdmonitionWarningHeader",
+    "AdmonitionWarningBody",
+    "AdmonitionCautionHeader",
+    "AdmonitionCautionBody",
+    "AdmonitionImportantHeader",
+    "AdmonitionImportantBody",
+    "AdmonitionRelatedHeader",
+    "AdmonitionRelatedBody",
+    "Hyperlink",
+    "FootnoteReference",
+    "FootnoteText",
+];
+
 /// The DOCX style parameters of a theme, with all references resolved.
 ///
 /// The styles keep their `based_on` links. The loader does not copy
@@ -58,7 +109,19 @@ pub(crate) struct DocxParams {
 }
 
 impl DocxParams {
-    /// Parses a YAML style document and resolves its references.
+    /// Parses the `docx.yaml` file of a theme and resolves its references.
+    /// The file must define each style in [`REQUIRED_STYLES`]. The loader
+    /// checks this before it resolves the references, thus one error names
+    /// all missing styles.
+    pub(crate) fn from_theme_yaml(text: &str) -> Result<Self> {
+        let raw: RawParams = serde_yaml::from_str(text)?;
+        check_required_styles(&raw.styles)?;
+        raw.resolve()
+    }
+
+    /// Parses a YAML style document and resolves its references. The
+    /// document can leave out styles in [`REQUIRED_STYLES`].
+    #[cfg(test)]
     pub(crate) fn from_yaml(text: &str) -> Result<Self> {
         let raw: RawParams = serde_yaml::from_str(text)?;
         raw.resolve()
@@ -717,6 +780,21 @@ fn check_kinds(styles: &BTreeMap<String, Style>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Makes sure that `styles` contains each style in [`REQUIRED_STYLES`].
+/// The error names all missing styles.
+fn check_required_styles(styles: &BTreeMap<String, RawStyle>) -> Result<()> {
+    let missing: Vec<_> = REQUIRED_STYLES
+        .iter()
+        .filter(|id| !styles.contains_key(**id))
+        .map(|id| format!("'{id}'"))
+        .collect();
+    match missing.as_slice() {
+        [] => Ok(()),
+        [id] => bail!("styles: missing style {id}"),
+        _ => bail!("styles: missing styles {}", missing.join(", ")),
+    }
 }
 
 /// Makes sure that each `based_on` names a style in `styles` and that no

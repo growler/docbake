@@ -20,6 +20,7 @@ const TOC_STYLES: [&str; 9] = [
 
 impl<'a> DocxRenderer<'a> {
     /// Add the field-based table of contents and the page break after it.
+    /// A document without TOC entries gets neither.
     ///
     /// Also resets the heading bookmark keys and the bookmark counter that
     /// `render_block` uses to put a TOC bookmark on each matching heading.
@@ -35,6 +36,10 @@ impl<'a> DocxRenderer<'a> {
             .collect::<VecDeque<_>>();
         *self.bookmark_counter.borrow_mut() = 0;
 
+        let Some(last) = toc_entries.last() else {
+            return Ok(docx);
+        };
+
         // ── Field-based table of contents ───────────────────────────────
         // Keep field instruction and cached entries so Google Docs and Word
         // can display content without manual update.
@@ -45,64 +50,49 @@ impl<'a> DocxRenderer<'a> {
                 .hide_tab_and_page_numbers_in_webview()
                 .use_applied_paragraph_line_level(),
         );
-        if let Some(last) = toc_entries.last() {
-            let end_style = TOC_STYLES[last.level - 1];
-            let tab = Tab::new()
-                .val(TabValueType::Right)
-                .leader(TabLeaderType::Dot)
-                .pos(self.params.page.text_width() as usize);
-            let mut sdt = StructuredDataTag::new();
-            let mut instr = Some(instr);
-            for entry in toc_entries {
-                let mut p = Paragraph::new()
-                    .style(TOC_STYLES[entry.level - 1])
-                    .add_tab(tab.clone());
-                if let Some(instr) = instr.take() {
-                    p = p.add_run(
-                        Run::new()
-                            .add_field_char(FieldCharType::Begin, false)
-                            .add_instr_text(instr)
-                            .add_field_char(FieldCharType::Separate, false),
-                    );
-                }
-                let page_ref = Run::new()
-                    .add_field_char(FieldCharType::Begin, false)
-                    .add_instr_text(InstrText::PAGEREF(
-                        InstrPAGEREF::new(&entry.key).hyperlink(),
-                    ))
-                    .add_field_char(FieldCharType::Separate, false)
-                    .add_text("1")
-                    .add_field_char(FieldCharType::End, false);
-                p = p.add_hyperlink(
-                    Hyperlink::new(entry.key, HyperlinkType::Anchor)
-                        .add_run(Run::new().add_text(entry.text))
-                        .add_run(Run::new().add_tab())
-                        .add_run(page_ref),
+        let end_style = TOC_STYLES[last.level - 1];
+        let tab = Tab::new()
+            .val(TabValueType::Right)
+            .leader(TabLeaderType::Dot)
+            .pos(self.params.page.text_width() as usize);
+        let mut sdt = StructuredDataTag::new();
+        let mut instr = Some(instr);
+        for entry in toc_entries {
+            let mut p = Paragraph::new()
+                .style(TOC_STYLES[entry.level - 1])
+                .add_tab(tab.clone());
+            if let Some(instr) = instr.take() {
+                p = p.add_run(
+                    Run::new()
+                        .add_field_char(FieldCharType::Begin, false)
+                        .add_instr_text(instr)
+                        .add_field_char(FieldCharType::Separate, false),
                 );
-                sdt = sdt.add_paragraph(p);
             }
-            sdt = sdt.add_paragraph(
-                Paragraph::new()
-                    .style(end_style)
-                    .add_run(Run::new().add_field_char(FieldCharType::End, false)),
+            let page_ref = Run::new()
+                .add_field_char(FieldCharType::Begin, false)
+                .add_instr_text(InstrText::PAGEREF(
+                    InstrPAGEREF::new(&entry.key).hyperlink(),
+                ))
+                .add_field_char(FieldCharType::Separate, false)
+                .add_text("1")
+                .add_field_char(FieldCharType::End, false);
+            p = p.add_hyperlink(
+                Hyperlink::new(entry.key, HyperlinkType::Anchor)
+                    .add_run(Run::new().add_text(entry.text))
+                    .add_run(Run::new().add_tab())
+                    .add_run(page_ref),
             );
-            docx = docx.add_structured_data_tag(sdt);
-        } else {
-            docx = docx
-                .add_paragraph(
-                    Paragraph::new().add_run(
-                        Run::new()
-                            .add_field_char(FieldCharType::Begin, true)
-                            .add_instr_text(instr)
-                            .add_field_char(FieldCharType::Separate, false),
-                    ),
-                )
-                .add_paragraph(
-                    Paragraph::new().add_run(Run::new().add_field_char(FieldCharType::End, false)),
-                );
+            sdt = sdt.add_paragraph(p);
         }
-
-        docx = docx.add_paragraph(Paragraph::new().add_run(Run::new().add_break(BreakType::Page)));
+        sdt = sdt.add_paragraph(
+            Paragraph::new()
+                .style(end_style)
+                .add_run(Run::new().add_field_char(FieldCharType::End, false)),
+        );
+        docx = docx
+            .add_structured_data_tag(sdt)
+            .add_paragraph(Paragraph::new().add_run(Run::new().add_break(BreakType::Page)));
 
         Ok(docx)
     }

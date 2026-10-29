@@ -3,14 +3,14 @@
 //! The lint renders one Markdown fixture for each group of elements and
 //! does two checks on the parts:
 //!
-//! - Each style reference has a style definition in `word/styles.xml`.
-//! - The body does not set a property that a style must carry. The groups
-//!   in [`MARKUP_GROUPS`] can set the properties from
-//!   [`MARKUP_PROPERTIES`].
+//! - Each style reference has a style definition in `word/styles.xml`, and
+//!   its ID is in [`REQUIRED_STYLES`] or in [`RESERVED_STYLES`].
+//! - The body does not set a property that a style must carry, except the
+//!   properties that [`permitted`] permits for the group.
 //!
-//! A document without title-page front matter starts with the TOC and the
-//! page break after it. These blocks are in the Paragraphs group in all
-//! fixtures. The lint also scans `word/footnotes.xml` of each fixture, and
+//! A document without title-page front matter and without headings has an
+//! empty body. Thus all elements of a fixture are in the group of the
+//! fixture. The lint also scans `word/footnotes.xml` of each fixture, and
 //! the header and footer parts of the Paragraphs fixture. The Images
 //! fixture has the PNG file `image.png` in its directory.
 
@@ -23,6 +23,8 @@ use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 
 use super::{png, render_package, render_with};
+use crate::docx::params::REQUIRED_STYLES;
+use crate::docx::stylesheet::RESERVED_STYLES;
 
 /// A group of elements that one part of the renderer makes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -61,17 +63,27 @@ const STYLE_PROPERTIES: &[&str] = &[
     "w:u",
     "w:spacing",
     "w:vertAlign",
+    "w:keepNext",
+    "w:jc",
+    "w:ind",
 ];
 
-/// The properties from [`STYLE_PROPERTIES`] that Markdown inline markup
-/// sets on one run: bold, italic and strikethrough.
-const MARKUP_PROPERTIES: &[&str] = &["w:b", "w:i", "w:strike"];
-
-/// The groups with Markdown inline markup in the fixture. These groups can
-/// set the properties from [`MARKUP_PROPERTIES`]. The Blocks fixture has
-/// bold text in an admonition body. The Footnotes fixture has bold text in
-/// a footnote.
-const MARKUP_GROUPS: &[Group] = &[Group::Code, Group::Blocks, Group::Footnotes];
+/// Tells if a fixture of the group `group` can set the property of `hit`.
+///
+/// Markdown inline markup sets bold, italic and strikethrough on one run.
+/// The groups with inline markup in the fixture can set `w:b`, `w:i` and
+/// `w:strike`. The Blocks fixture has bold text in an admonition body. The
+/// Footnotes fixture has bold text in a footnote. A paragraph in a table
+/// cell can set the alignment `w:jc` of its column.
+fn permitted(group: Group, hit: &Hit) -> bool {
+    match group {
+        Group::Code | Group::Blocks | Group::Footnotes => {
+            matches!(hit.name, "w:b" | "w:i" | "w:strike")
+        }
+        Group::Tables => hit.name == "w:jc" && hit.path.contains("/w:tc["),
+        _ => false,
+    }
+}
 
 /// The elements that refer to a style with the attribute `w:val`.
 const STYLE_REFERENCES: &[&str] = &["w:pStyle", "w:rStyle", "w:tblStyle"];
@@ -315,9 +327,6 @@ const FIXTURES: &[(Group, &str)] = &[
 /// An element from [`STYLE_PROPERTIES`] or [`STYLE_REFERENCES`].
 #[derive(Debug, PartialEq)]
 struct Hit {
-    /// The position of the top-level body child that holds the element.
-    /// It is `None` for an element out of `w:body`.
-    block: Option<usize>,
     /// The qualified name of the element.
     name: &'static str,
     /// The value of the attribute `w:val`.
@@ -387,9 +396,7 @@ fn scan(xml: &[u8]) -> Scan {
         let property = STYLE_PROPERTIES.iter().find(|&&n| n == name);
         let reference = STYLE_REFERENCES.iter().find(|&&n| n == name);
         if let Some(&matched) = property.or(reference) {
-            let block = body.map(|i| stack.get(i + 1).map_or(position, |(_, p)| *p));
             result.hits.push(Hit {
-                block,
                 path: path(&stack, name),
                 val: reference.is_some().then(|| val(&start)),
                 name: matched,
@@ -402,23 +409,6 @@ fn scan(xml: &[u8]) -> Scan {
             stack.push((name.to_string(), position));
             counts.push(0);
         }
-    }
-    result
-}
-
-/// Gives the text of the top-level body children `blocks` of `xml`
-/// without the values of `w14:paraId`. These values change from one
-/// render to the next.
-fn blocks_text(xml: &[u8], blocks: &[Range<usize>]) -> String {
-    let (Some(first), Some(last)) = (blocks.first(), blocks.last()) else {
-        return String::new();
-    };
-    let text = std::str::from_utf8(&xml[first.start..last.end]).unwrap();
-    let mut pieces = text.split("w14:paraId=\"");
-    let mut result = pieces.next().unwrap().to_string();
-    for piece in pieces {
-        result.push_str("w14:paraId=\"");
-        result.push_str(&piece[piece.find('"').unwrap()..]);
     }
     result
 }
@@ -467,16 +457,6 @@ fn style_ids(xml: &[u8]) -> HashSet<String> {
     ids
 }
 
-/// Gives the group of a hit in the fixture of `fixture`. The first
-/// `prefix` top-level body children are in the Paragraphs group. The
-/// elements out of `w:body` are in the group of the fixture.
-fn group_of(fixture: Group, block: Option<usize>, prefix: usize) -> Group {
-    match block {
-        Some(block) if block < prefix => Group::Paragraphs,
-        _ => fixture,
-    }
-}
-
 /// The scan of one part of a rendered fixture.
 struct Part {
     group: Group,
@@ -484,18 +464,12 @@ struct Part {
     /// The text of the part.
     text: String,
     scan: Scan,
-    /// The text of the first top-level body children, as many as in
-    /// [`BASELINE`]. See [`blocks_text`].
-    prefix: String,
 }
 
 /// The rendered fixtures.
 struct Rendered {
     /// The number of top-level body children in [`BASELINE`].
-    prefix: usize,
-    /// The text of the top-level body children in [`BASELINE`]. See
-    /// [`blocks_text`].
-    baseline: String,
+    baseline_blocks: usize,
     /// The style IDs in `word/styles.xml`.
     style_ids: HashSet<String>,
     /// `word/document.xml` and `word/footnotes.xml` of each fixture, and
@@ -507,9 +481,7 @@ struct Rendered {
 static RENDERED: LazyLock<Rendered> = LazyLock::new(|| {
     let package = render_package(BASELINE).unwrap();
     let xml = package.xml();
-    let blocks = scan(&xml.document).blocks;
-    let prefix = blocks.len();
-    let baseline = blocks_text(&xml.document, &blocks);
+    let baseline_blocks = scan(&xml.document).blocks.len();
     // The style sheet depends on `lang`. All fixtures must use the same
     // `lang` as the baseline.
     let style_ids = style_ids(&xml.styles);
@@ -521,21 +493,17 @@ static RENDERED: LazyLock<Rendered> = LazyLock::new(|| {
         }
         .unwrap();
         let xml = package.xml();
-        let document = scan(&xml.document);
-        let blocks = &document.blocks[..prefix.min(document.blocks.len())];
         parts.push(Part {
             group,
             name: "word/document.xml".to_string(),
             text: String::from_utf8(xml.document.clone()).unwrap(),
-            prefix: blocks_text(&xml.document, blocks),
-            scan: document,
+            scan: scan(&xml.document),
         });
         parts.push(Part {
             group,
             name: "word/footnotes.xml".to_string(),
             text: String::from_utf8(xml.footnotes.clone()).unwrap(),
             scan: scan(&xml.footnotes),
-            prefix: String::new(),
         });
         if group != Group::Paragraphs {
             continue;
@@ -547,14 +515,12 @@ static RENDERED: LazyLock<Rendered> = LazyLock::new(|| {
                     name: format!("word/{kind}{}.xml", i + 1),
                     text: String::from_utf8(part.clone()).unwrap(),
                     scan: scan(part),
-                    prefix: String::new(),
                 });
             }
         }
     }
     Rendered {
-        prefix,
-        baseline,
+        baseline_blocks,
         style_ids,
         parts,
     }
@@ -569,10 +535,9 @@ fn findings(
     let mut findings: BTreeMap<Group, Vec<String>> = BTreeMap::new();
     for part in &rendered.parts {
         for hit in &part.scan.hits {
-            let group = group_of(part.group, hit.block, rendered.prefix);
-            if let Some(text) = check(group, hit) {
+            if let Some(text) = check(part.group, hit) {
                 findings
-                    .entry(group)
+                    .entry(part.group)
                     .or_default()
                     .push(format!("{}: {text}", part.name));
             }
@@ -594,15 +559,8 @@ fn report(findings: &BTreeMap<Group, Vec<String>>) -> String {
 }
 
 #[test]
-fn fixtures_start_with_baseline_blocks() {
-    let rendered = &*RENDERED;
-    assert!(rendered.prefix > 0);
-    for part in &rendered.parts {
-        if part.group != Group::Paragraphs && part.name == "word/document.xml" {
-            assert_eq!(part.prefix, rendered.baseline, "{:?}", part.group);
-            assert!(part.scan.blocks.len() > rendered.prefix, "{:?}", part.group);
-        }
-    }
+fn baseline_body_is_empty() {
+    assert_eq!(RENDERED.baseline_blocks, 0);
 }
 
 #[test]
@@ -657,11 +615,25 @@ fn style_references_are_defined() {
 }
 
 #[test]
+fn style_references_are_required_or_generated() {
+    let findings = findings(&RENDERED, |_, hit| {
+        let id = hit.val.as_deref()?;
+        if REQUIRED_STYLES.contains(&id) || RESERVED_STYLES.contains(&id) {
+            return None;
+        }
+        Some(format!("{} '{id}'", hit.path))
+    });
+    assert!(
+        findings.is_empty(),
+        "styles not in REQUIRED_STYLES:\n{}",
+        report(&findings)
+    );
+}
+
+#[test]
 fn body_has_no_direct_formatting() {
     let findings = findings(&RENDERED, |group, hit| {
-        if hit.val.is_some()
-            || (MARKUP_GROUPS.contains(&group) && MARKUP_PROPERTIES.contains(&hit.name))
-        {
+        if hit.val.is_some() || permitted(group, hit) {
             return None;
         }
         Some(hit.path.clone())
@@ -681,7 +653,6 @@ fn scan_matches_exact_names() {
     assert_eq!(
         result.hits,
         [Hit {
-            block: Some(0),
             name: "w:b",
             val: None,
             path: "w:document/w:body[0]/w:p[0]/w:pPr[0]/w:rPr[0]/w:b".to_string(),
@@ -706,26 +677,24 @@ fn scan_finds_spacing_in_paragraph_and_run_properties() {
 fn scan_reads_style_references() {
     let xml = br#"<w:hdr><w:p><w:pPr><w:pStyle w:val="Header"/></w:pPr><w:r><w:rPr><w:rStyle w:val="Strong"/></w:rPr></w:r></w:p></w:hdr>"#;
     let hits = scan(xml).hits;
-    let refs: Vec<_> = hits.iter().map(|h| (h.block, h.val.as_deref())).collect();
-    assert_eq!(refs, [(None, Some("Header")), (None, Some("Strong"))]);
+    let refs: Vec<_> = hits.iter().map(|h| h.val.as_deref()).collect();
+    assert_eq!(refs, [Some("Header"), Some("Strong")]);
 }
 
 #[test]
-fn blocks_text_removes_paragraph_ids() {
-    let xml = br#"<w:document><w:body><w:p w14:paraId="00000001"><w:r/></w:p><w:p w14:paraId="0000000a"/><w:sectPr/></w:body></w:document>"#;
-    let blocks = scan(xml).blocks;
-    assert_eq!(blocks.len(), 2);
+fn alignment_is_permitted_only_in_table_cells() {
+    let xml = br#"<w:document><w:body><w:p><w:pPr><w:keepNext/><w:jc w:val="center"/></w:pPr></w:p><w:tbl><w:tr><w:tc><w:p><w:pPr><w:jc w:val="right"/></w:pPr></w:p></w:tc></w:tr></w:tbl></w:body></w:document>"#;
+    let findings: Vec<_> = scan(xml)
+        .hits
+        .into_iter()
+        .filter(|h| !permitted(Group::Tables, h))
+        .map(|h| h.path)
+        .collect();
     assert_eq!(
-        blocks_text(xml, &blocks),
-        r#"<w:p w14:paraId=""><w:r/></w:p><w:p w14:paraId=""/>"#
+        findings,
+        [
+            "w:document/w:body[0]/w:p[0]/w:pPr[0]/w:keepNext",
+            "w:document/w:body[0]/w:p[0]/w:pPr[0]/w:jc",
+        ]
     );
-}
-
-#[test]
-fn prefix_blocks_are_paragraphs() {
-    assert_eq!(group_of(Group::Code, Some(0), 2), Group::Paragraphs);
-    assert_eq!(group_of(Group::Code, Some(1), 2), Group::Paragraphs);
-    assert_eq!(group_of(Group::Code, Some(2), 2), Group::Code);
-    assert_eq!(group_of(Group::Tables, None, 2), Group::Tables);
-    assert_eq!(group_of(Group::Paragraphs, Some(5), 2), Group::Paragraphs);
 }

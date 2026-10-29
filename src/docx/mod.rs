@@ -167,18 +167,15 @@ impl<'a> DocxRenderer<'a> {
         // ── Title page ──────────────────────────────────────────────────
         let fields = TitleFields::from_metadata(metadata);
 
-        if !fields.version.is_empty() {
-            docx = docx.custom_property("Version", &fields.version);
-        }
         let logo = self.theme_logo();
         docx = docx.header(self.build_default_header(fields.title, logo.as_ref()));
-        docx = docx
-            .footer(self.build_default_footer(&fields.version))
-            .title_pg();
+        docx = docx.footer(self.build_default_footer(&fields.version));
 
+        // The first page of a document with a title page has no header and
+        // no footer.
         let has_title_page = !fields.title.is_empty();
         if has_title_page {
-            docx = self.add_title_page(docx, &fields, logo.as_ref());
+            docx = self.add_title_page(docx.title_pg(), &fields, logo.as_ref());
         }
 
         docx = self.add_table_of_contents(docx, graph)?;
@@ -196,6 +193,7 @@ impl<'a> DocxRenderer<'a> {
             self.params,
             lang,
             fields.title,
+            &fields.version,
             &self.tables.take(),
             self.footnotes.take().finish(),
         )

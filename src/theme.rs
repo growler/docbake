@@ -149,10 +149,11 @@ impl Theme {
     /// Return the DOCX style parameters from `docx.yaml`.
     ///
     /// A theme without `docx.yaml` uses the file of the embedded default
-    /// theme.
+    /// theme. The file must define each style that the DOCX renderer
+    /// requires.
     pub fn docx_params(&self) -> Result<DocxParams> {
         let (owner, text) = self.docx_yaml()?;
-        DocxParams::from_yaml(&text)
+        DocxParams::from_theme_yaml(&text)
             .with_context(|| format!("invalid {DOCX_YAML} in theme '{owner}'"))
     }
 
@@ -391,64 +392,24 @@ fn strip_comment_lines(content: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{Theme, DOCX_YAML, EMBEDDED_DEFAULT_THEME, EMBEDDED_THEME_NAMES};
-    use crate::docx::params::{Border, BorderSpace, EighthPoints, LineSpacing, Rgb, Twips};
+    use crate::docx::params::{
+        Border, BorderSpace, EighthPoints, LineSpacing, Rgb, Twips, REQUIRED_STYLES,
+    };
     use std::fs;
     use std::path::Path;
 
-    /// The DOCX style IDs that a theme `docx.yaml` must define.
-    const DOCX_STYLE_IDS: &[&str] = &[
-        "Normal",
-        "Title",
-        "Subtitle",
-        "DocumentAuthor",
-        "DocumentDate",
-        "DocumentVersion",
-        "TOC1",
-        "TOC2",
-        "TOC3",
+    /// The DOCX style IDs in the embedded `docx.yaml` that the renderer
+    /// does not require: the TOC styles below the TOC depth and the base
+    /// styles of the admonition styles.
+    const OPTIONAL_DOCX_STYLE_IDS: &[&str] = &[
         "TOC4",
         "TOC5",
         "TOC6",
         "TOC7",
         "TOC8",
         "TOC9",
-        "Header",
-        "Footer",
-        "Heading1",
-        "Heading2",
-        "Heading3",
-        "Heading4",
-        "Heading5",
-        "Heading6",
-        "Quote",
-        "ThematicBreak",
-        "InlineCode",
-        "ListParagraph",
-        "DefinitionTerm",
-        "DefinitionBody",
-        "CodeBlock",
-        "Caption",
-        "TableHeader",
-        "TableCell",
-        "ImageBlock",
-        "DiagramError",
         "AdmonitionHeader",
         "AdmonitionBody",
-        "AdmonitionNoteHeader",
-        "AdmonitionNoteBody",
-        "AdmonitionTipHeader",
-        "AdmonitionTipBody",
-        "AdmonitionWarningHeader",
-        "AdmonitionWarningBody",
-        "AdmonitionCautionHeader",
-        "AdmonitionCautionBody",
-        "AdmonitionImportantHeader",
-        "AdmonitionImportantBody",
-        "AdmonitionRelatedHeader",
-        "AdmonitionRelatedBody",
-        "Hyperlink",
-        "FootnoteReference",
-        "FootnoteText",
     ];
 
     fn default_docx_yaml() -> String {
@@ -487,10 +448,14 @@ mod tests {
                 "{name}"
             );
             let params = theme.docx_params().unwrap();
-            for id in DOCX_STYLE_IDS {
-                assert!(params.styles.contains_key(*id), "{name}: {id}");
+            let ids: Vec<_> = REQUIRED_STYLES
+                .iter()
+                .chain(OPTIONAL_DOCX_STYLE_IDS)
+                .collect();
+            for id in &ids {
+                assert!(params.styles.contains_key(**id), "{name}: {id}");
             }
-            assert_eq!(params.styles.len(), DOCX_STYLE_IDS.len(), "{name}");
+            assert_eq!(params.styles.len(), ids.len(), "{name}");
             for role in ["body", "heading", "mono"] {
                 assert!(params.fonts.contains_key(role), "{name}: {role}");
             }
@@ -608,6 +573,52 @@ mod tests {
         assert!(
             err.contains("styles.Heading1.before: missing unit"),
             "{err}"
+        );
+    }
+
+    /// Gives the error of a custom theme whose `docx.yaml` is the default
+    /// file without the styles `ids`.
+    fn error_without_styles(ids: &[&str]) -> (Theme, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let yaml = default_docx_yaml();
+        let mut text = String::new();
+        let mut skip = false;
+        for line in yaml.lines() {
+            if line.starts_with("  ") && !line.starts_with("   ") {
+                skip = ids.iter().any(|id| line == format!("  {id}:"));
+            }
+            if !skip {
+                text.push_str(line);
+                text.push('\n');
+            }
+        }
+        fs::write(dir.path().join(DOCX_YAML), text).unwrap();
+        let theme = Theme::Custom(dir.path().to_path_buf());
+        let err = format!("{:#}", theme.docx_params().unwrap_err());
+        (theme, err)
+    }
+
+    #[test]
+    fn custom_docx_yaml_without_required_styles_names_them() {
+        let (theme, err) = error_without_styles(&["CodeBlock", "Hyperlink"]);
+        assert_eq!(
+            err,
+            format!(
+                "invalid docx.yaml in theme '{}': styles: missing styles 'CodeBlock', 'Hyperlink'",
+                theme.id()
+            )
+        );
+    }
+
+    #[test]
+    fn custom_docx_yaml_without_normal_names_all_missing_styles() {
+        let (theme, err) = error_without_styles(&["Normal", "CodeBlock"]);
+        assert_eq!(
+            err,
+            format!(
+                "invalid docx.yaml in theme '{}': styles: missing styles 'Normal', 'CodeBlock'",
+                theme.id()
+            )
         );
     }
 

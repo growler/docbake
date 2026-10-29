@@ -6,7 +6,9 @@
 //!
 //! [`Package`] holds the parts that `docx-rs` makes, with `word/styles.xml`
 //! and `word/fontTable.xml` from the style parameters of the theme, and
-//! `docProps/core.xml` with the document title. It adds the table
+//! `docProps/core.xml` with the document title, and `docProps/custom.xml`
+//! with the document version. A header image with the bytes of a document
+//! image refers to the document image in `word/media/`. It adds the table
 //! properties that `docx-rs` cannot write to `word/document.xml`. A
 //! document with footnotes gets the renderer's `word/footnotes.xml`, its
 //! relationship and content type, and the footnote properties in
@@ -24,7 +26,7 @@ use memchr::memmem;
 use zip::write::FileOptions;
 use zip::{CompressionMethod, DateTime, ZipWriter};
 
-use super::doc_props::core_xml;
+use super::doc_props::{core_xml, custom_xml};
 use super::font_table::font_table_xml;
 use super::footnotes::FOOTNOTE_PROPERTIES;
 use super::params::DocxParams;
@@ -38,16 +40,18 @@ pub(crate) struct Package {
 
 impl Package {
     /// Builds the parts of `docx` and replaces the style sheet and the font
-    /// table with the parts made from `params`, and the core properties
-    /// with the parts made from `title`. Adds the table properties from
-    /// `tables` to the document part. `footnotes` is the footnotes part, or
-    /// `None` for a document without footnotes. `lang` must be a valid
-    /// language tag.
+    /// table with the parts made from `params`, the core properties with
+    /// the parts made from `title`, and the custom properties with the
+    /// parts made from `version`. Adds the table properties from `tables`
+    /// to the document part. `footnotes` is the footnotes part, or `None`
+    /// for a document without footnotes. `lang` must be a valid language
+    /// tag.
     pub(super) fn new(
         mut docx: Docx,
         params: &DocxParams,
         lang: &str,
         title: &str,
+        version: &str,
         tables: &[TableLayout],
         footnotes: Option<Vec<u8>>,
     ) -> Result<Self> {
@@ -61,6 +65,8 @@ impl Package {
         xml.styles = styles_xml(params, lang);
         xml.font_table = font_table_xml(params);
         xml.doc_props.core = core_xml(title);
+        xml.doc_props.custom = custom_xml(version);
+        share_header_media(&mut xml)?;
         xml.document = splice_tables(std::mem::take(&mut xml.document), tables)
             .context("failed to add table properties")?;
         if let Some(footnotes) = footnotes {
@@ -98,6 +104,40 @@ fn add_footnote_properties(settings: &mut Vec<u8>) -> Result<()> {
     let at = memmem::find(settings, COMPAT_START.as_bytes())
         .ok_or_else(|| anyhow!("no {COMPAT_START} in word/settings.xml"))?;
     settings.splice(at..at, FOOTNOTE_PROPERTIES.bytes());
+    Ok(())
+}
+
+/// The prefix that docx-rs adds to the media names of the header images.
+const HEADER_MEDIA_PREFIX: &str = "header";
+
+/// The prefix that docx-rs adds to the media names of the footer images.
+const FOOTER_MEDIA_PREFIX: &str = "footer";
+
+/// Makes each header image with the bytes of a document image refer to the
+/// media entry of the document image, and removes the media entry of the
+/// header image. docx-rs gives the header images their own media entries.
+fn share_header_media(xml: &mut XMLDocx) -> Result<()> {
+    let mut shared = Vec::new();
+    for (name, data) in &xml.media {
+        if !name.starts_with(HEADER_MEDIA_PREFIX) {
+            continue;
+        }
+        let Some((document_name, _)) = xml.media.iter().find(|(n, d)| {
+            !n.starts_with(HEADER_MEDIA_PREFIX) && !n.starts_with(FOOTER_MEDIA_PREFIX) && d == data
+        }) else {
+            continue;
+        };
+        let from = format!(r#"Target="media/{name}.png""#);
+        let to = format!(r#"Target="media/{document_name}.png""#);
+        let (rels, at) = xml
+            .header_rels
+            .iter_mut()
+            .find_map(|rels| memmem::find(rels, from.as_bytes()).map(|at| (rels, at)))
+            .ok_or_else(|| anyhow!("no {from} in the header relationships"))?;
+        rels.splice(at..at + from.len(), to.bytes());
+        shared.push(name.clone());
+    }
+    xml.media.retain(|(name, _)| !shared.contains(name));
     Ok(())
 }
 
@@ -336,7 +376,7 @@ mod tests {
     #[test]
     fn generated_parts_replace_docx_rs_parts() {
         let params = Theme::Embedded("blank").docx_params().unwrap();
-        let bytes = Package::new(Docx::new(), &params, "ru-RU", "Title", &[], None)
+        let bytes = Package::new(Docx::new(), &params, "ru-RU", "Title", "1.0", &[], None)
             .unwrap()
             .into_bytes()
             .unwrap();
@@ -345,5 +385,6 @@ mod tests {
         assert_eq!(data("word/styles.xml"), &styles_xml(&params, "ru-RU"));
         assert_eq!(data("word/fontTable.xml"), &font_table_xml(&params));
         assert_eq!(data("docProps/core.xml"), &core_xml("Title"));
+        assert_eq!(data("docProps/custom.xml"), &custom_xml("1.0"));
     }
 }

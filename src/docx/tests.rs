@@ -450,15 +450,10 @@ fn header_has_logo_and_title_field() {
     ));
     assert_in_order(&header, &header_parts);
 
-    let embed = Regex::new(r#"r:embed="([^"]+)""#).unwrap();
-    let id = &embed.captures(&header).unwrap()[1];
-    let rels = part("word/_rels/header1.xml.rels");
-    let target = format!(
-        r#"Id="{id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/{id}.png""#
-    );
-    assert!(rels.contains(&target), "{rels}");
+    let id = &EMBED.captures(&header).unwrap()[1];
     assert!(id.starts_with("header"), "{id}");
-    assert!(names.contains(&format!("word/media/{id}.png")), "{names:?}");
+    let target = image_target(&part("word/_rels/header1.xml.rels"), id);
+    assert!(names.contains(&format!("word/{target}")), "{names:?}");
 
     let footer = part("word/footer1.xml");
     assert!(
@@ -476,6 +471,70 @@ fn header_has_logo_and_title_field() {
         r#"<w:t xml:space="preserve">1</w:t>"#,
     ));
     assert_in_order(&footer, &footer_parts);
+}
+
+/// The relationship ID of an image in a part.
+static EMBED: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"r:embed="([^"]+)""#).unwrap());
+
+/// The ID and the target of an image relationship.
+static IMAGE_REL: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"Id="([^"]+)" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="([^"]+)""#,
+    )
+    .unwrap()
+});
+
+/// Gives the target of the image relationship `id` in the relationships
+/// part `rels`.
+#[track_caller]
+fn image_target(rels: &str, id: &str) -> String {
+    IMAGE_REL
+        .captures_iter(rels)
+        .find(|c| &c[1] == id)
+        .unwrap_or_else(|| panic!("no image {id} in {rels}"))[2]
+        .to_string()
+}
+
+/// Gives the names of the media entries of the DOCX file `bytes`.
+fn media_names(bytes: &[u8]) -> Vec<String> {
+    entry_names(bytes)
+        .into_iter()
+        .filter(|n| n.starts_with("word/media/") && n.ends_with(".png"))
+        .collect()
+}
+
+#[test]
+fn title_page_sets_title_pg_and_shares_logo_media() {
+    let bytes = render_package(SAMPLE).unwrap().into_bytes().unwrap();
+    let media = media_names(&bytes);
+    let part = parts(bytes);
+
+    assert_eq!(media.len(), 1, "{media:?}");
+    let document = part("word/document.xml");
+    assert!(document.contains("<w:titlePg />"), "{document}");
+    let document_id = &EMBED.captures(&document).unwrap()[1];
+    let document_target = image_target(&part("word/_rels/document.xml.rels"), document_id);
+    let header = part("word/header1.xml");
+    let header_id = &EMBED.captures(&header).unwrap()[1];
+    let header_target = image_target(&part("word/_rels/header1.xml.rels"), header_id);
+    assert_eq!(header_target, document_target);
+    assert_eq!(media, [format!("word/{document_target}")]);
+}
+
+#[test]
+fn header_without_title_page_keeps_its_media_and_omits_title_pg() {
+    let bytes = render_package("# One\n").unwrap().into_bytes().unwrap();
+    let media = media_names(&bytes);
+    let part = parts(bytes);
+
+    let document = part("word/document.xml");
+    assert!(!document.contains("<w:drawing>"));
+    assert!(!document.contains("w:titlePg"), "{document}");
+    let header = part("word/header1.xml");
+    let id = &EMBED.captures(&header).unwrap()[1];
+    let target = image_target(&part("word/_rels/header1.xml.rels"), id);
+    assert_eq!(target, format!("media/{id}.png"));
+    assert_eq!(media, [format!("word/media/{id}.png")]);
 }
 
 #[test]
@@ -501,35 +560,21 @@ fn header_without_logo() {
 }
 
 #[test]
-fn empty_toc_has_two_paragraphs_and_no_sdt() {
+fn document_without_toc_entries_has_no_toc() {
     let document = render_parts("#### Four\n").unwrap()("word/document.xml");
     assert!(!document.contains("<w:sdt>"), "{document}");
+    assert!(!document.contains(r#"TOC \o"#), "{document}");
+    assert!(
+        !document.contains(r#"<w:br w:type="page" />"#),
+        "{document}"
+    );
     let body = between(&document, "<w:body>", "<w:sectPr");
-    let paragraphs: Vec<_> = PARAGRAPH.find_iter(body).map(|m| m.as_str()).collect();
-    assert_in_order(
-        paragraphs[0],
-        &[
-            r#"<w:fldChar w:fldCharType="begin" w:dirty="true" />"#,
-            r#"<w:instrText>TOC \o &quot;1-3&quot; \h \u \z</w:instrText>"#,
-            r#"<w:fldChar w:fldCharType="separate" w:dirty="false" />"#,
-        ],
-    );
+    let first = PARAGRAPH.find(body).unwrap().as_str();
     assert!(
-        !paragraphs[0].contains("fldCharType=\"end\""),
-        "{}",
-        paragraphs[0]
+        first.contains(r#"<w:pStyle w:val="Heading4" />"#),
+        "{first}"
     );
-    assert!(
-        paragraphs[1].contains(r#"<w:fldChar w:fldCharType="end" w:dirty="false" />"#),
-        "{}",
-        paragraphs[1]
-    );
-    assert!(
-        paragraphs[2].contains(r#"<w:br w:type="page" />"#),
-        "{}",
-        paragraphs[2]
-    );
-    assert_eq!(body.matches("TOC").count(), 1, "{body}");
+    assert!(first.contains(">Four</w:t>"), "{first}");
 }
 
 #[test]

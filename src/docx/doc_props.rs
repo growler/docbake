@@ -1,9 +1,12 @@
-//! Core properties (`docProps/core.xml`) generator for the DOCX renderer.
+//! Core properties (`docProps/core.xml`) and custom properties
+//! (`docProps/custom.xml`) generator for the DOCX renderer.
 //!
 //! [`core_xml`] writes the values that `docx-rs` writes: the creation and
 //! modification time 1970-01-01T00:00:00Z, the creator and the last editor
 //! `unknown`, and the revision 1. Thus the same input gives the same part.
-//! A document title goes in `dc:title`. The XML has no indentation.
+//! A document title goes in `dc:title`. [`custom_xml`] writes the document
+//! version in the custom property `Version`, which the footer shows with a
+//! `DOCPROPERTY` field. The XML has no indentation.
 
 use std::io::{self, Write};
 
@@ -59,6 +62,52 @@ fn write_core<W: Write>(w: &mut Writer<W>, title: &str) -> io::Result<()> {
     Ok(())
 }
 
+/// The format ID of the custom properties that `docx-rs` writes.
+const CUSTOM_FMTID: &str = "{D5CDD505-2E9C-101B-9397-08002B2CF9AE}";
+
+/// Makes `docProps/custom.xml`. An empty `version` gives no property.
+pub(super) fn custom_xml(version: &str) -> Vec<u8> {
+    let mut w = Writer::new(Vec::new());
+    // docx-rs writes a space before the slash of an empty element.
+    w.config_mut().add_space_before_slash_in_empty_elements = true;
+    write_custom(&mut w, version).expect("a write to a Vec does not fail");
+    w.into_inner()
+}
+
+fn write_custom<W: Write>(w: &mut Writer<W>, version: &str) -> io::Result<()> {
+    w.write_event(Event::Decl(BytesDecl::new(
+        "1.0",
+        Some("UTF-8"),
+        Some("yes"),
+    )))?;
+    let properties = w.create_element("Properties").with_attributes([
+        (
+            "xmlns",
+            "http://schemas.openxmlformats.org/officeDocument/2006/custom-properties",
+        ),
+        (
+            "xmlns:vt",
+            "http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes",
+        ),
+    ]);
+    if version.is_empty() {
+        properties.write_empty()?;
+        return Ok(());
+    }
+    properties.write_inner_content(|w| {
+        // The property IDs 0 and 1 are reserved. The first ID is 2.
+        w.create_element("property")
+            .with_attributes([("fmtid", CUSTOM_FMTID), ("pid", "2"), ("name", "Version")])
+            .write_inner_content(|w| {
+                w.create_element("vt:lpwstr")
+                    .write_text_content(BytesText::new(version))?;
+                Ok(())
+            })?;
+        Ok(())
+    })?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -69,6 +118,37 @@ mod tests {
         assert_eq!(
             String::from_utf8(core_xml("")).unwrap(),
             String::from_utf8(docx_rs).unwrap()
+        );
+    }
+
+    #[test]
+    fn custom_without_version_matches_docx_rs() {
+        let docx_rs = docx_rs::Docx::new().build().doc_props.custom;
+        assert_eq!(
+            String::from_utf8(custom_xml("")).unwrap(),
+            String::from_utf8(docx_rs).unwrap()
+        );
+    }
+
+    #[test]
+    fn custom_with_version_matches_docx_rs() {
+        let docx_rs = docx_rs::Docx::new()
+            .custom_property("Version", "1.0")
+            .build()
+            .doc_props
+            .custom;
+        assert_eq!(
+            String::from_utf8(custom_xml("1.0")).unwrap(),
+            String::from_utf8(docx_rs).unwrap()
+        );
+    }
+
+    #[test]
+    fn custom_version_is_escaped() {
+        let xml = String::from_utf8(custom_xml("1.0 & <x>")).unwrap();
+        assert!(
+            xml.contains("<vt:lpwstr>1.0 &amp; &lt;x&gt;</vt:lpwstr>"),
+            "{xml}"
         );
     }
 }
