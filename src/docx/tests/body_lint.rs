@@ -10,7 +10,8 @@
 //!
 //! A document without title-page front matter starts with the TOC and the
 //! page break after it. These blocks are in the Paragraphs group in all
-//! fixtures.
+//! fixtures. The lint also scans `word/footnotes.xml` of each fixture, and
+//! the header and footer parts of the Paragraphs fixture.
 
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::Write;
@@ -39,6 +40,8 @@ enum Group {
     Captions,
     /// Diagrams.
     Diagrams,
+    /// Footnotes.
+    Footnotes,
 }
 
 /// The properties that a style must carry. The names must match exactly,
@@ -54,6 +57,7 @@ const STYLE_PROPERTIES: &[&str] = &[
     "w:strike",
     "w:u",
     "w:spacing",
+    "w:vertAlign",
 ];
 
 /// The properties from [`STYLE_PROPERTIES`] that Markdown inline markup
@@ -62,8 +66,9 @@ const MARKUP_PROPERTIES: &[&str] = &["w:b", "w:i", "w:strike"];
 
 /// The groups with Markdown inline markup in the fixture. These groups can
 /// set the properties from [`MARKUP_PROPERTIES`]. The Blocks fixture has
-/// bold text in an admonition body.
-const MARKUP_GROUPS: &[Group] = &[Group::Code, Group::Blocks];
+/// bold text in an admonition body. The Footnotes fixture has bold text in
+/// a footnote.
+const MARKUP_GROUPS: &[Group] = &[Group::Code, Group::Blocks, Group::Footnotes];
 
 /// The elements that refer to a style with the attribute `w:val`.
 const STYLE_REFERENCES: &[&str] = &["w:pStyle", "w:rStyle", "w:tblStyle"];
@@ -255,6 +260,30 @@ lang: en
 ```
 ";
 
+const FOOTNOTES: &str = "\
+---
+lang: en
+---
+Text with a note[^a] and a second note[^b].
+
+| Name | Value |
+|------|-------|
+| one  | 1[^c] |
+
+[^a]: Note with `code`, a [link](https://example.com) and **strong** text.
+
+[^b]:
+    First paragraph.
+
+    ```
+    code
+    ```
+
+    Last paragraph.
+
+[^c]: Table note.
+";
+
 const FIXTURES: &[(Group, &str)] = &[
     (Group::Paragraphs, PARAGRAPHS),
     (Group::Code, CODE),
@@ -263,6 +292,7 @@ const FIXTURES: &[(Group, &str)] = &[
     (Group::Lists, LISTS),
     (Group::Captions, CAPTIONS),
     (Group::Diagrams, DIAGRAMS),
+    (Group::Footnotes, FOOTNOTES),
 ];
 
 /// An element from [`STYLE_PROPERTIES`] or [`STYLE_REFERENCES`].
@@ -421,12 +451,12 @@ fn style_ids(xml: &[u8]) -> HashSet<String> {
 }
 
 /// Gives the group of a hit in the fixture of `fixture`. The first
-/// `prefix` top-level body children and the elements out of `w:body` are
-/// in the Paragraphs group.
+/// `prefix` top-level body children are in the Paragraphs group. The
+/// elements out of `w:body` are in the group of the fixture.
 fn group_of(fixture: Group, block: Option<usize>, prefix: usize) -> Group {
     match block {
-        Some(block) if block >= prefix => fixture,
-        _ => Group::Paragraphs,
+        Some(block) if block < prefix => Group::Paragraphs,
+        _ => fixture,
     }
 }
 
@@ -434,6 +464,8 @@ fn group_of(fixture: Group, block: Option<usize>, prefix: usize) -> Group {
 struct Part {
     group: Group,
     name: String,
+    /// The text of the part.
+    text: String,
     scan: Scan,
     /// The text of the first top-level body children, as many as in
     /// [`BASELINE`]. See [`blocks_text`].
@@ -449,8 +481,8 @@ struct Rendered {
     baseline: String,
     /// The style IDs in `word/styles.xml`.
     style_ids: HashSet<String>,
-    /// `word/document.xml` of each fixture, and the header and footer
-    /// parts of the Paragraphs fixture.
+    /// `word/document.xml` and `word/footnotes.xml` of each fixture, and
+    /// the header and footer parts of the Paragraphs fixture.
     parts: Vec<Part>,
 }
 
@@ -473,8 +505,16 @@ static RENDERED: LazyLock<Rendered> = LazyLock::new(|| {
         parts.push(Part {
             group,
             name: "word/document.xml".to_string(),
+            text: String::from_utf8(xml.document.clone()).unwrap(),
             prefix: blocks_text(&xml.document, blocks),
             scan: document,
+        });
+        parts.push(Part {
+            group,
+            name: "word/footnotes.xml".to_string(),
+            text: String::from_utf8(xml.footnotes.clone()).unwrap(),
+            scan: scan(&xml.footnotes),
+            prefix: String::new(),
         });
         if group != Group::Paragraphs {
             continue;
@@ -484,6 +524,7 @@ static RENDERED: LazyLock<Rendered> = LazyLock::new(|| {
                 parts.push(Part {
                     group,
                     name: format!("word/{kind}{}.xml", i + 1),
+                    text: String::from_utf8(part.clone()).unwrap(),
                     scan: scan(part),
                     prefix: String::new(),
                 });
@@ -536,11 +577,27 @@ fn fixtures_start_with_baseline_blocks() {
     let rendered = &*RENDERED;
     assert!(rendered.prefix > 0);
     for part in &rendered.parts {
-        if part.group != Group::Paragraphs {
+        if part.group != Group::Paragraphs && part.name == "word/document.xml" {
             assert_eq!(part.prefix, rendered.baseline, "{:?}", part.group);
             assert!(part.scan.blocks.len() > rendered.prefix, "{:?}", part.group);
         }
     }
+}
+
+#[test]
+fn footnotes_fixture_footnotes_part_has_footnotes() {
+    let part = RENDERED
+        .parts
+        .iter()
+        .find(|p| p.group == Group::Footnotes && p.name == "word/footnotes.xml")
+        .unwrap();
+    assert!(
+        part.text.contains(r#"<w:footnote w:id="3">"#),
+        "{}",
+        part.text
+    );
+    assert!(part.text.contains(">Table<"), "{}", part.text);
+    assert!(!part.scan.hits.is_empty());
 }
 
 #[test]
@@ -630,6 +687,6 @@ fn prefix_blocks_are_paragraphs() {
     assert_eq!(group_of(Group::Code, Some(0), 2), Group::Paragraphs);
     assert_eq!(group_of(Group::Code, Some(1), 2), Group::Paragraphs);
     assert_eq!(group_of(Group::Code, Some(2), 2), Group::Code);
-    assert_eq!(group_of(Group::Tables, None, 2), Group::Paragraphs);
+    assert_eq!(group_of(Group::Tables, None, 2), Group::Tables);
     assert_eq!(group_of(Group::Paragraphs, Some(5), 2), Group::Paragraphs);
 }

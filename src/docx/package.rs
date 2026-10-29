@@ -7,7 +7,10 @@
 //! [`Package`] holds the parts that `docx-rs` makes, with `word/styles.xml`
 //! and `word/fontTable.xml` from the style parameters of the theme, and
 //! `docProps/core.xml` with the document title. It adds the table
-//! properties that `docx-rs` cannot write to `word/document.xml`. It writes
+//! properties that `docx-rs` cannot write to `word/document.xml`. A
+//! document with footnotes gets the renderer's `word/footnotes.xml`, its
+//! relationship and content type, and the footnote properties in
+//! `word/settings.xml`. It writes
 //! the parts to a ZIP file in the entry order of the `docx-rs` zipper. The
 //! XML parts are Deflated. The images in `word/media/` and the directories
 //! are Stored. All entries have the time 1980-01-01 00:00, thus the same
@@ -15,13 +18,15 @@
 
 use std::io::{Cursor, Seek, Write};
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use docx_rs::{Docx, XMLDocx};
+use memchr::memmem;
 use zip::write::FileOptions;
 use zip::{CompressionMethod, DateTime, ZipWriter};
 
 use super::doc_props::core_xml;
 use super::font_table::font_table_xml;
+use super::footnotes::FOOTNOTE_PROPERTIES;
 use super::params::DocxParams;
 use super::stylesheet::styles_xml;
 use super::tables::{splice_tables, TableLayout};
@@ -35,20 +40,33 @@ impl Package {
     /// Builds the parts of `docx` and replaces the style sheet and the font
     /// table with the parts made from `params`, and the core properties
     /// with the parts made from `title`. Adds the table properties from
-    /// `tables` to the document part. `lang` must be a valid language tag.
+    /// `tables` to the document part. `footnotes` is the footnotes part, or
+    /// `None` for a document without footnotes. `lang` must be a valid
+    /// language tag.
     pub(super) fn new(
-        docx: Docx,
+        mut docx: Docx,
         params: &DocxParams,
         lang: &str,
         title: &str,
         tables: &[TableLayout],
+        footnotes: Option<Vec<u8>>,
     ) -> Result<Self> {
+        // docx-rs adds the relationship and the content type only for
+        // references in top-level paragraphs.
+        if footnotes.is_some() {
+            docx.document_rels.has_footnotes = true;
+            docx.content_type = docx.content_type.add_footnotes();
+        }
         let mut xml = docx.build();
         xml.styles = styles_xml(params, lang);
         xml.font_table = font_table_xml(params);
         xml.doc_props.core = core_xml(title);
         xml.document = splice_tables(std::mem::take(&mut xml.document), tables)
             .context("failed to add table properties")?;
+        if let Some(footnotes) = footnotes {
+            xml.footnotes = footnotes;
+            add_footnote_properties(&mut xml.settings)?;
+        }
         Ok(Self { xml })
     }
 
@@ -69,6 +87,18 @@ impl Package {
     pub(super) fn xml(&self) -> &XMLDocx {
         &self.xml
     }
+}
+
+/// The element of `word/settings.xml` that follows `w:footnotePr` in the
+/// schema order. docx-rs writes no element between them.
+const COMPAT_START: &str = "<w:compat>";
+
+/// Inserts the footnote properties into the settings part `settings`.
+fn add_footnote_properties(settings: &mut Vec<u8>) -> Result<()> {
+    let at = memmem::find(settings, COMPAT_START.as_bytes())
+        .ok_or_else(|| anyhow!("no {COMPAT_START} in word/settings.xml"))?;
+    settings.splice(at..at, FOOTNOTE_PROPERTIES.bytes());
+    Ok(())
 }
 
 /// Writes the parts to a ZIP file.
@@ -306,7 +336,7 @@ mod tests {
     #[test]
     fn generated_parts_replace_docx_rs_parts() {
         let params = Theme::Embedded("blank").docx_params().unwrap();
-        let bytes = Package::new(Docx::new(), &params, "ru-RU", "Title", &[])
+        let bytes = Package::new(Docx::new(), &params, "ru-RU", "Title", &[], None)
             .unwrap()
             .into_bytes()
             .unwrap();

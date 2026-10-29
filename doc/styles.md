@@ -135,8 +135,8 @@ Legend:
 | `anchor.explicit`                 |  x   |  x  |      |
 | `span.bracketed.id`               |  x   |  x  |      |
 | `span.bracketed.class`            |  x   |     |      |
-| `footnote.reference`              |  x   |  x  |  ~   |
-| `footnote.body`                   |  x   |  x  |  ~   |
+| `footnote.reference`              |  x   |  x  |  x   |
+| `footnote.body`                   |  x   |  x  |  x   |
 | `footnote.backref`                |  x   |     |      |
 
 ## Generic Containers And Attributes
@@ -417,11 +417,14 @@ style). No semantic name refers to them.
 
 `footnote.reference`
 
-:  `FootnoteReference` -- character style, based on `DefaultParagraphFont`.
+:  `FootnoteReference` -- character style, based on `DefaultParagraphFont`,
+   superscript. The footnote reference in the text and the footnote number
+   in the footnote text use it.
 
 `footnote.body`
 
-:  `FootnoteText` -- paragraph style, based on `Normal`.
+:  `FootnoteText` -- paragraph style, based on `Normal`. The footnote text
+   in `word/footnotes.xml` uses it.
 
 ## Notes For Naming Consistency
 

@@ -37,6 +37,15 @@ const ADMONITION_STYLES: &[(&str, &str, &str, &str)] = &[
     ),
 ];
 
+/// Gives the default title of the admonition type `adm_type`.
+pub(super) fn default_title(adm_type: &str) -> &'static str {
+    ADMONITION_STYLES
+        .iter()
+        .find(|(t, ..)| *t == adm_type)
+        .expect("ADMONITION_STYLES covers ADMONITION_TYPES")
+        .3
+}
+
 impl<'a> DocxRenderer<'a> {
     /// Render an admonition block with the styles of its type.
     ///
@@ -55,7 +64,6 @@ impl<'a> DocxRenderer<'a> {
         adm_type: &str,
     ) -> Result<Docx> {
         let arena = context.arena;
-        let source = context.source;
         let children: Vec<_> = arena[node_ref].children(arena).collect();
         let &(_, header_style, body_style, default_title) = ADMONITION_STYLES
             .iter()
@@ -64,19 +72,20 @@ impl<'a> DocxRenderer<'a> {
 
         let (title, skip_first) = if let Some(&first) = children.first() {
             if matches!(arena[first].kind_data(), KindData::Heading(_)) {
-                let title = Self::collect_inline_text(arena, source, first);
+                let title = self.collect_text_runs(context, first, None)?;
                 (title, true)
             } else {
-                (default_title.to_string(), false)
+                (vec![Run::new().add_text(default_title)], false)
             }
         } else {
-            (default_title.to_string(), false)
+            (vec![Run::new().add_text(default_title)], false)
         };
 
         // ── Title paragraph ─────────────────────────────────────────
-        let title_para = Paragraph::new()
-            .style(header_style)
-            .add_run(Run::new().add_text(title));
+        let mut title_para = Paragraph::new().style(header_style);
+        for run in title {
+            title_para = title_para.add_run(run);
+        }
         docx = docx.add_paragraph(title_para);
 
         // ── Body children ───────────────────────────────────────────

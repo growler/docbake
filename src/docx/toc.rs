@@ -3,7 +3,8 @@ use std::collections::VecDeque;
 use anyhow::Result;
 use docx_rs::*;
 use rushdown::as_kind_data;
-use rushdown::ast::KindData;
+use rushdown::ast::{Arena, KindData, NodeRef};
+use rushdown_footnote::FootnoteDefinition;
 
 use crate::graph::DocumentGraph;
 
@@ -120,7 +121,9 @@ impl<'a> DocxRenderer<'a> {
             if !matches!(arena[node_ref].kind_data(), KindData::Heading(_)) {
                 continue;
             }
-            if crate::html::is_admonition_title_heading(arena, node_ref, source) {
+            if crate::html::is_admonition_title_heading(arena, node_ref, source)
+                || in_footnote_definition(arena, node_ref)
+            {
                 continue;
             }
 
@@ -145,6 +148,20 @@ impl<'a> DocxRenderer<'a> {
 
         Ok(entries)
     }
+}
+
+/// Tells if `node_ref` is in a footnote definition. The text of a footnote
+/// definition is in the footnotes part, thus its headings take no TOC
+/// entry.
+fn in_footnote_definition(arena: &Arena, node_ref: NodeRef) -> bool {
+    let mut parent = arena[node_ref].parent();
+    while let Some(p) = parent {
+        if rushdown::matches_extension_kind!(arena, p, FootnoteDefinition) {
+            return true;
+        }
+        parent = arena[p].parent();
+    }
+    false
 }
 
 struct TocEntry {

@@ -95,7 +95,7 @@ impl<'a> DocxRenderer<'a> {
                 let row_span = cell_rowspan(arena, source, cell_ref);
                 let mut cell = TableCell::new()
                     .width(span_width(&grid, col, span), WidthType::Dxa)
-                    .add_paragraph(self.render_cell_paragraph(context, cell_ref, style));
+                    .add_paragraph(self.render_cell_paragraph(context, cell_ref, style)?);
                 if span > 1 {
                     cell = cell.grid_span(span);
                 }
@@ -131,7 +131,7 @@ impl<'a> DocxRenderer<'a> {
         context: &RenderContext<'_>,
         cell_ref: NodeRef,
         style: &str,
-    ) -> Paragraph {
+    ) -> Result<Paragraph> {
         let arena = context.arena;
         let mut para = Paragraph::new().style(style);
         let alignment = match as_kind_data!(arena, cell_ref, TableCell).alignment() {
@@ -144,11 +144,11 @@ impl<'a> DocxRenderer<'a> {
             para = para.align(alignment);
         }
         for child in arena[cell_ref].children(arena) {
-            for run in self.render_inline_runs(context, child) {
+            for run in self.render_inline_runs(context, child)? {
                 para = para.add_run(run);
             }
         }
-        para
+        Ok(para)
     }
 }
 

@@ -26,6 +26,7 @@ use super::DocxRenderer;
 
 mod body_lint;
 mod captions;
+mod footnotes;
 mod lists;
 mod tables;
 

@@ -258,6 +258,8 @@ pub(crate) struct Style {
     pub bold: Option<bool>,
     pub italic: Option<bool>,
     pub underline: Option<bool>,
+    /// Superscript (`true`) or baseline (`false`) text.
+    pub superscript: Option<bool>,
     pub color: Option<Rgb>,
     pub align: Option<Align>,
     pub before: Option<Twips>,
@@ -405,6 +407,8 @@ struct RawStyle {
     italic: Option<bool>,
     #[serde(default, deserialize_with = "present")]
     underline: Option<bool>,
+    #[serde(default, deserialize_with = "present")]
+    superscript: Option<bool>,
     #[serde(default, deserialize_with = "present")]
     color: Option<ColorRef>,
     #[serde(default, deserialize_with = "present")]
@@ -621,6 +625,7 @@ impl RawStyle {
             bold: self.bold,
             italic: self.italic,
             underline: self.underline,
+            superscript: self.superscript,
             color: color("color", self.color)?,
             align: self.align,
             before: self.before,
@@ -1663,6 +1668,10 @@ lists:
             "styles.Hyperlink.underline: invalid type",
         );
         assert_starts(
+            &style_error("  FootnoteReference:\n    superscript:\n"),
+            "styles.FootnoteReference.superscript: invalid type",
+        );
+        assert_starts(
             &style_error("  Normal: {before: ~}\n"),
             "styles.Normal.before: invalid number in '~'",
         );
@@ -1791,6 +1800,7 @@ lists:
     align: right
     size: 28pt
     underline: false
+    superscript: false
     char_spacing: -0.5pt
     kern: 14pt
     after: 0pt
@@ -1818,6 +1828,8 @@ lists:
   Hyperlink:
     color: accent
     underline: true
+  FootnoteReference:
+    superscript: true
 "#,
         );
 
@@ -1852,12 +1864,14 @@ lists:
         assert_eq!(h1.bold, Some(true));
         assert_eq!(h1.italic, None);
         assert_eq!(h1.underline, None);
+        assert_eq!(h1.superscript, None);
 
         let title = &params.styles["Title"];
         assert_eq!(title.char_spacing, Some(SignedTwips(-10)));
         assert_eq!(title.kern, Some(HalfPoints(28)));
         assert_eq!(title.align, Some(Align::Right));
         assert_eq!(title.underline, Some(false));
+        assert_eq!(title.superscript, Some(false));
 
         let code = &params.styles["CodeBlock"];
         assert_eq!(code.size, Some(HalfPoints(20)));
@@ -1873,6 +1887,7 @@ lists:
         assert_eq!(note.borders.left.unwrap().color.to_string(), "6CB4EE");
 
         assert_eq!(params.styles["Hyperlink"].underline, Some(true));
+        assert_eq!(params.styles["FootnoteReference"].superscript, Some(true));
     }
 
     #[test]

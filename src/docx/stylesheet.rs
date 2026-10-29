@@ -520,7 +520,8 @@ fn run_properties<W: Write>(w: &mut Writer<W>, style: &Style) -> io::Result<()> 
         || s.kern.is_some()
         || s.size.is_some()
         || s.underline.is_some()
-        || fill.is_some();
+        || fill.is_some()
+        || s.superscript.is_some();
     if !set {
         return Ok(());
     }
@@ -550,6 +551,14 @@ fn run_properties<W: Write>(w: &mut Writer<W>, style: &Style) -> io::Result<()> 
         }
         if let Some(fill) = fill {
             shading(w, fill)?;
+        }
+        if let Some(superscript) = s.superscript {
+            let align = if superscript {
+                "superscript"
+            } else {
+                "baseline"
+            };
+            val(w, "w:vertAlign", align)?;
         }
         Ok(())
     })?;
@@ -1011,7 +1020,8 @@ styles:
             style(&xml, "FootnoteReference"),
             concat!(
                 r#"<w:name w:val="footnote reference"/><w:basedOn w:val="DefaultParagraphFont"/>"#,
-                r#"<w:uiPriority w:val="99"/><w:semiHidden/><w:unhideWhenUsed/></w:style>"#,
+                r#"<w:uiPriority w:val="99"/><w:semiHidden/><w:unhideWhenUsed/>"#,
+                r#"<w:rPr><w:vertAlign w:val="superscript"/></w:rPr></w:style>"#,
             ),
         );
     }
@@ -1385,6 +1395,7 @@ styles:
             "    bold: true\n",
             "    italic: true\n",
             "    underline: true\n",
+            "    superscript: true\n",
             "    color: accent\n",
             "    align: justify\n",
             "    before: 6pt\n",
@@ -1407,6 +1418,7 @@ styles:
             "    bold: true\n",
             "    italic: true\n",
             "    underline: false\n",
+            "    superscript: false\n",
             "    color: accent\n",
             "    fill: accent\n",
             "    char_spacing: 1pt\n",
@@ -1434,6 +1446,7 @@ styles:
             "<w:kern ",
             "<w:sz ",
             r#"<w:u w:val="single"/>"#,
+            r#"<w:vertAlign w:val="superscript"/>"#,
         ] {
             assert_has(normal, part);
         }
@@ -1453,6 +1466,10 @@ styles:
                 r#"<w:spacing w:val="20"/><w:kern w:val="20"/><w:sz w:val="20"/><w:szCs w:val="20"/>"#,
                 r#"<w:u w:val="none"/><w:shd "#,
             ),
+        );
+        assert_has(
+            style(&xml, "InlineCode"),
+            r#"/><w:vertAlign w:val="baseline"/></w:rPr>"#,
         );
         assert_schema_order(&xml);
     }

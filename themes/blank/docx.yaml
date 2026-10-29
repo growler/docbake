@@ -454,7 +454,8 @@ styles:
     color: link
     underline: true
 
-  FootnoteReference: {}
+  FootnoteReference:
+    superscript: true
 
   FootnoteText:
     based_on: Normal

@@ -45,7 +45,7 @@ impl<'a> DocxRenderer<'a> {
                 }
 
                 for child in arena[node_ref].children(arena) {
-                    let runs = self.render_inline_runs(context, child);
+                    let runs = self.render_inline_runs(context, child)?;
                     for run in runs {
                         para = para.add_run(run);
                     }
@@ -62,7 +62,7 @@ impl<'a> DocxRenderer<'a> {
                     para = para.style(style);
                 }
                 for child in arena[node_ref].children(arena) {
-                    let runs = self.render_inline_runs(context, child);
+                    let runs = self.render_inline_runs(context, child)?;
                     for run in runs {
                         para = para.add_run(run);
                     }
@@ -112,7 +112,7 @@ impl<'a> DocxRenderer<'a> {
                 } else if rushdown::matches_extension_kind!(arena, node_ref, DefinitionList) {
                     docx = self.render_definition_list(docx, context, node_ref)?;
                 }
-                // FootnoteDefinition nodes are rendered inline at reference sites — skip here.
+                // A footnote definition is rendered at each of its references.
             }
         }
         Ok(docx)
@@ -152,6 +152,17 @@ impl<'a> DocxRenderer<'a> {
             }
         }
         Ok(docx)
+    }
+
+    /// Gives the box character of the task `task`, or `None` for an item
+    /// without a task.
+    pub(super) fn task_box(&self, task: Option<Task>) -> Option<&str> {
+        let boxes = &self.params.lists.task_list;
+        match task {
+            Some(Task::Completed) => Some(boxes.checked.as_str()),
+            Some(Task::Active) => Some(boxes.unchecked.as_str()),
+            _ => None,
+        }
     }
 
     /// Render a list at the list level `level` and its nested lists. The
@@ -214,11 +225,9 @@ impl<'a> DocxRenderer<'a> {
 
         let lists = &self.params.lists;
         for (item_ref, task) in items {
-            let mut marker = match task {
-                Some(Task::Completed) => Some(lists.task_list.checked.as_str()),
-                Some(Task::Active) => Some(lists.task_list.unchecked.as_str()),
-                _ if kind == ListKind::Task => Some(lists.bullet_list[ilvl].as_str()),
-                _ => None,
+            let mut marker = match self.task_box(task) {
+                None if kind == ListKind::Task => Some(lists.bullet_list[ilvl].as_str()),
+                task_box => task_box,
             };
             let starts_with_paragraph = arena[item_ref]
                 .children(arena)
@@ -244,7 +253,7 @@ impl<'a> DocxRenderer<'a> {
                         first = false;
                         let mut para = list_paragraph(id, marker.take());
                         for inline in arena[child].children(arena) {
-                            let runs = self.render_inline_runs(context, inline);
+                            let runs = self.render_inline_runs(context, inline)?;
                             for run in runs {
                                 para = para.add_run(run);
                             }
@@ -294,7 +303,7 @@ impl<'a> DocxRenderer<'a> {
             if rushdown::matches_extension_kind!(arena, child, Term) {
                 let mut para = Paragraph::new().style("DefinitionTerm");
                 for inline in arena[child].children(arena) {
-                    let runs = self.render_inline_runs(context, inline);
+                    let runs = self.render_inline_runs(context, inline)?;
                     for run in runs {
                         para = para.add_run(run);
                     }
@@ -370,10 +379,7 @@ impl<'a> DocxRenderer<'a> {
                 InstrText::Unsupported(format!(" SEQ {seq} \\* ARABIC ")),
                 &number.to_string(),
             );
-            let runs: Vec<_> = arena[ct_ref]
-                .children(arena)
-                .flat_map(|child| self.render_inline_runs(context, child))
-                .collect();
+            let runs = self.collect_child_runs(context, ct_ref)?;
             if !runs.is_empty() {
                 para = para.add_run(Run::new().add_text(labels.separator));
             }

@@ -14,6 +14,8 @@
 //! body walk, the diagrams that the artifact cache does not hold are
 //! rendered in parallel into the cache.
 //! Regular images are read from disk and embedded directly.
+//!
+//! Each footnote reference gives a Word footnote in `word/footnotes.xml`.
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -30,6 +32,7 @@ use crate::diagram::DiagramThemes;
 use crate::graph::{DocumentGraph, PreparedDocument};
 use crate::DebugDumper;
 
+use self::footnotes::FootnotesPart;
 use self::lang::CaptionLabels;
 use self::package::Package;
 use self::params::DocxParams;
@@ -41,6 +44,7 @@ mod blocks;
 mod doc_props;
 mod fields;
 mod font_table;
+mod footnotes;
 mod header_footer;
 mod inline;
 mod lang;
@@ -72,6 +76,8 @@ pub(crate) struct DocxRenderer<'a> {
     /// The number of the last caption of each kind: table, figure and
     /// listing.
     caption_counters: RefCell<[usize; 3]>,
+    /// The footnotes, in reference order.
+    footnotes: RefCell<FootnotesPart>,
     profile: RenderProfile,
 }
 
@@ -85,6 +91,9 @@ struct RenderContext<'a> {
     /// The style of the body paragraphs in the block that is open, for
     /// example `Quote` in a block quote. `None` gives the `Normal` style.
     paragraph_style: Option<&'static str>,
+    /// True in the text of a footnote. An image gives its alt text and a
+    /// footnote reference gives nothing.
+    footnote: bool,
 }
 
 impl<'a> DocxRenderer<'a> {
@@ -110,6 +119,7 @@ impl<'a> DocxRenderer<'a> {
             tables: RefCell::new(Vec::new()),
             caption_labels: Cell::new(lang::caption_labels(lang::DEFAULT_LANG)),
             caption_counters: RefCell::new([0; 3]),
+            footnotes: RefCell::new(FootnotesPart::default()),
             profile,
         }
     }
@@ -125,6 +135,7 @@ impl<'a> DocxRenderer<'a> {
         let lang = lang::document_lang(metadata)?;
         self.caption_labels.set(lang::caption_labels(lang));
         *self.caption_counters.borrow_mut() = [0; 3];
+        *self.footnotes.borrow_mut() = FootnotesPart::default();
 
         // ── Page size and margins ───────────────────────────────────────
         let page = &self.params.page;
@@ -171,7 +182,14 @@ impl<'a> DocxRenderer<'a> {
         // each top-level block.  render_block handles its own children.
         docx = self.render_graph_document(docx, graph, graph.root_id, 0)?;
 
-        Package::new(docx, self.params, lang, fields.title, &self.tables.take())
+        Package::new(
+            docx,
+            self.params,
+            lang,
+            fields.title,
+            &self.tables.take(),
+            self.footnotes.take().finish(),
+        )
     }
 
     /// Walk a document occurrence, resolving includes and rendering
@@ -208,6 +226,7 @@ impl<'a> DocxRenderer<'a> {
                 heading_shift,
                 graph,
                 paragraph_style: None,
+                footnote: false,
             };
             docx = self.render_block(docx, &context, child)?;
         }
