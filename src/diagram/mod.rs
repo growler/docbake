@@ -76,7 +76,7 @@ pub(crate) use theme::{apply_d2_theme, apply_mermaid_theme, apply_plantuml_theme
 pub(crate) use transform::{paragraph_has_sole_image, transform_diagram_images};
 
 #[cfg(test)]
-use backends::render_mermaid_svg;
+use backends::{plantuml_error, plantuml_java_tool_options, render_mermaid_svg};
 #[cfg(test)]
 use transform::{diagram_type_for_path, drawio_page_from_dest};
 

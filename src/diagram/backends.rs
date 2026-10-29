@@ -128,6 +128,35 @@ pub(crate) fn render_mermaid_svg_auto(command: Option<&str>, src: &str) -> anyho
     render_mermaid_svg(src)
 }
 
+/// Value of `JAVA_TOOL_OPTIONS` for the PlantUML child process.
+///
+/// The JVM reads `JAVA_TOOL_OPTIONS` itself, so the headless flag applies
+/// whichever way the `plantuml` wrapper starts `java`.  Without it, macOS
+/// registers the JVM as a foreground application that takes the focus.
+/// The `inherited` value set by the user is kept and the flag is appended
+/// to it.
+pub(super) fn plantuml_java_tool_options(
+    inherited: Option<std::ffi::OsString>,
+) -> std::ffi::OsString {
+    let mut opts = inherited.unwrap_or_default();
+    if !opts.is_empty() {
+        opts.push(" ");
+    }
+    opts.push("-Djava.awt.headless=true");
+    opts
+}
+
+/// Error text from the PlantUML stderr, without the
+/// `Picked up JAVA_TOOL_OPTIONS: ...` line that the JVM prints when the
+/// variable is set.
+pub(super) fn plantuml_error(stderr: &[u8]) -> String {
+    String::from_utf8_lossy(stderr)
+        .lines()
+        .filter(|line| !line.starts_with("Picked up JAVA_TOOL_OPTIONS:"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Render a PlantUML diagram to SVG by shelling out to the `plantuml` binary.
 ///
 /// If `command` is `None`, the binary is located via `which::which("plantuml")`.
@@ -141,8 +170,12 @@ pub(crate) fn render_plantuml_svg(
     };
 
     let mut child = Command::new(path)
-        .args(["-tsvg", "-p", "-Djava.awt.headless=true"])
+        .args(["-tsvg", "-p"])
         .env("JAVA_OPTS", "-Djava.awt.headless=true")
+        .env(
+            "JAVA_TOOL_OPTIONS",
+            plantuml_java_tool_options(std::env::var_os("JAVA_TOOL_OPTIONS")),
+        )
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -160,7 +193,7 @@ pub(crate) fn render_plantuml_svg(
     if output.status.success() {
         Ok(output.stdout)
     } else {
-        Err(String::from_utf8_lossy(&output.stderr).into_owned().into())
+        Err(plantuml_error(&output.stderr).into())
     }
 }
 
@@ -321,8 +354,12 @@ pub(crate) fn render_plantuml_png(
     };
 
     let mut child = Command::new(path)
-        .args(["-tpng", "-p", "-Djava.awt.headless=true"])
+        .args(["-tpng", "-p"])
         .env("JAVA_OPTS", "-Djava.awt.headless=true")
+        .env(
+            "JAVA_TOOL_OPTIONS",
+            plantuml_java_tool_options(std::env::var_os("JAVA_TOOL_OPTIONS")),
+        )
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -340,7 +377,7 @@ pub(crate) fn render_plantuml_png(
     if output.status.success() {
         Ok(output.stdout)
     } else {
-        Err(String::from_utf8_lossy(&output.stderr).into_owned().into())
+        Err(plantuml_error(&output.stderr).into())
     }
 }
 

@@ -339,3 +339,89 @@ fn as_code_suppresses_typst_diagram() {
         "typst block with .as-code should remain a CodeBlock"
     );
 }
+
+#[test]
+fn plantuml_java_tool_options_appends_to_inherited_value() {
+    assert_eq!(plantuml_java_tool_options(None), "-Djava.awt.headless=true");
+    assert_eq!(
+        plantuml_java_tool_options(Some("".into())),
+        "-Djava.awt.headless=true"
+    );
+    assert_eq!(
+        plantuml_java_tool_options(Some("-Xmx1g".into())),
+        "-Xmx1g -Djava.awt.headless=true"
+    );
+}
+
+#[test]
+fn plantuml_error_drops_java_tool_options_notice() {
+    let stderr = b"Picked up JAVA_TOOL_OPTIONS: -Djava.awt.headless=true\n\
+                   Error line 2 in file: string\n";
+    assert_eq!(plantuml_error(stderr), "Error line 2 in file: string");
+}
+
+/// Write a fake `plantuml` script that prints `$JAVA_TOOL_OPTIONS` on the
+/// first line and each argv entry on its own line after it.  It reads all
+/// of stdin first, so the source write never meets a closed pipe.
+#[cfg(unix)]
+fn fake_plantuml(dir: &std::path::Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let path = dir.join("plantuml");
+    fs::write(
+        &path,
+        "#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' \"$JAVA_TOOL_OPTIONS\" \"$@\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
+#[cfg(unix)]
+fn assert_plantuml_headless(output: &[u8], format_arg: &str) {
+    let text = String::from_utf8(output.to_vec()).unwrap();
+    let mut lines = text.lines();
+    let java_tool_options = lines.next().unwrap_or_default();
+    let args: Vec<&str> = lines.collect();
+    assert!(
+        java_tool_options.ends_with("-Djava.awt.headless=true"),
+        "expected JAVA_TOOL_OPTIONS to end with -Djava.awt.headless=true, got {java_tool_options:?}"
+    );
+    assert!(
+        args.contains(&format_arg),
+        "expected {format_arg} in plantuml args, got {args:?}"
+    );
+    assert!(
+        args.contains(&"-p"),
+        "expected -p in plantuml args, got {args:?}"
+    );
+    assert!(
+        !args.contains(&"-Djava.awt.headless=true"),
+        "expected no -Djava.awt.headless=true in plantuml args, got {args:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn plantuml_svg_sets_headless_via_java_tool_options() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = fake_plantuml(dir.path());
+    let output = render_plantuml_svg(
+        Some(script.to_str().unwrap()),
+        b"@startuml\nA -> B\n@enduml\n",
+    )
+    .unwrap();
+    assert_plantuml_headless(&output, "-tsvg");
+}
+
+#[cfg(unix)]
+#[test]
+fn plantuml_png_sets_headless_via_java_tool_options() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = fake_plantuml(dir.path());
+    let output = render_plantuml_png(
+        Some(script.to_str().unwrap()),
+        b"@startuml\nA -> B\n@enduml\n",
+    )
+    .unwrap();
+    assert_plantuml_headless(&output, "-tpng");
+}
