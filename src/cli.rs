@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 #[command(
     name = "docbake",
     version,
-    about = "Produce single-page HTML, multi-page HTML, or PDF from markdown"
+    about = "Produce single-page HTML, multi-page HTML, PDF, or DOCX from markdown"
 )]
 pub struct Cli {
     #[arg(long, global = true)]
@@ -43,9 +43,10 @@ pub enum OutputFormat {
     Pdf,
     Typst,
     Markdown,
-    /// DOCX output using the same renderer as `publish gdoc`.
-    /// Useful for inspecting and debugging Google Docs rendering locally.
-    DocxGdoc,
+    /// DOCX document. The same renderer makes the DOCX for `publish gdoc`.
+    /// Alias: `docx-gdoc`.
+    #[value(name = "docx", alias = "docx-gdoc")]
+    Docx,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]

@@ -24,11 +24,10 @@ Typst), or publish the compiled document to Confluence or Google Docs.
 - **Typst/PDF renderer** (`src/render_typst.rs`): emits `.typ` markup, then shells
   out to external `typst compile` to produce PDF. **`typst` must be installed on
   PATH.**
-- **DOCX renderer** (`src/docx/`): DOCX for `build -f docx-gdoc` and
-  `publish gdoc`, uses `docx-rs`. `mod.rs` holds `DocxRenderer` and `render`;
-  one file for each element group (blocks, inline, tables, admonitions, media,
-  title page, header and footer, TOC, numbering) and the parallel diagram
-  prefetch.
+- **DOCX renderer** (`src/docx/`): DOCX for `build -f docx` and `publish gdoc`,
+  uses `docx-rs`. `mod.rs` holds `DocxRenderer` and `render`; one file for each
+  element group (blocks, inline, tables, admonitions, media, title page, header
+  and footer, TOC, numbering) and the parallel diagram prefetch.
 - **Theme** (`src/theme.rs`): loads theme from a directory or embedded default.
   Convention-based file names.
 - **Build helpers** (`src/build.rs`): markdown parser construction, template
@@ -55,6 +54,7 @@ cargo test                           # run tests
 cargo run -- build -f page -i doc/ru/index.md -o target/doc-out/builder.html
 cargo run -- build -f pdf -i doc/ru/index.md -o target/doc-out/builder.pdf
 cargo run -- build -f site -i doc/ru/index.md -o target/doc-out/builder
+cargo run -- build -f docx -b doc -i doc/ru/index.md -o target/doc-out/builder.docx
 
 # With a custom theme
 cargo run -- -t my-theme build -f page -i doc/ru/index.md -o target/out.html
@@ -71,8 +71,8 @@ cargo run -- parse doc/ru/index.md       # dump parsed AST
 
 Global: `--debug-dump`, `-t/--theme <dir>`, `--cache <dir>`, `--no-cache`
 
-Build: `-f/--format <page|site|pdf|markdown>`, `-i/--input <file.md>`,
-`-o/--output <target>`, `-b/--base <dir>`
+Build: `-f/--format <page|site|pdf|typst|markdown|docx>`,
+`-i/--input <file.md>`, `-o/--output <target>`, `-b/--base <dir>`
 
 No custom lint, fmt, or CI config exists — standard `cargo fmt`, `cargo clippy`,
 `cargo test` apply with Rust defaults.

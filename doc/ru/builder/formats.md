@@ -20,10 +20,10 @@
 
 :  Промежуточный Typst-файл (`.typ`) без вызова `typst compile`.
 
-`docx-gdoc`
+`docx`
 
-:  DOCX-документ, создаваемый тем же рендерером, что и `publish gdoc`. Используется
-   для локальной отладки Google Docs-пайплайна.
+:  DOCX-документ. Этот же рендерер создаёт DOCX для `publish gdoc`. Имя `docx-gdoc`
+   является псевдонимом `docx`.
 
 `markdown`
 
@@ -83,7 +83,7 @@ div:
 
 - `build -f page` и `build -f site` → `html`
 - `build -f pdf` и `build -f typst` → `pdf`
-- `build -f docx-gdoc` → `docx`
+- `build -f docx` → `docx`
 - `publish confluence` → `confluence`
 - `publish gdoc` → `docx`
 - `build -f markdown` → `markdown`

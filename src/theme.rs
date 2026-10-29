@@ -112,7 +112,7 @@ impl Theme {
             OutputFormat::Html => TEMPLATE_HTML,
             OutputFormat::HtmlMulti => TEMPLATE_MULTIPAGE_HTML,
             OutputFormat::Pdf | OutputFormat::Typst => TEMPLATE_TYP,
-            OutputFormat::Markdown | OutputFormat::DocxGdoc => {
+            OutputFormat::Markdown | OutputFormat::Docx => {
                 bail!("{format:?} output does not use a template")
             }
         };

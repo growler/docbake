@@ -1,7 +1,7 @@
 # docbake
 
-CLI-утилита для сборки многофайловой Markdown-документации в различные
-выходные форматы: single-page HTML, multi-page HTML, PDF (через Typst) и
+CLI-утилита для сборки многофайловой Markdown-документации в различные выходные
+форматы: single-page HTML, multi-page HTML, PDF (через Typst), DOCX и
 Confluence.
 
 Gitlab CI сервер для сборки и публикации документации.
@@ -10,7 +10,7 @@ Gitlab CI сервер для сборки и публикации докуме�
 
 ## Возможности
 
-- **Форматы вывода:** `page`, `site`, `pdf`, `typst`, `markdown`
+- **Форматы вывода:** `page`, `site`, `pdf`, `typst`, `markdown`, `docx`
 - **Диаграммы:** PlantUML, Mermaid, D2, Typst, DrawIO — рендерятся в SVG, результат кешируется
 - **Темы:** встроенные темы (`blank`, `blank`, `digitaltide`) + поддержка пользовательских тем
 - **Live-reload:** команда `serve` с автоматической пересборкой при изменении файлов
@@ -32,6 +32,9 @@ docbake build -f pdf -i doc/ru/index.md -o target/doc/output.pdf
 
 # Объединённый Markdown
 docbake build -f markdown -i doc/ru/index.md -o target/doc/output.md
+
+# DOCX
+docbake build -f docx -i doc/ru/index.md -o target/doc/output.docx
 
 # Live-reload сервер
 docbake serve -f page -i doc/ru/index.md

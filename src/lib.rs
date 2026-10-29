@@ -543,7 +543,7 @@ fn resolve_output(output: &Path, input: &Path, format: OutputFormat) -> Result<(
                 OutputFormat::Html => "html",
                 OutputFormat::Pdf => "pdf",
                 OutputFormat::Markdown => "md",
-                OutputFormat::DocxGdoc => "docx",
+                OutputFormat::Docx => "docx",
                 OutputFormat::HtmlMulti | OutputFormat::Typst => unreachable!(),
             };
             // If -o has a recognised extension, treat as a file path.
@@ -655,10 +655,10 @@ pub(crate) fn build_command(
 
     enforce_visible_target_policy(build.graph(), &render_profile, broken_links)?;
 
-    // ── DOCX-for-Google-Docs format (no theme needed) ───────────────────
+    // ── DOCX format (no Tera template) ──────────────────────────────────
     // Uses the same DocxRenderer as `publish gdoc` — diagrams are rendered
     // to PNG and embedded, images are read from disk and embedded.
-    if matches!(format, OutputFormat::DocxGdoc) {
+    if matches!(format, OutputFormat::Docx) {
         let diagram_themes = crate::diagram::DiagramThemes {
             plantuml: theme.plantuml_theme()?,
             mermaid: theme.mermaid_theme()?,
@@ -817,7 +817,7 @@ pub(crate) fn build_command(
                 .with_context(|| format!("failed to write {}", output_file.display()))?;
             logger.log(format!("wrote {}", output_file.display()));
         }
-        OutputFormat::Markdown | OutputFormat::DocxGdoc => unreachable!(),
+        OutputFormat::Markdown | OutputFormat::Docx => unreachable!(),
     }
 
     Ok(())
@@ -1308,5 +1308,70 @@ mod tests {
         ]);
         crate::run(cli).unwrap();
         assert!(target.join("docx.yaml").is_file());
+    }
+
+    fn parse_build_format(value: &str) -> crate::cli::OutputFormat {
+        use clap::Parser;
+
+        let cli = crate::cli::Cli::try_parse_from([
+            "docbake",
+            "build",
+            "-f",
+            value,
+            "-i",
+            "doc/index.md",
+            "-o",
+            "out",
+        ])
+        .unwrap();
+        match cli.command {
+            crate::cli::Command::Build { format, .. } => format,
+            other => panic!("expected build command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_format_docx_parses_name_and_alias() {
+        use clap::ValueEnum;
+
+        assert!(matches!(
+            parse_build_format("docx"),
+            crate::cli::OutputFormat::Docx
+        ));
+        assert!(matches!(
+            parse_build_format("docx-gdoc"),
+            crate::cli::OutputFormat::Docx
+        ));
+        assert_eq!(
+            crate::cli::OutputFormat::Docx
+                .to_possible_value()
+                .unwrap()
+                .get_name(),
+            "docx"
+        );
+    }
+
+    #[test]
+    fn resolve_output_docx_derives_file_name_from_input() {
+        let (file, dir) = super::resolve_output(
+            std::path::Path::new("out"),
+            std::path::Path::new("doc/index.md"),
+            crate::cli::OutputFormat::Docx,
+        )
+        .unwrap();
+        assert_eq!(file, std::path::Path::new("out/index.docx"));
+        assert_eq!(dir, std::path::Path::new("out"));
+    }
+
+    #[test]
+    fn resolve_output_docx_keeps_explicit_file_path() {
+        let (file, dir) = super::resolve_output(
+            std::path::Path::new("out/x.docx"),
+            std::path::Path::new("doc/index.md"),
+            crate::cli::OutputFormat::Docx,
+        )
+        .unwrap();
+        assert_eq!(file, std::path::Path::new("out/x.docx"));
+        assert_eq!(dir, std::path::Path::new("out"));
     }
 }

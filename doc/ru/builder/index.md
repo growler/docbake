@@ -8,7 +8,7 @@
 - **site** — multi-page HTML с навигацией между страницами
 - **PDF** — документ на базе Typst
 - **Typst** — промежуточный `.typ` файл
-- **DOCX (docx-gdoc)** — DOCX в том же формате, что используется в `publish gdoc`
+- **DOCX (docx)** — DOCX в том же формате, что используется в `publish gdoc`
 - **Markdown** — единый Markdown-файл, полученный после раскрытия всех `include`,
   переписывания ссылок и сборки сносок
 
@@ -16,8 +16,8 @@
 исходников PlantUML, D2 и Draw.io.
 
 ~~~
-$ docbake --help
-Produce single-page HTML, multi-page HTML, or PDF from markdown
+$ docbake -h
+Produce single-page HTML, multi-page HTML, PDF, or DOCX from markdown
 
 Usage: docbake [OPTIONS] <COMMAND>
 
@@ -37,69 +37,90 @@ Commands:
 
 Options:
       --debug-dump
-  -t, --theme <THEME>  Theme name or directory. Embedded names: blank,
-                        blank, digitaltide. When omitted the built-in
-                        blank theme is used
+  -t, --theme <THEME>  Theme name or directory
       --cache <CACHE>  Override the default cache directory for rendered
-                        artifacts
+                       artifacts
       --no-cache       Disable artifact caching entirely
-  -h, --help           Print help
+  -h, --help           Print help (see more with '--help')
+  -V, --version        Print version
 ~~~
 
 ~~~
-$ docbake build --help
+$ docbake build -h
 Build a document in the specified format
 
 Usage: docbake build [OPTIONS] --format <FORMAT> --input <INPUT>
                          --output <OUTPUT>
 
 Options:
-  -f, --format <FORMAT>          Output format [possible values: page,
-                                 site, pdf, typst, markdown,
-                                 docx-gdoc]
-  -i, --input <INPUT>            Root markdown file
-  -o, --output <OUTPUT>          Output file or directory
-  -b, --base <BASE>              Base directory for absolute path resolution.
-                                 Defaults to the parent directory of the
-                                 input file
-      --broken-links <MODE>      How to handle broken links: "warn" or
-                                 "error" [default: error]
-      --meta <KEY> <VALUE>       Override a front-matter value. Repeatable.
-                                 Key may use dot-notation
-      --meta-drop <KEY>          Remove a front-matter key before applying
-                                 --meta overrides. Repeatable
-      --meta-file <PATH>         Merge top-level metadata keys from a YAML
-                                 file. Keys with the same name replace
-                                 front-matter keys
-  -h, --help                     Print help
+      --debug-dump
+  -f, --format <FORMAT>              Output format [possible values: page,
+                                     site, pdf, typst, markdown, docx]
+  -i, --input <INPUT>                Root markdown file
+  -t, --theme <THEME>                Theme name or directory
+      --cache <CACHE>                Override the default cache directory
+                                     for rendered artifacts
+  -o, --output <OUTPUT>              Output file or directory
+  -b, --base <BASE>                  Base directory for absolute path
+                                     resolution. Defaults to the parent
+                                     directory of the input file
+      --no-cache                     Disable artifact caching entirely
+      --broken-links <BROKEN_LINKS>  How to handle broken links: "warn"
+                                     prints diagnostics and continues,
+                                     "error" aborts the build.  Defaults to
+                                     "error" [default: error] [possible
+                                     values: warn, error]
+      --meta <KEY> <VALUE>           Override a front-matter value.
+                                     Repeatable. Key may use dot-notation
+                                     (e.g. "confluence.server")
+      --meta-drop <KEY>              Remove a front-matter key before
+                                     applying --meta overrides. Repeatable.
+                                     Key may use dot-notation (e.g.
+                                     "confluence.path")
+      --meta-file <PATH>             Merge top-level metadata keys from a
+                                     YAML file. Keys with the same name
+                                     replace front-matter keys
+  -h, --help                         Print help (see more with '--help')
 ~~~
 
 ~~~
-$ docbake serve --help
+$ docbake serve -h
 Serve a document with live-reload on file changes
 
 Usage: docbake serve [OPTIONS] --format <FORMAT> --input <INPUT>
 
 Options:
-  -f, --format <FORMAT>          Output format (only page and site
-                                 are supported) [possible values: page,
-                                 site, pdf, typst, markdown]
-  -i, --input <INPUT>            Root markdown file
-  -b, --base <BASE>              Base directory for absolute path resolution.
-                                 Defaults to the parent directory of the
-                                 input file
-  -p, --port <PORT>              Port to listen on. If not specified, an
-                                 available port is chosen automatically
-      --broken-links <MODE>      How to handle broken links: "warn" or
-                                 "error" [default: warn]
-      --meta <KEY> <VALUE>       Override a front-matter value. Repeatable.
-                                 Key may use dot-notation
-      --meta-drop <KEY>          Remove a front-matter key before applying
-                                 --meta overrides. Repeatable
-      --meta-file <PATH>         Merge top-level metadata keys from a YAML
-                                 file. Keys with the same name replace
-                                 front-matter keys
-  -h, --help                     Print help
+      --debug-dump
+  -f, --format <FORMAT>              Output format (only page and site are
+                                     supported) [possible values: page,
+                                     site, pdf, typst, markdown, docx]
+  -i, --input <INPUT>                Root markdown file
+  -t, --theme <THEME>                Theme name or directory
+  -b, --base <BASE>                  Base directory for absolute path
+                                     resolution. Defaults to the parent
+                                     directory of the input file
+      --cache <CACHE>                Override the default cache directory
+                                     for rendered artifacts
+      --no-cache                     Disable artifact caching entirely
+  -p, --port <PORT>                  Port to listen on.  If not specified,
+                                     an available port is chosen
+                                     automatically
+      --broken-links <BROKEN_LINKS>  How to handle broken links: "warn"
+                                     prints diagnostics and continues,
+                                     "error" aborts the build.  Defaults to
+                                     "warn" [default: warn] [possible
+                                     values: warn, error]
+      --meta <KEY> <VALUE>           Override a front-matter value.
+                                     Repeatable. Key may use dot-notation
+                                     (e.g. "confluence.server")
+      --meta-drop <KEY>              Remove a front-matter key before
+                                     applying --meta overrides. Repeatable.
+                                     Key may use dot-notation (e.g.
+                                     "confluence.path")
+      --meta-file <PATH>             Merge top-level metadata keys from a
+                                     YAML file. Keys with the same name
+                                     replace front-matter keys
+  -h, --help                         Print help (see more with '--help')
 ~~~
 
 ## Использование
@@ -122,6 +143,12 @@ $ docbake build -f page -i doc/ru/index.md -o target/doc-out/builder.html -b doc
 $ docbake build -f site -i doc/ru/index.md -o target/doc-out/builder -b doc
 ~~~
 
+Для сборки документа в формате DOCX:
+
+~~~
+$ docbake build -f docx -i doc/ru/index.md -o target/doc-out/builder.docx -b doc
+~~~
+
 Для сборки объединённого Markdown-файла:
 
 ~~~
@@ -129,9 +156,9 @@ $ docbake build -f markdown -i doc/ru/index.md -o target/doc-out/builder.md -b d
 ~~~
 
 Флаг `-o` определяет файл или каталог вывода. Если `-o` указывает на файл с
-расширением `.html`, `.pdf` или `.md`, результат записывается в этот файл. Иначе
-`-o` интерпретируется как каталог, а имя файла определяется из имени входного
-файла. Для формата `site` `-o` всегда является каталогом.
+расширением `.html`, `.pdf`, `.md` или `.docx`, результат записывается в этот
+файл. Иначе `-o` интерпретируется как каталог, а имя файла определяется из имени
+входного файла. Для формата `site` `-o` всегда является каталогом.
 
 Флаг `-b` задаёт базовый каталог для разрешения абсолютных путей (по умолчанию —
 каталог входного файла). Флаг `-t` позволяет указать каталог собственной темы.

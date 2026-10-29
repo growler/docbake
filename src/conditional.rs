@@ -20,7 +20,7 @@ impl EffectiveFormat {
         match format {
             OutputFormat::Html | OutputFormat::HtmlMulti => Self::Html,
             OutputFormat::Pdf | OutputFormat::Typst => Self::Pdf,
-            OutputFormat::DocxGdoc => Self::Docx,
+            OutputFormat::Docx => Self::Docx,
             OutputFormat::Markdown => Self::Markdown,
         }
     }
@@ -309,5 +309,13 @@ mod tests {
         assert_eq!(variants.len(), 2);
         assert!(variants.contains("mts"));
         assert!(variants.contains("foo"));
+    }
+
+    #[test]
+    fn docx_output_format_maps_to_docx_effective_format() {
+        assert_eq!(
+            EffectiveFormat::from_output_format(crate::cli::OutputFormat::Docx),
+            EffectiveFormat::Docx
+        );
     }
 }
