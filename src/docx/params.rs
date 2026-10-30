@@ -24,6 +24,7 @@ use anyhow::{anyhow, bail, Result};
 use serde::de::{self, Deserializer, MapAccess, Visitor};
 use serde::Deserialize;
 
+use super::numbering::{level_indent, LIST_LEVELS};
 use super::stylesheet::{self, RESERVED_STYLES};
 
 /// The largest length in twips (22 in).
@@ -125,6 +126,21 @@ impl DocxParams {
     pub(crate) fn from_yaml(text: &str) -> Result<Self> {
         let raw: RawParams = serde_yaml::from_str(text)?;
         raw.resolve()
+    }
+
+    /// Gives the left indent of the style `id`: the indent of the style or
+    /// of the nearest base style that sets one. A style with no indent in
+    /// its chain and an unknown style give 0. The loader rejects a cycle of
+    /// `based_on` links.
+    pub(crate) fn style_indent(&self, id: &str) -> Twips {
+        let mut style = self.styles.get(id);
+        while let Some(s) = style {
+            if let Some(indent) = s.indent {
+                return indent;
+            }
+            style = s.based_on.as_deref().and_then(|base| self.styles.get(base));
+        }
+        Twips(0)
     }
 }
 
@@ -561,11 +577,37 @@ impl RawParams {
                 lists.indent.0
             );
         }
+        // An image in a paragraph, a list item or a table cell needs a
+        // width of more than 0.
+        let text_width = self.page.text_width();
+        let deepest = level_indent(lists, LIST_LEVELS - 1);
+        if deepest >= text_width {
+            bail!(
+                "lists.indent: the indent of list level {LIST_LEVELS} ({deepest} tw) must be less than the text width ({text_width} tw)"
+            );
+        }
+        let cell_margins = &self.table.cell_margins;
+        let cell_margin = cell_margins.left.0 + cell_margins.right.0;
+        if cell_margin >= text_width {
+            bail!(
+                "table.cell_margins: left and right margins ({cell_margin} tw) must be less than the text width ({text_width} tw)"
+            );
+        }
         for name in self.styles.keys() {
             check_style_id(name)?;
         }
         check_style_names(&self.styles)?;
         check_based_on(&self.styles)?;
+        // A style without an indent has the indent of a base style, thus
+        // this check also covers the inherited indents.
+        for (name, style) in &self.styles {
+            if let Some(indent) = style.indent.filter(|indent| indent.0 >= text_width) {
+                bail!(
+                    "styles.{name}.indent: the indent ({} tw) must be less than the text width ({text_width} tw)",
+                    indent.0
+                );
+            }
+        }
 
         let table = &self.table;
         let border = Border {
@@ -1985,6 +2027,25 @@ lists:
     }
 
     #[test]
+    fn style_indent_comes_from_nearest_base_style() {
+        let params = parse(concat!(
+            "  Normal: {}\n",
+            "  Base: {based_on: Normal, indent: 10pt}\n",
+            "  Middle: {based_on: Base}\n",
+            "  Leaf: {based_on: Middle}\n",
+            "  Own: {based_on: Base, indent: 300tw}\n",
+            "  Zero: {based_on: Base, indent: 0tw}\n",
+            "  ZeroLeaf: {based_on: Zero}\n",
+        ));
+        assert_eq!(params.style_indent("Leaf"), Twips(200));
+        assert_eq!(params.style_indent("Own"), Twips(300));
+        assert_eq!(params.style_indent("Zero"), Twips(0));
+        assert_eq!(params.style_indent("ZeroLeaf"), Twips(0));
+        assert_eq!(params.style_indent("Normal"), Twips(0));
+        assert_eq!(params.style_indent("Unknown"), Twips(0));
+    }
+
+    #[test]
     fn text_height() {
         let params = crate::theme::Theme::Embedded("blank")
             .docx_params()
@@ -2001,6 +2062,47 @@ lists:
                 .text_height(),
             1
         );
+    }
+
+    #[test]
+    fn indents_and_cell_margins_must_leave_width() {
+        // The text width is 10205 twips.
+        assert_starts(
+            &style_error("  Normal: {indent: 10205tw}\n"),
+            "styles.Normal.indent: the indent (10205 tw) must be less than the text width (10205 tw)",
+        );
+        assert_starts(
+            &style_error("  Normal: {}\n  Base: {based_on: Normal, indent: 10206tw}\n  Leaf: {based_on: Base}\n"),
+            "styles.Base.indent: the indent (10206 tw) must be less than the text width (10205 tw)",
+        );
+        parse("  Normal: {indent: 10204tw}\n");
+        // A right margin of 566 twips gives a text width of 10206 twips,
+        // 6 x 1701 twips.
+        let wide = BASE.replace("right: 1cm", "right: 566tw");
+        assert_starts(
+            &error(&yaml(
+                &wide.replace("indent: 720tw", "indent: 1701tw"),
+                "  Normal: {}\n",
+            )),
+            "lists.indent: the indent of list level 6 (10206 tw) must be less than the text width (10206 tw)",
+        );
+        DocxParams::from_yaml(&yaml(
+            &wide.replace("indent: 720tw", "indent: 1700tw"),
+            "  Normal: {}\n",
+        ))
+        .unwrap();
+        assert_starts(
+            &error(&yaml(
+                &BASE.replace("left: 10tw, right: 10tw", "left: 5102tw, right: 5103tw"),
+                "  Normal: {}\n",
+            )),
+            "table.cell_margins: left and right margins (10205 tw) must be less than the text width (10205 tw)",
+        );
+        DocxParams::from_yaml(&yaml(
+            &BASE.replace("left: 10tw, right: 10tw", "left: 5102tw, right: 5102tw"),
+            "  Normal: {}\n",
+        ))
+        .unwrap();
     }
 
     #[test]
@@ -2022,10 +2124,16 @@ lists:
             &error(&yaml(&tall, "  Normal: {}\n")),
             "page.margins: top and bottom margins must be less than the page height (16838 tw)",
         );
-        let fits = BASE.replace(
-            margins,
-            "margins: {top: 8418tw, bottom: 8419tw, left: 11905tw, right: 0tw,",
-        );
+        let fits = BASE
+            .replace(
+                margins,
+                "margins: {top: 8418tw, bottom: 8419tw, left: 11905tw, right: 0tw,",
+            )
+            .replace("left: 10tw, right: 10tw", "left: 0tw, right: 0tw")
+            .replace(
+                "indent: 720tw\n  hanging: 360tw",
+                "indent: 0tw\n  hanging: 0tw",
+            );
         assert_eq!(
             DocxParams::from_yaml(&yaml(&fits, "  Normal: {}\n"))
                 .unwrap()

@@ -23,7 +23,7 @@ use super::extent::extent;
 use super::links::bookmark_name;
 use super::media::logo_at_height;
 use super::package::Package;
-use super::params::Twips;
+use super::params::{DocxParams, Twips};
 use super::DocxRenderer;
 
 mod body_lint;
@@ -223,6 +223,20 @@ fn render_in(
     cache: &Cache,
     edit: impl FnOnce(&mut PreparedDocument),
 ) -> Result<Package> {
+    let params = Theme::Embedded("blank").docx_params().unwrap();
+    render_in_with_params(dir, markdown, cache, &params, edit)
+}
+
+/// Renders `markdown` as `index.md` in the directory `dir` with the DOCX
+/// parameters `params`, no logo and the artifact cache `cache`. `edit`
+/// changes the prepared document before the render.
+fn render_in_with_params(
+    dir: &Path,
+    markdown: &str,
+    cache: &Cache,
+    params: &DocxParams,
+    edit: impl FnOnce(&mut PreparedDocument),
+) -> Result<Package> {
     let source = dir.join("index.md");
     fs::write(&source, markdown).unwrap();
     let logger = DebugDumper::new(false);
@@ -232,8 +246,7 @@ fn render_in(
     let metadata = prepared.document_metadata();
     let themes = DiagramThemes::default();
     let profile = RenderProfile::from_metadata(EffectiveFormat::Docx, &JsonMap::new()).unwrap();
-    let params = Theme::Embedded("blank").docx_params().unwrap();
-    let renderer = DocxRenderer::new(cache, &themes, &logger, dir, None, &params, profile);
+    let renderer = DocxRenderer::new(cache, &themes, &logger, dir, None, params, profile);
     renderer.render(&prepared, &metadata)
 }
 

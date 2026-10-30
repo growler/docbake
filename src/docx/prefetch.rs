@@ -12,6 +12,7 @@ use rushdown_fenced_div::FencedDiv;
 use crate::caption::{Caption, CaptionText};
 use crate::graph::DocumentGraph;
 
+use super::admonition::{body_style, fenced_div_admonition};
 use super::media::DiagramJob;
 use super::DocxRenderer;
 
@@ -77,25 +78,27 @@ impl<'a> DocxRenderer<'a> {
                 }
                 continue;
             }
-            self.collect_block_diagrams(&doc.arena, &doc.source, &doc.path, child, jobs)?;
+            self.collect_block_diagrams(&doc.arena, &doc.source, &doc.path, child, None, jobs)?;
         }
         Ok(())
     }
 
     /// Collect the diagram jobs of a block of the document `path` with the
-    /// traversal of `render_block`.
+    /// traversal of `render_block`. `paragraph_style` is the paragraph
+    /// style of the render context of the block.
     fn collect_block_diagrams(
         &self,
         arena: &Arena,
         source: &str,
         path: &Path,
         node_ref: NodeRef,
+        paragraph_style: Option<&'static str>,
         jobs: &mut Vec<DiagramJob>,
     ) -> Result<()> {
         match arena[node_ref].kind_data() {
             KindData::Blockquote(_) => {
                 for child in arena[node_ref].children(arena) {
-                    self.collect_block_diagrams(arena, source, path, child, jobs)?;
+                    self.collect_block_diagrams(arena, source, path, child, Some("Quote"), jobs)?;
                 }
             }
             KindData::List(_) => {
@@ -104,7 +107,7 @@ impl<'a> DocxRenderer<'a> {
                         continue;
                     }
                     for child in arena[item_ref].children(arena) {
-                        self.collect_block_diagrams(arena, source, path, child, jobs)?;
+                        self.collect_block_diagrams(arena, source, path, child, None, jobs)?;
                     }
                 }
             }
@@ -122,14 +125,24 @@ impl<'a> DocxRenderer<'a> {
                         })
                         .next_back();
                     if let Some(br) = block_ref {
-                        self.collect_block_diagrams(arena, source, path, br, jobs)?;
+                        self.collect_block_diagrams(
+                            arena,
+                            source,
+                            path,
+                            br,
+                            paragraph_style,
+                            jobs,
+                        )?;
                     }
                 } else if rushdown::matches_extension_kind!(
                     arena,
                     node_ref,
                     crate::diagram::Diagram
                 ) {
-                    self.diagram_size(arena, source, path, node_ref)?;
+                    // The width of the diagram paragraph, as in
+                    // `render_diagram`.
+                    let max_width = self.style_width(paragraph_style.unwrap_or("ImageBlock"));
+                    self.diagram_size(arena, source, path, node_ref, max_width)?;
                     if let Some(job) = self.diagram_job(arena, source, node_ref) {
                         jobs.push(job);
                     }
@@ -141,8 +154,19 @@ impl<'a> DocxRenderer<'a> {
                         &self.profile,
                     )?
                 {
+                    let paragraph_style = match fenced_div_admonition(arena, source, node_ref) {
+                        Some(adm_type) => Some(body_style(adm_type)),
+                        None => paragraph_style,
+                    };
                     for child in arena[node_ref].children(arena) {
-                        self.collect_block_diagrams(arena, source, path, child, jobs)?;
+                        self.collect_block_diagrams(
+                            arena,
+                            source,
+                            path,
+                            child,
+                            paragraph_style,
+                            jobs,
+                        )?;
                     }
                 } else if rushdown::matches_extension_kind!(arena, node_ref, DefinitionList) {
                     for child in arena[node_ref].children(arena) {
@@ -150,7 +174,14 @@ impl<'a> DocxRenderer<'a> {
                             continue;
                         }
                         for def_child in arena[child].children(arena) {
-                            self.collect_block_diagrams(arena, source, path, def_child, jobs)?;
+                            self.collect_block_diagrams(
+                                arena,
+                                source,
+                                path,
+                                def_child,
+                                Some("DefinitionBody"),
+                                jobs,
+                            )?;
                         }
                     }
                 }

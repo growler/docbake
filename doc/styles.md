@@ -365,7 +365,11 @@ style). No semantic name refers to them.
 
 :  No style. The `width` and `height` attributes set the extent
    (`wp:extent`) of the drawing of an image or a diagram. The extent fits
-   in the text area of the page.
+   in the text height of the page and in the width of the paragraph. The
+   width of a paragraph is the text width minus the left indent of its
+   paragraph style. In a list item paragraph, it is the text width minus
+   the indent of the list level. In a table cell, it is the cell width
+   minus the cell margins.
 
 `diagram`
 `diagram.mermaid`

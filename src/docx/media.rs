@@ -145,17 +145,19 @@ impl<'a> DocxRenderer<'a> {
     }
 
     /// Gives the `width` and the `height` attribute of the diagram
-    /// `node_ref` in the document `path`. An error names the diagram: the
-    /// file as the document gives it, or the kind of a fenced diagram.
+    /// `node_ref` in the document `path`. `max_width` is the length of a
+    /// `100%` width. An error names the diagram: the file as the document
+    /// gives it, or the kind of a fenced diagram.
     pub(super) fn diagram_size(
         &self,
         arena: &Arena,
         source: &str,
         path: &Path,
         node_ref: NodeRef,
+        max_width: u64,
     ) -> Result<SizeAttributes> {
         let diagram = as_extension_data!(arena, node_ref, crate::diagram::Diagram);
-        self.size_attributes(arena, source, path, node_ref, || {
+        self.size_attributes(arena, source, path, node_ref, max_width, || {
             if let Some(destination) = diagram.destination() {
                 return format!("diagram `{destination}`");
             }
@@ -173,8 +175,9 @@ impl<'a> DocxRenderer<'a> {
     /// Render a diagram to PNG and embed it as an inline image in its own
     /// paragraph. The paragraph has the paragraph style of the context, or
     /// `ImageBlock` when the context has none. The `width` and `height`
-    /// attributes set the extent. An invalid attribute is an error, and
-    /// the diagram is then not rendered: this function and
+    /// attributes set the extent, and the extent fits in the text height
+    /// and in the width of the paragraph style. An invalid attribute is an
+    /// error, and the diagram is then not rendered: this function and
     /// [`Self::prefetch_diagrams`] check the attributes before a render.
     pub(super) fn render_diagram(
         &self,
@@ -183,7 +186,9 @@ impl<'a> DocxRenderer<'a> {
         node_ref: NodeRef,
     ) -> Result<Docx> {
         let path = &context.graph.document(context.doc_id).path;
-        let size = self.diagram_size(context.arena, context.source, path, node_ref)?;
+        let style = context.paragraph_style.unwrap_or("ImageBlock");
+        let max_width = self.style_width(style);
+        let size = self.diagram_size(context.arena, context.source, path, node_ref, max_width)?;
         let Some(job) = self.diagram_job(context.arena, context.source, node_ref) else {
             return Ok(docx);
         };
@@ -191,9 +196,9 @@ impl<'a> DocxRenderer<'a> {
         match job.render_cached(self.cache) {
             Ok(png_data) => {
                 if let Some((pic, px)) = self.pic_from_png(png_data) {
-                    let pic = self.fit_to_text_area(pic, px, job.ppi(), size);
+                    let pic = self.fit_to_area(pic, px, job.ppi(), size, max_width);
                     let para = Paragraph::new()
-                        .style(context.paragraph_style.unwrap_or("ImageBlock"))
+                        .style(style)
                         .add_run(Run::new().add_image(pic));
                     return Ok(docx.add_paragraph(para));
                 }
@@ -251,10 +256,12 @@ impl<'a> DocxRenderer<'a> {
 
     /// Load the image of an `Image` node as a `Pic` with its extent.
     ///
-    /// The `width` and `height` attributes set the extent. An image in a
-    /// paragraph with other content and without these attributes has the
-    /// height of `1em`. Gives `None` for an image that does not load. An
-    /// invalid attribute is an error, and the image file is then not read.
+    /// The `width` and `height` attributes set the extent, and the extent
+    /// fits in the text height and in the `max_width` of the context. An
+    /// image in a paragraph with other content and without these
+    /// attributes has the height of `1em`. Gives `None` for an image that
+    /// does not load. An invalid attribute is an error, and the image file
+    /// is then not read.
     pub(super) fn resolve_graph_image(
         &self,
         context: &RenderContext<'_>,
@@ -263,9 +270,10 @@ impl<'a> DocxRenderer<'a> {
         let (arena, source) = (context.arena, context.source);
         let image = as_kind_data!(arena[node_ref], Image);
         let path = &context.graph.document(context.doc_id).path;
-        let mut size = self.size_attributes(arena, source, path, node_ref, || {
-            format!("image `{}`", image.destination_str(source))
-        })?;
+        let mut size =
+            self.size_attributes(arena, source, path, node_ref, context.max_width, || {
+                format!("image `{}`", image.destination_str(source))
+            })?;
         if size == (None, None) && crate::html::is_inline_image(arena, node_ref) {
             size.1 = Some(self.em);
         }
@@ -275,11 +283,17 @@ impl<'a> DocxRenderer<'a> {
         let Some((pic, px)) = self.resolve_image(target) else {
             return Ok(None);
         };
-        Ok(Some(self.fit_to_text_area(pic, px, IMAGE_PPI, size)))
+        Ok(Some(self.fit_to_area(
+            pic,
+            px,
+            IMAGE_PPI,
+            size,
+            context.max_width,
+        )))
     }
 
     /// Gives the `width` and the `height` attribute of the node `node_ref`
-    /// in the document `path`. A width in `%` is a part of the text width, a
+    /// in the document `path`. A width in `%` is a part of `max_width`, a
     /// height in `%` is a part of the text height. `what` gives the name of
     /// the node for an error message.
     fn size_attributes(
@@ -288,10 +302,11 @@ impl<'a> DocxRenderer<'a> {
         source: &str,
         path: &Path,
         node_ref: NodeRef,
+        max_width: u64,
         what: impl Fn() -> String,
     ) -> Result<SizeAttributes> {
         let attributes = arena[node_ref].attributes();
-        let (text_width, text_height) = self.text_area;
+        let text_height = self.text_area.1;
         let attribute = |name: &str, percent_of: u64| -> Result<Option<u64>> {
             let Some(value) = attributes.get(name) else {
                 return Ok(None);
@@ -300,17 +315,51 @@ impl<'a> DocxRenderer<'a> {
                 .map_err(|m| anyhow!("{}: {}: {name}: {m}", path.display(), what()))
         };
         Ok((
-            attribute("width", text_width)?,
+            attribute("width", max_width)?,
             attribute("height", text_height)?,
         ))
     }
 
     /// Sets the extent of `pic` from its pixel size `px` at `ppi` and the
-    /// attributes `size`. The extent fits in the text area.
-    fn fit_to_text_area(&self, pic: Pic, px: (u32, u32), ppi: u32, size: SizeAttributes) -> Pic {
+    /// attributes `size`. The extent fits in `max_width` and in the text
+    /// height.
+    fn fit_to_area(
+        &self,
+        pic: Pic,
+        px: (u32, u32),
+        ppi: u32,
+        size: SizeAttributes,
+        max_width: u64,
+    ) -> Pic {
         let (width, height) = size;
-        let (cx, cy) = extent(px, ppi, width, height, self.text_area);
+        let (cx, cy) = extent(px, ppi, width, height, (max_width, self.text_area.1));
         pic.size(cx, cy)
+    }
+
+    /// Gives the text width in EMU minus the indent `indent` in twips. The
+    /// theme loader makes sure that each style indent and each list level
+    /// indent is less than the text width.
+    pub(super) fn indented_width(&self, indent: u32) -> u64 {
+        self.text_area.0 - twips_to_emu(indent)
+    }
+
+    /// Gives the width in EMU of a paragraph with the style `style`: the
+    /// text width minus the left indent of the style.
+    pub(super) fn style_width(&self, style: &str) -> u64 {
+        self.indented_width(self.params.style_indent(style).0)
+    }
+
+    /// Gives `context` with the `max_width` of a paragraph with the style
+    /// `style`.
+    pub(super) fn styled_context<'c>(
+        &self,
+        context: &RenderContext<'c>,
+        style: &str,
+    ) -> RenderContext<'c> {
+        RenderContext {
+            max_width: self.style_width(style),
+            ..*context
+        }
     }
 
     /// Resolve an image from the graph-resolved target path and load it as
@@ -406,6 +455,11 @@ pub(super) fn text_area(page: &Page) -> (u64, u64) {
         u64::from(page.text_width()) * EMU_PER_TWIP,
         u64::from(page.text_height()) * EMU_PER_TWIP,
     )
+}
+
+/// Gives `twips` in EMU.
+pub(super) fn twips_to_emu(twips: u32) -> u64 {
+    u64::from(twips) * EMU_PER_TWIP
 }
 
 /// Gives `1em` in EMU: the font size of the `Normal` style, or 10 pt when

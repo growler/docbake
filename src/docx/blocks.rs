@@ -7,9 +7,10 @@ use rushdown_fenced_div::FencedDiv;
 
 use crate::caption::{Caption, CaptionKind, CaptionText};
 
+use super::admonition::fenced_div_admonition;
 use super::fields::add_field;
 use super::links::bookmark_name;
-use super::numbering::{ListKind, LIST_LEVELS};
+use super::numbering::{level_indent, ListKind, LIST_LEVELS};
 use super::{DocxRenderer, RenderContext};
 
 impl<'a> DocxRenderer<'a> {
@@ -26,6 +27,7 @@ impl<'a> DocxRenderer<'a> {
                 let heading = as_kind_data!(arena[node_ref], Heading);
                 let level = (heading.level() as usize + context.heading_shift).min(6);
                 let style = format!("Heading{level}");
+                let context = &self.styled_context(context, &style);
 
                 let (mut para, bookmark) =
                     self.add_bookmark_start(context, node_ref, Paragraph::new().style(&style));
@@ -45,6 +47,7 @@ impl<'a> DocxRenderer<'a> {
                 if let Some(style) = style {
                     para = para.style(style);
                 }
+                let context = &self.styled_context(context, style.unwrap_or("Normal"));
                 para.children
                     .extend(self.collect_child_runs(context, node_ref)?);
                 docx = docx.add_paragraph(para);
@@ -114,15 +117,7 @@ impl<'a> DocxRenderer<'a> {
         if !crate::conditional::fenced_div_is_visible(arena, node_ref, source, &self.profile)? {
             return Ok(docx);
         }
-        let classes = arena[node_ref]
-            .attributes()
-            .get("class")
-            .map(|v| v.str(source))
-            .unwrap_or_default();
-
-        let adm_type = crate::admonition_type(&classes);
-
-        if let Some(adm_type) = adm_type {
+        if let Some(adm_type) = fenced_div_admonition(arena, source, node_ref) {
             docx = self.render_admonition(docx, context, node_ref, adm_type)?;
         } else {
             // Non-admonition fenced div: render children as normal blocks
@@ -160,6 +155,9 @@ impl<'a> DocxRenderer<'a> {
     /// and no marker. A task list uses its own `w:num` for them. The other
     /// blocks in an item do not use the paragraph style of the enclosing
     /// block.
+    ///
+    /// An image in an item paragraph fits in the text width minus the
+    /// indent of the level.
     fn render_list(
         &self,
         mut docx: Docx,
@@ -204,6 +202,13 @@ impl<'a> DocxRenderer<'a> {
         };
 
         let lists = &self.params.lists;
+        // The numbering indent of the level sets the indent of the item
+        // paragraphs. The indent of the `ListParagraph` style is not
+        // subtracted.
+        let item_context = &RenderContext {
+            max_width: self.indented_width(level_indent(lists, ilvl)),
+            ..*context
+        };
         for (item_ref, task) in items {
             let mut marker = match self.task_box(task) {
                 None if kind == ListKind::Task => Some(lists.bullet_list[ilvl].as_str()),
@@ -233,7 +238,7 @@ impl<'a> DocxRenderer<'a> {
                         first = false;
                         let mut para = list_paragraph(id, marker.take());
                         para.children
-                            .extend(self.collect_child_runs(context, child)?);
+                            .extend(self.collect_child_runs(item_context, child)?);
                         docx = docx.add_paragraph(para);
                     }
                     KindData::List(_) => {
@@ -278,6 +283,7 @@ impl<'a> DocxRenderer<'a> {
         for child in arena[node_ref].children(arena) {
             if rushdown::matches_extension_kind!(arena, child, Term) {
                 let mut para = Paragraph::new().style("DefinitionTerm");
+                let context = &self.styled_context(context, "DefinitionTerm");
                 para.children
                     .extend(self.collect_child_runs(context, child)?);
                 docx = docx.add_paragraph(para);
@@ -348,7 +354,7 @@ impl<'a> DocxRenderer<'a> {
                 InstrText::Unsupported(format!(" SEQ {seq} \\* ARABIC ")),
                 &number.to_string(),
             );
-            let runs = self.collect_child_runs(context, ct_ref)?;
+            let runs = self.collect_child_runs(&self.styled_context(context, "Caption"), ct_ref)?;
             if !runs.is_empty() {
                 para = para.add_run(Run::new().add_text(labels.separator));
             }

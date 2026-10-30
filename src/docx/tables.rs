@@ -6,6 +6,7 @@ use memchr::memmem::Finder;
 use rushdown::as_kind_data;
 use rushdown::ast::{KindData, NodeRef, TableCellAlignment};
 
+use super::media::twips_to_emu;
 use super::stylesheet::TABLE_STYLE;
 use super::{DocxRenderer, RenderContext};
 use crate::render_typst::{cell_colspan, cell_rowspan};
@@ -93,9 +94,10 @@ impl<'a> DocxRenderer<'a> {
                 }
                 let span = cell_colspan(arena, source, cell_ref).min(column_count - col);
                 let row_span = cell_rowspan(arena, source, cell_ref);
+                let width = span_width(&grid, col, span);
                 let mut cell = TableCell::new()
-                    .width(span_width(&grid, col, span), WidthType::Dxa)
-                    .add_paragraph(self.render_cell_paragraph(context, cell_ref, style)?);
+                    .width(width, WidthType::Dxa)
+                    .add_paragraph(self.render_cell_paragraph(context, cell_ref, style, width)?);
                 if span > 1 {
                     cell = cell.grid_span(span);
                 }
@@ -125,13 +127,23 @@ impl<'a> DocxRenderer<'a> {
     }
 
     /// Render the content of a table cell to one paragraph with the style
-    /// `style` and the alignment of the Markdown column.
+    /// `style` and the alignment of the Markdown column. `width` is the
+    /// width of the cell in twips. An image fits in the cell width minus
+    /// the cell margins. The indent of the `TableCell` and `TableHeader`
+    /// styles is not subtracted.
     fn render_cell_paragraph(
         &self,
         context: &RenderContext<'_>,
         cell_ref: NodeRef,
         style: &str,
+        width: usize,
     ) -> Result<Paragraph> {
+        let margins = &self.params.table.cell_margins;
+        let text_width = (width as u32).saturating_sub(margins.left.0 + margins.right.0);
+        let context = &RenderContext {
+            max_width: twips_to_emu(text_width).max(1),
+            ..*context
+        };
         let arena = context.arena;
         let mut para = Paragraph::new().style(style);
         let alignment = match as_kind_data!(arena, cell_ref, TableCell).alignment() {

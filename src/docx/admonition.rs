@@ -1,6 +1,6 @@
 use anyhow::Result;
 use docx_rs::*;
-use rushdown::ast::{KindData, NodeRef};
+use rushdown::ast::{Arena, KindData, NodeRef};
 
 use super::inline::run_child;
 use super::{DocxRenderer, RenderContext};
@@ -45,6 +45,30 @@ pub(super) fn default_title(adm_type: &str) -> &'static str {
         .find(|(t, ..)| *t == adm_type)
         .expect("ADMONITION_STYLES covers ADMONITION_TYPES")
         .3
+}
+
+/// Gives the body style ID of the admonition type `adm_type`.
+pub(super) fn body_style(adm_type: &str) -> &'static str {
+    ADMONITION_STYLES
+        .iter()
+        .find(|(t, ..)| *t == adm_type)
+        .expect("ADMONITION_STYLES covers ADMONITION_TYPES")
+        .2
+}
+
+/// Gives the admonition type of the fenced div `node_ref`, or `None` for a
+/// fenced div that is not an admonition.
+pub(super) fn fenced_div_admonition(
+    arena: &Arena,
+    source: &str,
+    node_ref: NodeRef,
+) -> Option<&'static str> {
+    let classes = arena[node_ref]
+        .attributes()
+        .get("class")
+        .map(|v| v.str(source))
+        .unwrap_or_default();
+    crate::admonition_type(&classes)
 }
 
 impl<'a> DocxRenderer<'a> {

@@ -14,8 +14,10 @@
 //! body walk, the diagrams that the artifact cache does not hold are
 //! rendered in parallel into the cache.
 //! Regular images are read from disk and embedded directly.  The `width`
-//! and `height` attributes set the extent of an image or a diagram, and
-//! the extent fits in the text area.
+//! and `height` attributes set the extent of an image or a diagram. The
+//! extent fits in the text height and in the width of its paragraph: the
+//! text width minus the indent of the paragraph style or of the list
+//! level, or the width of a table cell minus the cell margins.
 //!
 //! Each footnote reference gives a Word footnote in `word/footnotes.xml`.
 //!
@@ -111,6 +113,14 @@ struct RenderContext<'a> {
     /// True in the text of a footnote. An image gives its alt text and a
     /// footnote reference gives nothing.
     footnote: bool,
+    /// The largest image width in EMU, and the length of `100%` in an image
+    /// width, in the paragraph that is open. Each paragraph sets it before
+    /// it collects its runs: the text width minus the left indent of the
+    /// paragraph style, the text width minus the indent of the list level
+    /// in a list item paragraph, or the width of a table cell minus its
+    /// cell margins in a cell. A diagram paragraph uses the width of its
+    /// paragraph style.
+    max_width: u64,
 }
 
 impl<'a> DocxRenderer<'a> {
@@ -250,6 +260,7 @@ impl<'a> DocxRenderer<'a> {
                 graph,
                 paragraph_style: None,
                 footnote: false,
+                max_width: self.text_area.0,
             };
             docx = self.render_block(docx, &context, child)?;
         }

@@ -44,6 +44,11 @@ pub(super) fn add_list_numbering(docx: Docx, lists: &Lists) -> Docx {
     })
 }
 
+/// Gives the left indent in twips of the list level `ilvl`.
+pub(super) fn level_indent(lists: &Lists, ilvl: usize) -> u32 {
+    lists.indent.0 * (ilvl as u32 + 1)
+}
+
 fn abstract_numbering(kind: ListKind, lists: &Lists) -> AbstractNumbering {
     (0..LIST_LEVELS).fold(
         AbstractNumbering::new(kind.abstract_num_id()),
@@ -53,7 +58,7 @@ fn abstract_numbering(kind: ListKind, lists: &Lists) -> AbstractNumbering {
                 ListKind::Ordered => (lists.ordered_list[ilvl].ooxml(), format!("%{}.", ilvl + 1)),
                 ListKind::Task => ("none", String::new()),
             };
-            let left = lists.indent.0 * (ilvl as u32 + 1);
+            let left = level_indent(lists, ilvl);
             numbering.add_level(
                 Level::new(
                     ilvl,
