@@ -66,7 +66,7 @@ colors:
 table:
   cell_margins: {top: 0tw, bottom: 0tw, left: 10tw, right: 10tw}
   border: {width: 0.25pt, color: rule, space: 0pt}
-  header: {bold: true, fill: code_fill}
+  header: {fill: code_fill}
 
 lists:
   indent: 720tw # 0.5 in for each level
@@ -364,6 +364,7 @@ styles:
 
   TableHeader:
     based_on: TableCell
+    bold: true
 
   ImageBlock:
     based_on: Normal

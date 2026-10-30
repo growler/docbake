@@ -486,7 +486,6 @@ mod tests {
         );
         assert_eq!(params.table.border.width, EighthPoints(2));
         assert_eq!(params.table.border.color, Rgb([0, 0, 0]));
-        assert!(params.table.header.bold);
         assert_eq!(params.table.header.fill, Rgb([0xF2, 0xF2, 0xF2]));
         assert_eq!(params.lists.indent, Twips(720));
         assert_eq!(params.lists.hanging, Twips(360));
@@ -574,6 +573,20 @@ mod tests {
             err.contains("styles.Heading1.before: missing unit"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn custom_docx_yaml_rejects_table_header_bold() {
+        let dir = tempfile::tempdir().unwrap();
+        let text = default_docx_yaml().replacen(
+            "  header: {fill: code_fill}",
+            "  header: {bold: true, fill: code_fill}",
+            1,
+        );
+        fs::write(dir.path().join(DOCX_YAML), text).unwrap();
+        let theme = Theme::Custom(dir.path().to_path_buf());
+        let err = format!("{:#}", theme.docx_params().unwrap_err());
+        assert!(err.contains("table.header: unknown field `bold`"), "{err}");
     }
 
     /// Gives the error of a custom theme whose `docx.yaml` is the default

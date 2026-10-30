@@ -593,12 +593,6 @@ fn table_style<W: Write>(w: &mut Writer<W>, table: &TableParams) -> io::Result<(
         w.create_element("w:tblStylePr")
             .with_attribute(("w:type", "firstRow"))
             .write_inner_content(|w| {
-                if table.header.bold {
-                    w.create_element("w:rPr").write_inner_content(|w| {
-                        empty(w, "w:b")?;
-                        empty(w, "w:bCs")
-                    })?;
-                }
                 w.create_element("w:tcPr")
                     .write_inner_content(|w| shading(w, table.header.fill))?;
                 Ok(())
@@ -698,7 +692,7 @@ fn border_element<W: Write>(w: &mut Writer<W>, name: &str, border: Border) -> io
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::theme::Theme;
+    use crate::theme::{Theme, EMBEDDED_THEME_NAMES};
     use quick_xml::Reader;
 
     const BASE: &str = r#"
@@ -711,7 +705,7 @@ colors: {accent: EE721C}
 table:
   cell_margins: {top: 0tw, bottom: 0tw, left: 10tw, right: 10tw}
   border: {width: 0.25pt, color: "000000", space: 0pt}
-  header: {bold: false, fill: F2F2F2}
+  header: {fill: F2F2F2}
 lists:
   indent: 720tw
   hanging: 360tw
@@ -1067,7 +1061,7 @@ styles:
                     r#"<w:top w:w="0" w:type="dxa"/><w:left w:w="10" w:type="dxa"/>"#,
                     r#"<w:bottom w:w="0" w:type="dxa"/><w:right w:w="10" w:type="dxa"/>"#,
                     "</w:tblCellMar></w:tblPr>",
-                    r#"<w:tblStylePr w:type="firstRow"><w:rPr><w:b/><w:bCs/></w:rPr>"#,
+                    r#"<w:tblStylePr w:type="firstRow">"#,
                     r#"<w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="F2F2F2"/></w:tcPr>"#,
                     "</w:tblStylePr></w:style>",
                 ),
@@ -1084,6 +1078,22 @@ styles:
             style(&xml, "DataTable"),
             r#"<w:tblStylePr w:type="firstRow"><w:tcPr>"#,
         );
+    }
+
+    /// The header row is bold from the paragraph style `TableHeader`. `w:b`
+    /// is a toggle property, thus the table style sets no `w:b` for the
+    /// header row.
+    #[test]
+    fn table_header_bold_is_in_paragraph_style() {
+        for name in EMBEDDED_THEME_NAMES {
+            let params = Theme::Embedded(name).docx_params().unwrap();
+            let xml = xml(&params, "en");
+            assert_has(style(&xml, "TableHeader"), "<w:b/><w:bCs/>");
+            let table = style(&xml, "DataTable");
+            let first_row = &table[table.find(r#"<w:tblStylePr w:type="firstRow">"#).unwrap()..];
+            assert_lacks(first_row, "<w:rPr>");
+            assert_lacks(first_row, "<w:b");
+        }
     }
 
     #[test]

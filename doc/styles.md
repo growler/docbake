@@ -337,12 +337,13 @@ style). No semantic name refers to them.
 `table.block`
 
 :  `DataTable` -- table style, based on `TableNormal`. Its `firstRow`
-   conditional format sets the bold text and the fill of the header row.
+   conditional format sets the fill of the header row.
 
 `table.header`
 
 :  `TableHeader` -- paragraph style, based on `TableCell`. The paragraphs in
-   header cells use it. It sets only spacing and alignment.
+   header cells use it. It sets the bold text. It gets the alignment from
+   `TableCell` and the spacing from `Normal`.
 
 `table.cell`
 

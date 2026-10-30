@@ -216,7 +216,6 @@ pub(crate) struct CellMargins {
 /// The format of the table header row.
 #[derive(Debug)]
 pub(crate) struct TableHeader {
-    pub bold: bool,
     pub fill: Rgb,
 }
 
@@ -448,7 +447,6 @@ struct RawTableBorder {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawTableHeader {
-    bold: bool,
     fill: ColorRef,
 }
 
@@ -600,10 +598,7 @@ impl RawParams {
             table: TableParams {
                 cell_margins: self.table.cell_margins,
                 border,
-                header: TableHeader {
-                    bold: self.table.header.bold,
-                    fill: header_fill,
-                },
+                header: TableHeader { fill: header_fill },
             },
             lists: self.lists,
             styles,
@@ -1247,7 +1242,7 @@ colors: {accent: EE721C, code_border: D9D9D9, code_fill: F2F2F2}
 table:
   cell_margins: {top: 0tw, bottom: 0tw, left: 10tw, right: 10tw}
   border: {width: 0.25pt, color: "000000", space: 0pt}
-  header: {bold: true, fill: code_fill}
+  header: {fill: code_fill}
 lists:
   indent: 720tw
   hanging: 360tw
@@ -1502,7 +1497,6 @@ lists:
         assert_eq!(params.table.border.color, Rgb([0, 0, 0]));
         assert_eq!(params.table.border.width, EighthPoints(2));
         assert_eq!(params.table.border.space, BorderSpace(0));
-        assert!(params.table.header.bold);
         assert_eq!(params.table.header.fill, Rgb([0xF2, 0xF2, 0xF2]));
         assert_eq!(params.fonts["body"], "PT Sans");
     }
@@ -1803,13 +1797,13 @@ lists:
         for (from, to, message) in [
             (", space: 0pt", "", "table.border: missing field `space`"),
             (
-                ", fill: code_fill",
-                "",
+                "{fill: code_fill}",
+                "{}",
                 "table.header: missing field `fill`",
             ),
             (
-                "{bold: true, fill: code_fill}",
-                "\n    bold: true\n    fill: #F2F2F2",
+                "{fill: code_fill}",
+                "\n    fill: #F2F2F2",
                 "table.header.fill: missing colour",
             ),
         ] {
