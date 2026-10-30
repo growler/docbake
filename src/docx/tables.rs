@@ -143,11 +143,8 @@ impl<'a> DocxRenderer<'a> {
         if let Some(alignment) = alignment {
             para = para.align(alignment);
         }
-        for child in arena[cell_ref].children(arena) {
-            for run in self.render_inline_runs(context, child)? {
-                para = para.add_run(run);
-            }
-        }
+        para.children
+            .extend(self.collect_child_runs(context, cell_ref)?);
         Ok(para)
     }
 }

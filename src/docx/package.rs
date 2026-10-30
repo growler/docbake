@@ -12,7 +12,9 @@
 //! properties that `docx-rs` cannot write to `word/document.xml`. A
 //! document with footnotes gets the renderer's `word/footnotes.xml`, its
 //! relationship and content type, and the footnote properties in
-//! `word/settings.xml`. It writes
+//! `word/settings.xml`. The relationships of the external links replace
+//! the hyperlink relationships of `docx-rs`; the links of the footnotes get
+//! `word/_rels/footnotes.xml.rels`. It writes
 //! the parts to a ZIP file in the entry order of the `docx-rs` zipper. The
 //! XML parts are Deflated. The images in `word/media/` and the directories
 //! are Stored. All entries have the time 1980-01-01 00:00, thus the same
@@ -29,6 +31,7 @@ use zip::{CompressionMethod, DateTime, ZipWriter};
 use super::doc_props::{core_xml, custom_xml};
 use super::font_table::font_table_xml;
 use super::footnotes::FOOTNOTE_PROPERTIES;
+use super::links::{relationships_part, replace_hyperlink_relationships, ExternalLinks};
 use super::params::DocxParams;
 use super::stylesheet::styles_xml;
 use super::tables::{splice_tables, TableLayout};
@@ -36,6 +39,9 @@ use super::tables::{splice_tables, TableLayout};
 /// The parts of a DOCX file, ready to be packed.
 pub(crate) struct Package {
     xml: XMLDocx,
+    /// The relationships part of the footnotes, or `None` if the
+    /// footnotes have no external links.
+    footnotes_rels: Option<Vec<u8>>,
 }
 
 impl Package {
@@ -73,12 +79,27 @@ impl Package {
             xml.footnotes = footnotes;
             add_footnote_properties(&mut xml.settings)?;
         }
-        Ok(Self { xml })
+        Ok(Self {
+            xml,
+            footnotes_rels: None,
+        })
+    }
+
+    /// Writes the relationships of the external links: `document` of the
+    /// body and `footnotes` of the footnotes.
+    pub(super) fn set_external_links(
+        &mut self,
+        document: &ExternalLinks,
+        footnotes: &ExternalLinks,
+    ) -> Result<()> {
+        replace_hyperlink_relationships(&mut self.xml.document_rels, document)?;
+        self.footnotes_rels = (!footnotes.is_empty()).then(|| relationships_part(footnotes));
+        Ok(())
     }
 
     /// Writes the DOCX file to `out` and gives `out` back.
     pub(crate) fn write_to<W: Write + Seek>(self, out: W) -> Result<W> {
-        zip(out, self.xml).context("failed to pack DOCX")
+        zip(out, self.xml, self.footnotes_rels.as_deref()).context("failed to pack DOCX")
     }
 
     /// Gives the DOCX file as bytes.
@@ -141,8 +162,9 @@ fn share_header_media(xml: &mut XMLDocx) -> Result<()> {
     Ok(())
 }
 
-/// Writes the parts to a ZIP file.
-fn zip<W>(w: W, xml: XMLDocx) -> zip::result::ZipResult<W>
+/// Writes the parts and the relationships part of the footnotes
+/// `footnotes_rels` to a ZIP file.
+fn zip<W>(w: W, xml: XMLDocx, footnotes_rels: Option<&[u8]>) -> zip::result::ZipResult<W>
 where
     W: Write + Seek,
 {
@@ -187,6 +209,10 @@ where
     zip.write_all(&xml.comments_extended)?;
     zip.start_file("word/footnotes.xml", options)?;
     zip.write_all(&xml.footnotes)?;
+    if let Some(rels) = footnotes_rels {
+        zip.start_file("word/_rels/footnotes.xml.rels", options)?;
+        zip.write_all(rels)?;
+    }
 
     for (i, h) in xml.headers.iter().enumerate() {
         zip.start_file(format!("word/header{}.xml", i + 1), options)?;
@@ -337,7 +363,7 @@ mod tests {
     }
 
     fn pack(xml: XMLDocx) -> Vec<Entry> {
-        let out = zip(Cursor::new(Vec::new()), xml).unwrap();
+        let out = zip(Cursor::new(Vec::new()), xml, None).unwrap();
         entries(out.into_inner())
     }
 

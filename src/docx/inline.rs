@@ -6,45 +6,50 @@ use rushdown_footnote::FootnoteReference;
 use super::{DocxRenderer, RenderContext};
 
 impl<'a> DocxRenderer<'a> {
-    /// Render an inline node to one or more `Run`s. In a footnote, an
-    /// image gives its alt text.
+    /// Render an inline node to paragraph children: runs and links. In a
+    /// footnote, an image gives its alt text.
     pub(super) fn render_inline_runs(
         &self,
         context: &RenderContext<'_>,
         node_ref: NodeRef,
-    ) -> Result<Vec<Run>> {
+    ) -> Result<Vec<ParagraphChild>> {
         let arena = context.arena;
         let source = context.source;
         let runs = match arena[node_ref].kind_data() {
             KindData::Text(text) => {
                 let content = text.str(source);
-                let mut runs = vec![Run::new().add_text(content)];
+                let mut runs = vec![run_child(Run::new().add_text(content))];
                 if text.has_qualifiers(TextQualifier::HARD_LINE_BREAK) {
-                    runs.push(Run::new().add_break(BreakType::TextWrapping));
+                    runs.push(run_child(Run::new().add_break(BreakType::TextWrapping)));
                 } else if text.has_qualifiers(TextQualifier::SOFT_LINE_BREAK) {
-                    runs.push(Run::new().add_text(" "));
+                    runs.push(run_child(Run::new().add_text(" ")));
                 }
                 runs
             }
             KindData::CodeSpan(cs) => {
                 let content = cs.str(source);
-                vec![Run::new()
-                    .add_text(content.into_owned())
-                    .style("InlineCode")]
+                vec![run_child(
+                    Run::new()
+                        .add_text(content.into_owned())
+                        .style("InlineCode"),
+                )]
             }
             KindData::Emphasis(_) => {
-                let children_runs = self.collect_child_runs(context, node_ref)?;
-                children_runs.into_iter().map(|r| r.italic()).collect()
+                let mut runs = self.collect_child_runs(context, node_ref)?;
+                update_runs(&mut runs, RunProperty::italic);
+                runs
             }
             KindData::Strong(_) => {
-                let children_runs = self.collect_child_runs(context, node_ref)?;
-                children_runs.into_iter().map(|r| r.bold()).collect()
+                let mut runs = self.collect_child_runs(context, node_ref)?;
+                update_runs(&mut runs, RunProperty::bold);
+                runs
             }
             KindData::Strikethrough(_) => {
-                let children_runs = self.collect_child_runs(context, node_ref)?;
-                children_runs.into_iter().map(|r| r.strike()).collect()
+                let mut runs = self.collect_child_runs(context, node_ref)?;
+                update_runs(&mut runs, RunProperty::strike);
+                runs
             }
-            KindData::Link(_) => self.collect_text_runs(context, node_ref, Some("Hyperlink"))?,
+            KindData::Link(_) => self.render_link(context, node_ref)?,
             KindData::Image(_) => {
                 let pic = if context.footnote {
                     None
@@ -52,13 +57,13 @@ impl<'a> DocxRenderer<'a> {
                     self.resolve_graph_image(context, node_ref)?
                 };
                 if let Some(pic) = pic {
-                    vec![Run::new().add_image(pic)]
+                    vec![run_child(Run::new().add_image(pic))]
                 } else {
                     let alt = Self::collect_inline_text(arena, source, node_ref);
                     if alt.is_empty() {
                         vec![]
                     } else {
-                        vec![Run::new().add_text(&alt)]
+                        vec![run_child(Run::new().add_text(&alt))]
                     }
                 }
             }
@@ -66,18 +71,21 @@ impl<'a> DocxRenderer<'a> {
                 if rushdown::matches_extension_kind!(arena, node_ref, FootnoteReference) =>
             {
                 self.render_footnote_reference(context, node_ref)?
+                    .into_iter()
+                    .map(run_child)
+                    .collect()
             }
             _ => self.collect_child_runs(context, node_ref)?,
         };
         Ok(runs)
     }
 
-    /// Collect `Run`s from all children of a node.
+    /// Collect the paragraph children of all children of a node.
     pub(super) fn collect_child_runs(
         &self,
         context: &RenderContext<'_>,
         node_ref: NodeRef,
-    ) -> Result<Vec<Run>> {
+    ) -> Result<Vec<ParagraphChild>> {
         let arena = context.arena;
         let mut runs = Vec::new();
         for child in arena[node_ref].children(arena) {
@@ -88,32 +96,33 @@ impl<'a> DocxRenderer<'a> {
 
     /// Collect the plain text of an inline subtree as runs with the
     /// character style `style`. A footnote reference gives its reference
-    /// run between the text runs. The text without references is one run.
+    /// run between the text runs. A link gives its plain text in a
+    /// `w:hyperlink`. The text without references and links is one run.
     pub(super) fn collect_text_runs(
         &self,
         context: &RenderContext<'_>,
         node_ref: NodeRef,
         style: Option<&str>,
-    ) -> Result<Vec<Run>> {
+    ) -> Result<Vec<ParagraphChild>> {
         let mut text = String::new();
         let mut runs = Vec::new();
         self.push_text_runs(context, node_ref, style, &mut text, &mut runs)?;
         if !text.is_empty() || runs.is_empty() {
-            runs.push(text_run(text, style));
+            runs.push(run_child(text_run(text, style)));
         }
         Ok(runs)
     }
 
     /// Add the plain text of an inline subtree to `text`. At a footnote
-    /// reference, move `text` to a run in `runs`, then add the reference
-    /// run.
+    /// reference or a link, move `text` to a run in `runs`, then add the
+    /// reference run or the link.
     fn push_text_runs(
         &self,
         context: &RenderContext<'_>,
         node_ref: NodeRef,
         style: Option<&str>,
         text: &mut String,
-        runs: &mut Vec<Run>,
+        runs: &mut Vec<ParagraphChild>,
     ) -> Result<()> {
         let arena = context.arena;
         let source = context.source;
@@ -136,10 +145,22 @@ impl<'a> DocxRenderer<'a> {
                     let reference = self.render_footnote_reference(context, child)?;
                     if !reference.is_empty() {
                         if !text.is_empty() {
-                            runs.push(text_run(std::mem::take(text), style));
+                            runs.push(run_child(text_run(std::mem::take(text), style)));
                         }
-                        runs.extend(reference);
+                        runs.extend(reference.into_iter().map(run_child));
                     }
+                }
+                KindData::Link(_) => {
+                    if !text.is_empty() {
+                        runs.push(run_child(text_run(std::mem::take(text), style)));
+                    }
+                    let mut link_text = String::new();
+                    let mut link_runs = Vec::new();
+                    self.push_text_runs(context, child, style, &mut link_text, &mut link_runs)?;
+                    if !link_text.is_empty() {
+                        link_runs.push(run_child(text_run(link_text, style)));
+                    }
+                    runs.extend(self.render_link_with(context, child, link_runs));
                 }
                 _ => self.push_text_runs(context, child, style, text, runs)?,
             }
@@ -169,6 +190,23 @@ impl<'a> DocxRenderer<'a> {
             }
         }
         buf
+    }
+}
+
+/// Gives `run` as a paragraph child.
+pub(super) fn run_child(run: Run) -> ParagraphChild {
+    ParagraphChild::Run(Box::new(run))
+}
+
+/// Changes the run properties of each run in `children` with `f`, also in
+/// links.
+fn update_runs(children: &mut [ParagraphChild], f: fn(RunProperty) -> RunProperty) {
+    for child in children {
+        match child {
+            ParagraphChild::Run(run) => run.run_property = f(std::mem::take(&mut run.run_property)),
+            ParagraphChild::Hyperlink(link) => update_runs(&mut link.children, f),
+            _ => {}
+        }
     }
 }
 

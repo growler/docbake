@@ -195,7 +195,8 @@ fn separators_come_first() {
     let xml = render_parts("Text[^a].\n\n[^a]: Note.\n").unwrap()("word/footnotes.xml");
     assert!(xml.starts_with(concat!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
-        r#"<w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">"#,
+        r#"<w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" "#,
+        r#"xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">"#,
         r#"<w:footnote w:type="separator" w:id="-1"><w:p><w:pPr><w:pStyle w:val="FootnoteText"/></w:pPr>"#,
         r#"<w:r><w:separator/></w:r></w:p></w:footnote>"#,
         r#"<w:footnote w:type="continuationSeparator" w:id="0"><w:p><w:pPr><w:pStyle w:val="FootnoteText"/></w:pPr>"#,
@@ -454,7 +455,12 @@ fn reference_in_link_text_gets_footnote() {
     let document = part("word/document.xml");
     assert_in_order(
         &document,
-        &[&hyperlink_run("link with note"), &reference(1), " end."],
+        &[
+            &hyperlink_run("link with note"),
+            &reference(1),
+            "</w:hyperlink>",
+            " end.",
+        ],
     );
     let xml = part("word/footnotes.xml");
     let notes = footnotes(&xml);
@@ -463,9 +469,23 @@ fn reference_in_link_text_gets_footnote() {
 }
 
 #[test]
-fn link_text_is_one_hyperlink_run() {
+fn link_runs_keep_their_formatting() {
     let document = render_parts("[a *b* `c` **d**](https://x.org)\n").unwrap()("word/document.xml");
-    let paragraph = format!("<w:pPr><w:rPr /></w:pPr>{}</w:p>", hyperlink_run("a b c d"));
+    let run = |properties: &str, text: &str| {
+        format!(r#"<w:r><w:rPr>{properties}</w:rPr><w:t xml:space="preserve">{text}</w:t></w:r>"#)
+    };
+    let link = r#"<w:rStyle w:val="Hyperlink" />"#;
+    let paragraph = [
+        r#"<w:pPr><w:rPr /></w:pPr><w:hyperlink r:id="rIdLink1" w:history="1">"#.to_string(),
+        run(link, "a "),
+        run(&format!("<w:i /><w:iCs />{link}"), "b"),
+        run(link, " "),
+        run(r#"<w:rStyle w:val="InlineCode" />"#, "c"),
+        run(link, " "),
+        run(&format!("<w:b /><w:bCs />{link}"), "d"),
+        "</w:hyperlink></w:p>".to_string(),
+    ]
+    .concat();
     assert!(document.contains(&paragraph), "{document}");
 }
 

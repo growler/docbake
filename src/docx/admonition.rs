@@ -2,6 +2,7 @@ use anyhow::Result;
 use docx_rs::*;
 use rushdown::ast::{KindData, NodeRef};
 
+use super::inline::run_child;
 use super::{DocxRenderer, RenderContext};
 
 /// The styles and the default title of each admonition type: (type, header
@@ -77,17 +78,15 @@ impl<'a> DocxRenderer<'a> {
                 let title = self.collect_text_runs(context, first, None)?;
                 (title, true)
             } else {
-                (vec![Run::new().add_text(default_title)], false)
+                (vec![run_child(Run::new().add_text(default_title))], false)
             }
         } else {
-            (vec![Run::new().add_text(default_title)], false)
+            (vec![run_child(Run::new().add_text(default_title))], false)
         };
 
         // ── Title paragraph ─────────────────────────────────────────
         let mut title_para = Paragraph::new().style(header_style);
-        for run in title {
-            title_para = title_para.add_run(run);
-        }
+        title_para.children.extend(title);
         docx = docx.add_paragraph(title_para);
 
         // ── Body children ───────────────────────────────────────────

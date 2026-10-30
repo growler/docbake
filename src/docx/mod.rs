@@ -18,9 +18,11 @@
 //! the extent fits in the text area.
 //!
 //! Each footnote reference gives a Word footnote in `word/footnotes.xml`.
+//!
+//! Links are clickable: see [`links`].
 
 use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
+use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Result;
@@ -36,6 +38,7 @@ use crate::DebugDumper;
 
 use self::footnotes::FootnotesPart;
 use self::lang::CaptionLabels;
+use self::links::ExternalLinks;
 use self::package::Package;
 use self::params::DocxParams;
 use self::tables::TableLayout;
@@ -51,6 +54,7 @@ mod footnotes;
 mod header_footer;
 mod inline;
 mod lang;
+mod links;
 mod media;
 mod numbering;
 mod package;
@@ -72,8 +76,14 @@ pub(crate) struct DocxRenderer<'a> {
     text_area: (u64, u64),
     /// `1em` in EMU.
     em: u64,
-    toc_heading_keys: RefCell<VecDeque<String>>,
+    /// The ID of each heading and caption that an internal link can go
+    /// to, by its bookmark name.
+    link_targets: RefCell<HashMap<String, String>>,
     bookmark_counter: RefCell<usize>,
+    /// The URLs of the external links in the body.
+    document_links: RefCell<ExternalLinks>,
+    /// The URLs of the external links in the footnotes.
+    footnote_links: RefCell<ExternalLinks>,
     /// The `w:numId` of the next list.
     list_num_counter: RefCell<usize>,
     /// The layout of each rendered table, in document order.
@@ -122,8 +132,10 @@ impl<'a> DocxRenderer<'a> {
             params,
             text_area: media::text_area(&params.page),
             em: media::em(params),
-            toc_heading_keys: RefCell::new(VecDeque::new()),
+            link_targets: RefCell::new(HashMap::new()),
             bookmark_counter: RefCell::new(0),
+            document_links: RefCell::new(ExternalLinks::default()),
+            footnote_links: RefCell::new(ExternalLinks::default()),
             list_num_counter: RefCell::new(numbering::FIRST_LIST_NUM_ID),
             tables: RefCell::new(Vec::new()),
             caption_labels: Cell::new(lang::caption_labels(lang::DEFAULT_LANG)),
@@ -145,6 +157,8 @@ impl<'a> DocxRenderer<'a> {
         self.caption_labels.set(lang::caption_labels(lang));
         *self.caption_counters.borrow_mut() = [0; 3];
         *self.footnotes.borrow_mut() = FootnotesPart::default();
+        *self.document_links.borrow_mut() = ExternalLinks::default();
+        *self.footnote_links.borrow_mut() = ExternalLinks::default();
 
         // ── Page size and margins ───────────────────────────────────────
         let page = &self.params.page;
@@ -188,7 +202,7 @@ impl<'a> DocxRenderer<'a> {
         // each top-level block.  render_block handles its own children.
         docx = self.render_graph_document(docx, graph, graph.root_id, 0)?;
 
-        Package::new(
+        let mut package = Package::new(
             docx,
             self.params,
             lang,
@@ -196,7 +210,9 @@ impl<'a> DocxRenderer<'a> {
             &fields.version,
             &self.tables.take(),
             self.footnotes.take().finish(),
-        )
+        )?;
+        package.set_external_links(&self.document_links.take(), &self.footnote_links.take())?;
+        Ok(package)
     }
 
     /// Walk a document occurrence, resolving includes and rendering

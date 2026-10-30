@@ -131,6 +131,8 @@ fn main() {}
 
 Text with `code`, a [link](https://example.com), *em*, **strong** and
 ~~strike~~.
+
+A [link with *em*](https://example.com).
 ";
 
 const BLOCKS: &str = "\
@@ -262,6 +264,8 @@ Table: Table caption in an admonition
 |------|-------|
 | two  | 2     |
 :::
+
+See [the table](#table-caption).
 ";
 
 /// The diagram always fails: `panic` stops the Typst compilation, and

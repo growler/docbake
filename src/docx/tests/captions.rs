@@ -4,6 +4,8 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
+use crate::docx::links::bookmark_name;
+
 use super::{
     assert_in_order, assert_runs_unformatted, field_parts, render_parts, text_paragraphs, PARAGRAPH,
 };
@@ -107,8 +109,8 @@ Table: Beta
     }
 
     let bookmarks: Vec<_> = captions.iter().map(|c| caption_bookmark(c)).collect();
-    for (id, name) in &bookmarks {
-        assert_eq!(*name, format!("_Ref{:09}", id.parse::<usize>().unwrap()));
+    for ((_, name), id) in bookmarks.iter().zip(["alpha", "diagram", "beta"]) {
+        assert_eq!(*name, bookmark_name(id));
     }
     assert_ne!(bookmarks[0].0, bookmarks[1].0);
     assert_ne!(bookmarks[1].0, bookmarks[2].0);

@@ -8,8 +8,8 @@ use rushdown_fenced_div::FencedDiv;
 use crate::caption::{Caption, CaptionKind, CaptionText};
 
 use super::fields::add_field;
+use super::links::bookmark_name;
 use super::numbering::{ListKind, LIST_LEVELS};
-use super::toc::TOC_DEPTH;
 use super::{DocxRenderer, RenderContext};
 
 impl<'a> DocxRenderer<'a> {
@@ -26,33 +26,13 @@ impl<'a> DocxRenderer<'a> {
                 let heading = as_kind_data!(arena[node_ref], Heading);
                 let level = (heading.level() as usize + context.heading_shift).min(6);
                 let style = format!("Heading{level}");
-                let heading_text = Self::collect_inline_text(arena, source, node_ref);
 
-                let mut para = Paragraph::new().style(&style);
-
-                let mut has_bookmark = false;
-                let eligible_for_toc_bookmark = level <= TOC_DEPTH
-                    && !heading_text.is_empty()
-                    && !crate::html::is_admonition_title_heading(arena, node_ref, source);
-                if eligible_for_toc_bookmark {
-                    let next_key = self.toc_heading_keys.borrow_mut().pop_front();
-                    if let Some(key) = next_key {
-                        let id = *self.bookmark_counter.borrow();
-                        *self.bookmark_counter.borrow_mut() = id + 1;
-                        para = para.add_bookmark_start(id, key);
-                        has_bookmark = true;
-                    }
-                }
-
-                for child in arena[node_ref].children(arena) {
-                    let runs = self.render_inline_runs(context, child)?;
-                    for run in runs {
-                        para = para.add_run(run);
-                    }
-                }
-                if has_bookmark {
-                    let id = *self.bookmark_counter.borrow() - 1;
-                    para = para.add_bookmark_end(id);
+                let (mut para, bookmark) =
+                    self.add_bookmark_start(context, node_ref, Paragraph::new().style(&style));
+                para.children
+                    .extend(self.collect_child_runs(context, node_ref)?);
+                if let Some(bookmark) = bookmark {
+                    para = para.add_bookmark_end(bookmark);
                 }
                 docx = docx.add_paragraph(para);
             }
@@ -65,12 +45,8 @@ impl<'a> DocxRenderer<'a> {
                 if let Some(style) = style {
                     para = para.style(style);
                 }
-                for child in arena[node_ref].children(arena) {
-                    let runs = self.render_inline_runs(context, child)?;
-                    for run in runs {
-                        para = para.add_run(run);
-                    }
-                }
+                para.children
+                    .extend(self.collect_child_runs(context, node_ref)?);
                 docx = docx.add_paragraph(para);
             }
             KindData::CodeBlock(code_block) => {
@@ -256,12 +232,8 @@ impl<'a> DocxRenderer<'a> {
                         };
                         first = false;
                         let mut para = list_paragraph(id, marker.take());
-                        for inline in arena[child].children(arena) {
-                            let runs = self.render_inline_runs(context, inline)?;
-                            for run in runs {
-                                para = para.add_run(run);
-                            }
-                        }
+                        para.children
+                            .extend(self.collect_child_runs(context, child)?);
                         docx = docx.add_paragraph(para);
                     }
                     KindData::List(_) => {
@@ -306,12 +278,8 @@ impl<'a> DocxRenderer<'a> {
         for child in arena[node_ref].children(arena) {
             if rushdown::matches_extension_kind!(arena, child, Term) {
                 let mut para = Paragraph::new().style("DefinitionTerm");
-                for inline in arena[child].children(arena) {
-                    let runs = self.render_inline_runs(context, inline)?;
-                    for run in runs {
-                        para = para.add_run(run);
-                    }
-                }
+                para.children
+                    .extend(self.collect_child_runs(context, child)?);
                 docx = docx.add_paragraph(para);
             } else if rushdown::matches_extension_kind!(arena, child, TermDefinition) {
                 let context = RenderContext {
@@ -332,8 +300,8 @@ impl<'a> DocxRenderer<'a> {
     /// The caption paragraph has the `Caption` style. It holds the caption
     /// word, a `SEQ` field with the number of the caption in its kind, the
     /// separator and the caption text. A caption without text has no
-    /// separator. A hidden bookmark `_Ref` holds the caption content. A
-    /// caption of a block that is hidden for this output format gives no
+    /// separator. The bookmark of the caption ID holds the caption content.
+    /// A caption of a block that is hidden for this output format gives no
     /// output.
     fn render_caption(
         &self,
@@ -372,12 +340,9 @@ impl<'a> DocxRenderer<'a> {
                 counters[slot] += 1;
                 counters[slot]
             };
-            let id = self.bookmark_counter.replace_with(|n| *n + 1);
-
-            let mut para = Paragraph::new()
-                .style("Caption")
-                .add_bookmark_start(id, format!("_Ref{id:09}"))
-                .add_run(Run::new().add_text(format!("{word} ")));
+            let (mut para, bookmark) =
+                self.add_bookmark_start(context, node_ref, Paragraph::new().style("Caption"));
+            para = para.add_run(Run::new().add_text(format!("{word} ")));
             para = add_field(
                 para,
                 InstrText::Unsupported(format!(" SEQ {seq} \\* ARABIC ")),
@@ -387,10 +352,11 @@ impl<'a> DocxRenderer<'a> {
             if !runs.is_empty() {
                 para = para.add_run(Run::new().add_text(labels.separator));
             }
-            for run in runs {
-                para = para.add_run(run);
+            para.children.extend(runs);
+            if let Some(bookmark) = bookmark {
+                para = para.add_bookmark_end(bookmark);
             }
-            docx = docx.add_paragraph(para.add_bookmark_end(id));
+            docx = docx.add_paragraph(para);
         }
 
         if let Some(br) = block_ref {
@@ -398,6 +364,25 @@ impl<'a> DocxRenderer<'a> {
         }
 
         Ok(docx)
+    }
+
+    /// Adds the bookmark start of the ID of the heading or caption
+    /// `node_ref` to `para`, and gives the bookmark ID. A node without an ID
+    /// gets no bookmark.
+    fn add_bookmark_start(
+        &self,
+        context: &RenderContext<'_>,
+        node_ref: NodeRef,
+        para: Paragraph,
+    ) -> (Paragraph, Option<usize>) {
+        match context.arena[node_ref].attributes().get("id") {
+            Some(id) => {
+                let bookmark = self.bookmark_counter.replace_with(|n| *n + 1);
+                let name = bookmark_name(&id.str(context.source));
+                (para.add_bookmark_start(bookmark, name), Some(bookmark))
+            }
+            None => (para, None),
+        }
     }
 
     /// Render code block lines as `CodeBlock` paragraphs, one for each line.

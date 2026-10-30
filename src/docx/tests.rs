@@ -20,6 +20,7 @@ use crate::theme::Theme;
 use crate::DebugDumper;
 
 use super::extent::extent;
+use super::links::bookmark_name;
 use super::media::logo_at_height;
 use super::package::Package;
 use super::params::Twips;
@@ -29,6 +30,7 @@ mod body_lint;
 mod captions;
 mod footnotes;
 mod images;
+mod links;
 mod lists;
 mod tables;
 
@@ -604,8 +606,9 @@ fn toc_uses_toc_styles_in_sdt() {
         .captures_iter(&document)
         .map(|c| c[1].to_string())
         .collect();
-    assert_eq!(anchors.len(), 3);
-    assert_eq!(anchors, bookmarks);
+    let names = ["one", "two", "three", "four"].map(bookmark_name);
+    assert_eq!(bookmarks, names);
+    assert_eq!(anchors, names[..3]);
 }
 
 #[test]

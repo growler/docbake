@@ -1,13 +1,15 @@
-use std::collections::VecDeque;
+use std::collections::hash_map::Entry;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use docx_rs::*;
 use rushdown::as_kind_data;
 use rushdown::ast::{Arena, KindData, NodeRef};
 use rushdown_footnote::FootnoteDefinition;
 
+use crate::caption::{Caption, CaptionText};
 use crate::graph::DocumentGraph;
 
+use super::links::bookmark_name;
 use super::DocxRenderer;
 
 /// TOC depth: include heading levels 1..=TOC_DEPTH.
@@ -22,18 +24,15 @@ impl<'a> DocxRenderer<'a> {
     /// Add the field-based table of contents and the page break after it.
     /// A document without TOC entries gets neither.
     ///
-    /// Also resets the heading bookmark keys and the bookmark counter that
-    /// `render_block` uses to put a TOC bookmark on each matching heading.
+    /// Also collects the targets of the internal links and resets the
+    /// bookmark counter that `render_block` uses for the bookmark of each
+    /// heading and caption.
     pub(super) fn add_table_of_contents(
         &self,
         mut docx: Docx,
         graph: &DocumentGraph,
     ) -> Result<Docx> {
         let toc_entries = self.collect_toc_entries(graph)?;
-        *self.toc_heading_keys.borrow_mut() = toc_entries
-            .iter()
-            .map(|entry| entry.key.clone())
-            .collect::<VecDeque<_>>();
         *self.bookmark_counter.borrow_mut() = 0;
 
         let Some(last) = toc_entries.last() else {
@@ -97,9 +96,14 @@ impl<'a> DocxRenderer<'a> {
         Ok(docx)
     }
 
+    /// Gives the TOC entries, and collects the targets of the internal
+    /// links: the visible headings and the captions of visible blocks,
+    /// without admonition titles and without the content of footnote
+    /// definitions. Two IDs with the same bookmark name are an error.
     fn collect_toc_entries(&self, graph: &DocumentGraph) -> Result<Vec<TocEntry>> {
         let mut entries = Vec::new();
-        let mut idx = 0usize;
+        let mut targets = self.link_targets.borrow_mut();
+        targets.clear();
 
         for (doc_id, node_ref, heading_shift) in
             graph.rendered_nodes_preorder_visible(&self.profile)?
@@ -108,12 +112,43 @@ impl<'a> DocxRenderer<'a> {
             let arena = &doc.arena;
             let source = &doc.source;
 
-            if !matches!(arena[node_ref].kind_data(), KindData::Heading(_)) {
+            let is_heading = matches!(arena[node_ref].kind_data(), KindData::Heading(_));
+            let is_target = if is_heading {
+                !crate::html::is_admonition_title_heading(arena, node_ref, source)
+            } else if rushdown::matches_extension_kind!(arena, node_ref, Caption) {
+                let block = arena[node_ref]
+                    .children(arena)
+                    .find(|&c| !rushdown::matches_extension_kind!(arena, c, CaptionText));
+                match block {
+                    Some(block) => {
+                        crate::conditional::node_is_visible(arena, block, source, &self.profile)?
+                    }
+                    None => true,
+                }
+            } else {
+                false
+            };
+            if !is_target || in_footnote_definition(arena, node_ref) {
                 continue;
             }
-            if crate::html::is_admonition_title_heading(arena, node_ref, source)
-                || in_footnote_definition(arena, node_ref)
-            {
+            let Some(id) = arena[node_ref].attributes().get("id") else {
+                continue;
+            };
+            let id = id.str(source);
+            let key = bookmark_name(&id);
+            match targets.entry(key.clone()) {
+                Entry::Occupied(other) if *other.get() != id => {
+                    bail!(
+                        "the IDs `{}` and `{id}` have the same bookmark name",
+                        other.get()
+                    )
+                }
+                Entry::Occupied(_) => {}
+                Entry::Vacant(entry) => {
+                    entry.insert(id.to_string());
+                }
+            }
+            if !is_heading {
                 continue;
             }
 
@@ -128,12 +163,7 @@ impl<'a> DocxRenderer<'a> {
                 continue;
             }
 
-            idx += 1;
-            entries.push(TocEntry {
-                key: format!("_Toc{idx:09}"),
-                text,
-                level,
-            });
+            entries.push(TocEntry { key, text, level });
         }
 
         Ok(entries)
@@ -141,8 +171,8 @@ impl<'a> DocxRenderer<'a> {
 }
 
 /// Tells if `node_ref` is in a footnote definition. The text of a footnote
-/// definition is in the footnotes part, thus its headings take no TOC
-/// entry.
+/// definition is in the footnotes part, thus its headings and captions
+/// take no TOC entry and no bookmark.
 fn in_footnote_definition(arena: &Arena, node_ref: NodeRef) -> bool {
     let mut parent = arena[node_ref].parent();
     while let Some(p) = parent {

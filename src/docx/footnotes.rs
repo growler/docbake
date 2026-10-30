@@ -31,6 +31,7 @@ use rushdown_footnote::FootnoteReference;
 use crate::caption::{Caption, CaptionText};
 
 use super::admonition::default_title;
+use super::inline::run_child;
 use super::numbering::LIST_LEVELS;
 use super::{DocxRenderer, RenderContext};
 
@@ -41,7 +42,8 @@ const FOOTNOTE_TEXT: &str = "FootnoteText";
 /// separator footnotes.
 const PART_START: &str = concat!(
     r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
-    r#"<w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">"#,
+    r#"<w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" "#,
+    r#"xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">"#,
     r#"<w:footnote w:type="separator" w:id="-1"><w:p><w:pPr><w:pStyle w:val="FootnoteText"/></w:pPr>"#,
     r#"<w:r><w:separator/></w:r></w:p></w:footnote>"#,
     r#"<w:footnote w:type="continuationSeparator" w:id="0"><w:p><w:pPr><w:pStyle w:val="FootnoteText"/></w:pPr>"#,
@@ -87,9 +89,9 @@ impl FootnotesPart {
         Ok(self.last_id)
     }
 
-    /// Writes a paragraph with the style `style` and the runs `runs` to
-    /// the open footnote.
-    fn paragraph(&mut self, style: &str, runs: &[Run]) -> Result<()> {
+    /// Writes a paragraph with the style `style` and the children `runs`
+    /// to the open footnote.
+    fn paragraph(&mut self, style: &str, runs: &[ParagraphChild]) -> Result<()> {
         write!(
             self.xml,
             r#"<w:p><w:pPr><w:pStyle w:val="{style}"/></w:pPr>"#
@@ -183,7 +185,7 @@ impl<'a> DocxRenderer<'a> {
     }
 
     /// Write a paragraph to the open footnote.
-    fn footnote_paragraph(&self, style: &str, runs: &[Run]) -> Result<()> {
+    fn footnote_paragraph(&self, style: &str, runs: &[ParagraphChild]) -> Result<()> {
         self.footnotes.borrow_mut().paragraph(style, runs)
     }
 
@@ -205,7 +207,7 @@ impl<'a> DocxRenderer<'a> {
                     code_text.push_str(&line);
                 }
                 for line in code_text.lines() {
-                    self.footnote_paragraph("CodeBlock", &[Run::new().add_text(line)])?;
+                    self.footnote_paragraph("CodeBlock", &[run_child(Run::new().add_text(line))])?;
                 }
             }
             KindData::Blockquote(_) => {
@@ -242,7 +244,7 @@ impl<'a> DocxRenderer<'a> {
                                 matches!(arena[first].kind_data(), KindData::Heading(_))
                             });
                         if !has_title {
-                            let title = Run::new().add_text(default_title(adm_type));
+                            let title = run_child(Run::new().add_text(default_title(adm_type)));
                             self.footnote_paragraph(FOOTNOTE_TEXT, &[title])?;
                         }
                     }
@@ -299,12 +301,14 @@ impl<'a> DocxRenderer<'a> {
                 .is_some_and(|child| matches!(arena[child].kind_data(), KindData::Paragraph(_)));
             if !starts_with_paragraph {
                 let marker = marker.take().unwrap_or_default();
-                self.footnote_paragraph(FOOTNOTE_TEXT, &[Run::new().add_text(marker)])?;
+                self.footnote_paragraph(FOOTNOTE_TEXT, &[run_child(Run::new().add_text(marker))])?;
             }
             for child in arena[item_ref].children(arena) {
                 match arena[child].kind_data() {
                     KindData::Paragraph(_) if marker.is_some() => {
-                        let mut runs = vec![Run::new().add_text(marker.take().unwrap_or_default())];
+                        let mut runs = vec![run_child(
+                            Run::new().add_text(marker.take().unwrap_or_default()),
+                        )];
                         runs.extend(self.collect_child_runs(context, child)?);
                         self.footnote_paragraph(FOOTNOTE_TEXT, &runs)?;
                     }
@@ -338,7 +342,7 @@ impl<'a> DocxRenderer<'a> {
                     .filter(|&cell| matches!(arena[cell].kind_data(), KindData::TableCell(_)));
                 for (i, cell) in cells.enumerate() {
                     if i > 0 {
-                        runs.push(Run::new().add_tab());
+                        runs.push(run_child(Run::new().add_tab()));
                     }
                     runs.extend(self.collect_child_runs(context, cell)?);
                 }
