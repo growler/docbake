@@ -1,3 +1,15 @@
+docbake (0.2.0) unstable; urgency=medium
+
+  * feat!: add the front-matter logo field and make the theme logo optional
+  * feat(docx): generate styles, fonts, numbering, captions, footnotes and
+    hyperlinks from docx.yaml; add the -f docx build format
+  * feat(gdoc): read the OAuth2 client from env vars or credentials file
+  * refactor: port to rushdown 0.19; keep blank as the only built-in theme
+  * chore: license the project under MIT
+  * ci: add GitHub Actions CI and tag-driven release workflows
+
+ -- Alexey Naidyonov <alexey.naidyonov@gmail.com>  Thu, 26 Nov 2026 18:28:05 +0100
+
 docbake (0.1.15) unstable; urgency=medium
 
   * fix: make the Debian package build byte-for-byte reproducible by pinning
