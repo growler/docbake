@@ -1,6 +1,6 @@
 {
   "name": "docbake-docs",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Skill for writing and editing Markdown documentation that docbake compiles to HTML, PDF, DOCX, Confluence, or Google Docs.",
   "author": { "name": "Alexey Naidyonov" },
   "homepage": "https://growler.github.io/docbake/",

@@ -1,3 +1,9 @@
+docbake (0.2.2) unstable; urgency=medium
+
+  * feat(ci): publish a Homebrew formula on each release
+
+ -- Alexey Naidyonov <alexey.naidyonov@gmail.com>  Thu, 26 Nov 2026 20:09:20 +0100
+
 docbake (0.2.1) unstable; urgency=medium
 
   * feat(skill): add the docbake-docs agent skill and Claude Code plugin
