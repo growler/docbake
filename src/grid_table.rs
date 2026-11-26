@@ -630,7 +630,9 @@ fn try_parse_grid_table(source: &str, lines: &[Segment]) -> Option<GridTableSpec
                 for slot in &mut active[col_start..col_end] {
                     *slot = Some(cell_idx);
                 }
-            } else if let Some(first_idx) = slot_actives[0] {
+            } else {
+                // Mixed None + Some -- slot straddles a span boundary.
+                let first_idx = slot_actives[0]?;
                 // All slot columns must reference the same cell.
                 if slot_actives.iter().any(|a| *a != Some(first_idx)) {
                     return None;
@@ -648,9 +650,6 @@ fn try_parse_grid_table(source: &str, lines: &[Segment]) -> Option<GridTableSpec
                 // returns None for them and they're silently skipped.)
                 let row_lines = row.lines.clone();
                 cells[first_idx].lines.extend(row_lines);
-            } else {
-                // Mixed None + Some — slot straddles a span boundary.
-                return None;
             }
         }
 

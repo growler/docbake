@@ -118,12 +118,9 @@ impl<'a> DocxRenderer<'a> {
             | KindData::ThematicBreak(_) => {}
             _ => {
                 if rushdown::matches_extension_kind!(arena, node_ref, Caption) {
-                    let block_ref = arena[node_ref]
-                        .children(arena)
-                        .filter(|&child| {
-                            !rushdown::matches_extension_kind!(arena, child, CaptionText)
-                        })
-                        .next_back();
+                    let block_ref = arena[node_ref].children(arena).rfind(|&child| {
+                        !rushdown::matches_extension_kind!(arena, child, CaptionText)
+                    });
                     if let Some(br) = block_ref {
                         self.collect_block_diagrams(
                             arena,

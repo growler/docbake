@@ -122,8 +122,8 @@ impl MarkdownFmtRenderer {
                 let list_marker = list.marker() as char;
                 let unordered_marker = if ordered { '-' } else { list_marker };
                 let ordered_marker = list_marker;
-                let mut index = list.start().max(1) as usize;
-                for item in arena[node_ref].children(arena) {
+                let start = list.start().max(1) as usize;
+                for (index, item) in (start..).zip(arena[node_ref].children(arena)) {
                     let marker = if ordered {
                         format!("{index}{ordered_marker} ")
                     } else {
@@ -190,7 +190,6 @@ impl MarkdownFmtRenderer {
                     if !tight {
                         out.push('\n');
                     }
-                    index += 1;
                 }
                 if tight {
                     out.push('\n');
