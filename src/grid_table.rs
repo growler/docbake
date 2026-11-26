@@ -907,6 +907,8 @@ fn populate_cell(
 #[derive(Debug, Default)]
 struct GridTableCandidate;
 
+impl rushdown::ast::InlineChars for GridTableCandidate {}
+
 impl NodeKind for GridTableCandidate {
     fn typ(&self) -> NodeType {
         NodeType::LeafBlock
@@ -1108,7 +1110,6 @@ mod tests {
     use rushdown::matches_kind;
     use rushdown::parser;
     use rushdown::renderer::html;
-    use rushdown::text::BasicReader;
     use rushdown::Result;
 
     fn make_parser() -> parser::Parser {
@@ -1124,18 +1125,24 @@ mod tests {
 
     fn parse(input: &str) -> (Arena, NodeRef) {
         let p = make_parser();
-        let mut reader = BasicReader::new(input);
-        p.parse(&mut reader)
+        p.parse(input, rushdown::parser::ParseOptions::default())
     }
 
     fn render(input: &str) -> String {
         let p = make_parser();
-        let mut reader = BasicReader::new(input);
-        let (arena, doc) = p.parse(&mut reader);
+        let (arena, doc) = p.parse(input, rushdown::parser::ParseOptions::default());
         let renderer =
             html::Renderer::with_extensions(html::Options::default(), html::NO_EXTENSIONS);
         let mut out = String::new();
-        renderer.render(&mut out, input, &arena, doc).unwrap();
+        renderer
+            .render(
+                &mut out,
+                input,
+                &arena,
+                doc,
+                rushdown::renderer::RenderOptions::default(),
+            )
+            .unwrap();
         out
     }
 

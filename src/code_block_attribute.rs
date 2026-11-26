@@ -23,6 +23,7 @@
 //! This module is designed to be extracted into a standalone crate later.
 
 use std::any::TypeId;
+use std::borrow::Cow;
 use std::fmt::Write as _;
 use std::sync::LazyLock;
 
@@ -87,14 +88,14 @@ impl AstTransformer for CodeBlockAttributeAstTransformer {
             if code_block.code_block_kind() != CodeBlockKind::Fenced {
                 return Ok(WalkStatus::Continue);
             }
-            let info = match code_block.info_str(source) {
-                Some(s) => s,
+            let info = match code_block.info().as_option() {
+                Some(value) => value.str(source),
                 None => return Ok(WalkStatus::Continue),
             };
             // Find the attribute block — everything from the first '{' that is
             // preceded by a space (or is right after the language token).
             // The language token is the first whitespace-delimited word.
-            if let Some(attr_str) = extract_attribute_part(info) {
+            if let Some(attr_str) = extract_attribute_part(&info) {
                 targets.push((node_ref, attr_str.to_string()));
             }
             Ok(WalkStatus::Continue)
@@ -188,17 +189,12 @@ static DEFAULT_THEME_SET: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defa
 
 struct CodeBlockAttributeHtmlRenderer<W: TextWrite> {
     _phantom: core::marker::PhantomData<W>,
-    writer: html::Writer,
 }
 
 impl<W: TextWrite> CodeBlockAttributeHtmlRenderer<W> {
-    fn with_options(
-        html_opts: html::Options,
-        _options: CodeBlockAttributeHtmlRendererOptions,
-    ) -> Self {
+    fn with_options(_options: CodeBlockAttributeHtmlRendererOptions) -> Self {
         Self {
             _phantom: core::marker::PhantomData,
-            writer: html::Writer::with_options(html_opts),
         }
     }
 
@@ -211,7 +207,11 @@ impl<W: TextWrite> CodeBlockAttributeHtmlRenderer<W> {
         node_ref: NodeRef,
         code_block: &CodeBlock,
     ) -> Result<()> {
-        let lang = code_block.language_str(source).unwrap_or("plaintext");
+        let language = code_block.language(source);
+        let language = language
+            .as_option()
+            .map_or(Cow::Borrowed("plaintext"), |v| v.str(source));
+        let lang: &str = &language;
         let mut code = String::new();
         for line in code_block.value().iter(source) {
             code.push_str(&line);
@@ -279,7 +279,7 @@ impl<W: TextWrite> CodeBlockAttributeHtmlRenderer<W> {
                 }
             }
             // Fallback: write the raw line (HTML-escaped by the writer).
-            self.writer.raw_write(w, line)?;
+            html::write_text(w, line)?;
             if start_line.is_some() {
                 w.write_str("</span>")?;
             }
@@ -299,19 +299,20 @@ impl<W: TextWrite> CodeBlockAttributeHtmlRenderer<W> {
         node_ref: NodeRef,
         code_block: &CodeBlock,
     ) -> Result<()> {
-        self.writer.write_safe_str(w, "<pre")?;
+        w.write_str("<pre")?;
         html::render_attributes(w, source, arena[node_ref].attributes(), None)?;
-        self.writer.write_safe_str(w, "><code")?;
-        if let Some(lang) = code_block.language_str(source) {
-            self.writer.write_safe_str(w, " class=\"language-")?;
-            self.writer.write(w, lang)?;
-            self.writer.write_safe_str(w, "\"")?;
+        w.write_str("><code")?;
+        let lang = code_block.language(source);
+        if let Some(lang) = lang.as_option() {
+            w.write_str(" class=\"language-")?;
+            lang.write_to(&mut html::TextWriter::new(w), source)?;
+            w.write_str("\"")?;
         }
-        self.writer.write_safe_str(w, ">")?;
+        w.write_str(">")?;
         for line in code_block.value().iter(source) {
-            self.writer.raw_write(w, &line)?;
+            html::write_text(w, &line)?;
         }
-        self.writer.write_safe_str(w, "</code></pre>\n")?;
+        w.write_str("</code></pre>\n")?;
         Ok(())
     }
 }
@@ -367,7 +368,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rushdown::text::BasicReader;
 
     fn parse_with_code_block_attrs(input: &str) -> (Arena, NodeRef) {
         let parser = parser::Parser::with_extensions(
@@ -378,8 +378,7 @@ mod tests {
             },
             code_block_attribute_parser_extension(),
         );
-        let mut reader = BasicReader::new(input);
-        parser.parse(&mut reader)
+        parser.parse(input, rushdown::parser::ParseOptions::default())
     }
 
     fn first_code_block(arena: &Arena, doc_ref: NodeRef) -> Option<NodeRef> {
@@ -405,7 +404,7 @@ mod tests {
         let cb = first_code_block(&arena, doc_ref).expect("code block not found");
 
         let code = as_kind_data!(arena[cb], CodeBlock);
-        assert_eq!(code.language_str(input), Some("rust"));
+        assert_eq!(code.language(input).str(input), "rust");
 
         let attrs = arena[cb].attributes();
         assert!(attrs.get("id").is_some_and(|v| v.str(input) == "example"));
@@ -442,12 +441,12 @@ mod tests {
     }
 
     #[test]
-    fn language_str_unaffected() {
+    fn language_unaffected() {
         let input = "```javascript {#my-code}\nconsole.log('hi');\n```\n";
         let (arena, doc_ref) = parse_with_code_block_attrs(input);
         let cb = first_code_block(&arena, doc_ref).expect("code block not found");
         let code = as_kind_data!(arena[cb], CodeBlock);
-        assert_eq!(code.language_str(input), Some("javascript"));
+        assert_eq!(code.language(input).str(input), "javascript");
     }
 
     #[test]
@@ -459,15 +458,15 @@ mod tests {
         let attrs = arena[cb].attributes();
         assert!(attrs.get("id").is_some_and(|v| v.str(input) == "my-id"));
 
-        // language_str() returns the first whitespace-delimited token from the
+        // language() returns the first whitespace-delimited token from the
         // raw info string.  When the info string is just `{#my-id}` (no
-        // language token), language_str() returns `Some("{#my-id}")` because
+        // language token), language() returns `"{#my-id}"` because
         // the underlying parser does not strip attribute blocks from the info
         // string.  The attribute block itself is parsed separately by the
         // transformer.  Renderers will not recognise `{#my-id}` as a valid
         // language and will fall back to plain text — this is acceptable.
         let code = as_kind_data!(arena[cb], CodeBlock);
-        assert_eq!(code.language_str(input), Some("{#my-id}"));
+        assert_eq!(code.language(input).str(input), "{#my-id}");
     }
 
     #[test]
@@ -491,7 +490,13 @@ mod tests {
         );
         let mut output = String::new();
         renderer
-            .render(&mut output, input, &arena, doc_ref)
+            .render(
+                &mut output,
+                input,
+                &arena,
+                doc_ref,
+                rushdown::renderer::RenderOptions::default(),
+            )
             .unwrap();
 
         assert!(
@@ -519,7 +524,13 @@ mod tests {
         );
         let mut output = String::new();
         renderer
-            .render(&mut output, input, &arena, doc_ref)
+            .render(
+                &mut output,
+                input,
+                &arena,
+                doc_ref,
+                rushdown::renderer::RenderOptions::default(),
+            )
             .unwrap();
 
         assert!(
@@ -543,7 +554,13 @@ mod tests {
         );
         let mut output = String::new();
         renderer
-            .render(&mut output, input, &arena, doc_ref)
+            .render(
+                &mut output,
+                input,
+                &arena,
+                doc_ref,
+                rushdown::renderer::RenderOptions::default(),
+            )
             .unwrap();
 
         assert!(
@@ -571,7 +588,13 @@ mod tests {
         );
         let mut output = String::new();
         renderer
-            .render(&mut output, input, &arena, doc_ref)
+            .render(
+                &mut output,
+                input,
+                &arena,
+                doc_ref,
+                rushdown::renderer::RenderOptions::default(),
+            )
             .unwrap();
 
         assert!(

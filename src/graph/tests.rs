@@ -2,7 +2,6 @@ use std::fs;
 use std::path::Path;
 
 use rushdown::ast::KindData;
-use rushdown::text::BasicReader;
 use rushdown_fenced_div::FencedDiv;
 use tempfile::TempDir;
 
@@ -97,6 +96,47 @@ fn rejects_non_top_level_include_blocks() {
     )
     .unwrap_err();
     assert!(error.to_string().contains("top-level document blocks"));
+}
+
+#[test]
+fn root_front_matter_is_not_in_the_ast() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    write(&root.join("doc/index.md"), "---\ntitle: Root\n---\n# Root\n");
+
+    let prepared = prepare_document(
+        &DebugDumper::new(false),
+        root,
+        &root.join("doc/index.md"),
+        None,
+        BrokenLinkMode::Error,
+    )
+    .unwrap();
+    let doc = prepared.graph().root_document();
+    let first_child = doc.arena[doc.doc_ref].children(&doc.arena).next().unwrap();
+    assert!(matches!(
+        doc.arena[first_child].kind_data(),
+        KindData::Heading(_)
+    ));
+}
+
+#[test]
+fn rejects_root_front_matter_that_is_not_a_mapping() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    write(&root.join("doc/index.md"), "---\n- a\n- b\n---\n# Root\n");
+
+    let error = prepare_document(
+        &DebugDumper::new(false),
+        root,
+        &root.join("doc/index.md"),
+        None,
+        BrokenLinkMode::Error,
+    )
+    .unwrap_err();
+    let message = format!("{error:#}");
+    assert!(message.contains("invalid YAML front matter"), "{message}");
+    assert!(message.contains("index.md"), "{message}");
 }
 
 #[test]
@@ -474,8 +514,7 @@ fn renders_typst_definition_lists() {
 fn parser_recognizes_include_block() {
     let source = ":::include\n# [Part](part.md)\n:::\n";
     let parser = markdown_parser();
-    let mut reader = BasicReader::new(source);
-    let (arena, doc_ref) = parser.parse(&mut reader);
+    let (arena, doc_ref) = parser.parse(source, rushdown::parser::ParseOptions::default());
     let children = arena[doc_ref].children(&arena).collect::<Vec<_>>();
     assert_eq!(children.len(), 1);
     assert!(rushdown::matches_extension_kind!(
@@ -651,7 +690,7 @@ fn collect_link_targets(graph: &DocumentGraph, doc_id: usize) -> Vec<(String, St
         if let KindData::Link(link) = doc.arena[node_ref].kind_data() {
             if let Some(target) = graph.link_target(doc_id, node_ref) {
                 result.push((
-                    link.destination_str(&doc.source).to_string(),
+                    link.destination().str(&doc.source).to_string(),
                     target.to_string(),
                 ));
             }

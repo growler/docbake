@@ -39,6 +39,8 @@ use rushdown::Result;
 #[derive(Debug)]
 pub struct BracketedSpan;
 
+impl rushdown::ast::InlineChars for BracketedSpan {}
+
 impl NodeKind for BracketedSpan {
     fn typ(&self) -> NodeType {
         NodeType::Inline
@@ -108,7 +110,7 @@ impl InlineParser for BracketedSpanParser {
             return None;
         }
         let source = reader.source();
-        let last_str = as_kind_data!(arena[last], Text).str(source);
+        let last_str = as_kind_data!(arena[last], Text).value().str(source);
         if !last_str.ends_with(']') {
             return None;
         }
@@ -181,7 +183,10 @@ impl InlineParser for BracketedSpanParser {
 
         // Return a zero-width text node. The inline parse loop will append it at the end
         // of the block. We clean it up in close_block.
-        let placeholder = arena.new_node(Text::new(text::Index::new(0, 0)));
+        let placeholder = arena.new_node(Text::new(text::Value::from_index(
+            text::Index::new(0, 0),
+            text::Decoder::Default,
+        )));
         track_placeholder(ctx, self.cleanup_list, placeholder);
         Some(placeholder)
     }
@@ -234,7 +239,7 @@ fn find_matching_open_bracket(
     while let Some(node) = current {
         if matches_kind!(arena[node], Text) {
             let text = as_kind_data!(arena[node], Text);
-            let s = text.str(source);
+            let s = text.value().str(source);
 
             // For last_node, skip the trailing `]` we already accounted for.
             let scan_bytes = if node == last_node {
@@ -279,7 +284,7 @@ fn create_after_bracket_node(
     source: &str,
 ) -> Option<NodeRef> {
     let text = as_kind_data!(arena[open_node], Text);
-    let s = text.str(source);
+    let s = text.value().str(source);
     let after_bracket = &s[open_byte_offset + 1..];
     if after_bracket.is_empty() {
         return None;
@@ -288,7 +293,10 @@ fn create_after_bracket_node(
     let idx = text.index().cloned();
     if let Some(idx) = idx {
         let after_start = idx.start() + open_byte_offset + 1;
-        Some(arena.new_node(Text::new(text::Index::new(after_start, idx.stop()))))
+        Some(arena.new_node(Text::new(text::Value::from_index(
+            text::Index::new(after_start, idx.stop()),
+            text::Decoder::Default,
+        ))))
     } else {
         Some(arena.new_node(Text::new(after_bracket.to_string())))
     }
@@ -298,10 +306,12 @@ fn create_after_bracket_node(
 fn truncate_text_at(arena: &mut Arena, node: NodeRef, byte_offset: usize, source: &str) {
     let text = as_kind_data!(arena[node], Text);
     if let Some(idx) = text.index().cloned() {
-        as_kind_data_mut!(arena[node], Text)
-            .set(text::Index::new(idx.start(), idx.start() + byte_offset));
+        as_kind_data_mut!(arena[node], Text).set(text::Value::from_index(
+            text::Index::new(idx.start(), idx.start() + byte_offset),
+            text::Decoder::Default,
+        ));
     } else {
-        let s = text.str(source).to_string();
+        let s = text.value().str(source).to_string();
         as_kind_data_mut!(arena[node], Text).set(s[..byte_offset].to_string());
     }
 }
@@ -311,9 +321,12 @@ fn trim_text_end(arena: &mut Arena, node: NodeRef, source: &str, n: usize) {
     let text = as_kind_data!(arena[node], Text);
     if let Some(idx) = text.index().cloned() {
         let new_stop = idx.stop().saturating_sub(n);
-        as_kind_data_mut!(arena[node], Text).set(text::Index::new(idx.start(), new_stop));
+        as_kind_data_mut!(arena[node], Text).set(text::Value::from_index(
+            text::Index::new(idx.start(), new_stop),
+            text::Decoder::Default,
+        ));
     } else {
-        let s = text.str(source).to_string();
+        let s = text.value().str(source).to_string();
         as_kind_data_mut!(arena[node], Text).set(s[..s.len().saturating_sub(n)].to_string());
     }
 }
@@ -324,7 +337,7 @@ fn is_text_empty(arena: &Arena, node: NodeRef, source: &str) -> bool {
     if let Some(idx) = text.index() {
         idx.is_empty()
     } else {
-        text.str(source).is_empty()
+        text.value().str(source).is_empty()
     }
 }
 
@@ -369,14 +382,12 @@ impl RendererOptions for BracketedSpanHtmlRendererOptions {}
 /// Renders as `<span ...attributes>children</span>`.
 struct BracketedSpanHtmlRenderer<W: TextWrite> {
     _phantom: core::marker::PhantomData<W>,
-    writer: html::Writer,
 }
 
 impl<W: TextWrite> BracketedSpanHtmlRenderer<W> {
-    fn with_options(html_opts: html::Options, _options: BracketedSpanHtmlRendererOptions) -> Self {
+    fn with_options(_options: BracketedSpanHtmlRendererOptions) -> Self {
         Self {
             _phantom: core::marker::PhantomData,
-            writer: html::Writer::with_options(html_opts),
         }
     }
 }
@@ -392,11 +403,11 @@ impl<W: TextWrite> RenderNode<W> for BracketedSpanHtmlRenderer<W> {
         _ctx: &mut renderer::Context,
     ) -> Result<WalkStatus> {
         if entering {
-            self.writer.write_safe_str(w, "<span")?;
+            w.write_str("<span")?;
             html::render_attributes(w, source, arena[node_ref].attributes(), None)?;
-            self.writer.write_safe_str(w, ">")?;
+            w.write_str(">")?;
         } else {
-            self.writer.write_safe_str(w, "</span>")?;
+            w.write_str("</span>")?;
         }
         Ok(WalkStatus::Continue)
     }
@@ -434,7 +445,6 @@ mod tests {
     use rushdown::ast::KindData;
     use rushdown::parser;
     use rushdown::renderer::html;
-    use rushdown::text::BasicReader;
 
     /// Build a parser with GFM + bracketed span extension (and link-attribute,
     /// since it also triggers on `{` and must coexist).
@@ -453,15 +463,20 @@ mod tests {
     /// Parse markdown and render to HTML.
     fn render_html(source: &str) -> String {
         let parser = test_parser();
-        let mut reader = BasicReader::new(source);
-        let (arena, doc_ref) = parser.parse(&mut reader);
+        let (arena, doc_ref) = parser.parse(source, rushdown::parser::ParseOptions::default());
         let renderer = html::Renderer::with_extensions(
             html::Options::default(),
             bracketed_span_html_renderer_extension(),
         );
         let mut output = String::new();
         renderer
-            .render(&mut output, source, &arena, doc_ref)
+            .render(
+                &mut output,
+                source,
+                &arena,
+                doc_ref,
+                rushdown::renderer::RenderOptions::default(),
+            )
             .unwrap();
         output
     }
@@ -470,8 +485,7 @@ mod tests {
     fn basic_class() {
         let source = "[text]{.warning}\n";
         let parser = test_parser();
-        let mut reader = BasicReader::new(source);
-        let (arena, doc_ref) = parser.parse(&mut reader);
+        let (arena, doc_ref) = parser.parse(source, rushdown::parser::ParseOptions::default());
 
         // Check AST: paragraph -> BracketedSpan
         let para = arena[doc_ref].children(&arena).next().unwrap();

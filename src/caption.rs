@@ -94,6 +94,8 @@ impl Caption {
     }
 }
 
+impl rushdown::ast::InlineChars for Caption {}
+
 impl NodeKind for Caption {
     fn typ(&self) -> NodeType {
         NodeType::ContainerBlock
@@ -126,6 +128,8 @@ impl From<Caption> for KindData {
 /// paragraph, with the `Table:`/`Figure:`/`:` prefix stripped).
 #[derive(Debug)]
 pub struct CaptionText;
+
+impl rushdown::ast::InlineChars for CaptionText {}
 
 impl NodeKind for CaptionText {
     fn typ(&self) -> NodeType {
@@ -290,8 +294,8 @@ impl AstTransformer for CaptionAstTransformer {
                 let KindData::Text(text_val) = arena[first_child].kind_data() else {
                     return Ok(WalkStatus::Continue);
                 };
-                let text_str = text_val.str(source);
-                let Some((kind, prefix_len)) = detect_caption_prefix(text_str) else {
+                let text_str = text_val.value().str(source);
+                let Some((kind, prefix_len)) = detect_caption_prefix(&text_str) else {
                     return Ok(WalkStatus::Continue);
                 };
 
@@ -352,7 +356,7 @@ impl AstTransformer for CaptionAstTransformer {
             if let Some(fc) = first_child {
                 if matches!(arena[fc].kind_data(), KindData::Text(_)) {
                     let text_val = as_kind_data!(arena, fc, Text);
-                    let full_str = text_val.str(source);
+                    let full_str = text_val.value().str(source);
                     if prefix_len >= full_str.len() {
                         // The entire text node is consumed by the prefix — delete it.
                         // The next text node can start with the space after the
@@ -369,8 +373,12 @@ impl AstTransformer for CaptionAstTransformer {
                         // Check if we can use index-based trimming.
                         if let Some(idx) = text_val.index().cloned() {
                             let new_start = idx.start() + prefix_len;
-                            rushdown::as_kind_data_mut!(arena, fc, Text)
-                                .set(text::Index::new(new_start, idx.stop()));
+                            rushdown::as_kind_data_mut!(arena, fc, Text).set(
+                                text::Value::from_index(
+                                    text::Index::new(new_start, idx.stop()),
+                                    text::Decoder::Default,
+                                ),
+                            );
                         } else {
                             rushdown::as_kind_data_mut!(arena, fc, Text).set(remaining_owned);
                         }
@@ -413,14 +421,16 @@ fn trim_text_start(arena: &mut Arena, node: NodeRef, source: &str) {
     let KindData::Text(text_val) = arena[node].kind_data() else {
         return;
     };
-    let full_str = text_val.str(source);
+    let full_str = text_val.value().str(source);
     let skip = full_str.len() - full_str.trim_start().len();
     if skip == 0 {
         return;
     }
     if let Some(idx) = text_val.index().cloned() {
-        rushdown::as_kind_data_mut!(arena, node, Text)
-            .set(text::Index::new(idx.start() + skip, idx.stop()));
+        rushdown::as_kind_data_mut!(arena, node, Text).set(text::Value::from_index(
+            text::Index::new(idx.start() + skip, idx.stop()),
+            text::Decoder::Default,
+        ));
     } else {
         let remaining_owned = full_str[skip..].to_string();
         rushdown::as_kind_data_mut!(arena, node, Text).set(remaining_owned);
@@ -468,7 +478,10 @@ fn extract_trailing_attributes(
     let mut node_ranges: Vec<(NodeRef, usize, usize)> = Vec::new(); // (node, start, end)
     for &n in &trailing_text_nodes {
         let start = combined.len();
-        let s = as_kind_data!(arena, n, Text).str(source).to_string();
+        let s = as_kind_data!(arena, n, Text)
+            .value()
+            .str(source)
+            .to_string();
         combined.push_str(&s);
         let end = combined.len();
         node_ranges.push((n, start, end));
@@ -535,10 +548,12 @@ fn extract_trailing_attributes(
             let text_val = as_kind_data!(arena, n, Text);
             if let Some(idx) = text_val.index().cloned() {
                 let new_stop = idx.start() + keep_len;
-                rushdown::as_kind_data_mut!(arena, n, Text)
-                    .set(text::Index::new(idx.start(), new_stop));
+                rushdown::as_kind_data_mut!(arena, n, Text).set(text::Value::from_index(
+                    text::Index::new(idx.start(), new_stop),
+                    text::Decoder::Default,
+                ));
             } else {
-                let s = text_val.str(source).to_string();
+                let s = text_val.value().str(source).to_string();
                 rushdown::as_kind_data_mut!(arena, n, Text).set(s[..keep_len].to_string());
             }
         }
@@ -565,14 +580,12 @@ pub fn caption_parser_extension() -> impl ParserExtension {
 
 struct CaptionHtmlRenderer<W: TextWrite> {
     _phantom: std::marker::PhantomData<W>,
-    writer: html::Writer,
 }
 
 impl<W: TextWrite> CaptionHtmlRenderer<W> {
-    fn with_options(html_opts: html::Options) -> Self {
+    fn new() -> Self {
         Self {
             _phantom: std::marker::PhantomData,
-            writer: html::Writer::with_options(html_opts),
         }
     }
 }
@@ -622,9 +635,9 @@ impl<W: TextWrite> RenderNode<W> for CaptionHtmlRenderer<W> {
                 tag.push('"');
             }
             tag.push_str(">\n");
-            self.writer.write_html(w, &tag)?;
+            html::write_html(w, &tag)?;
         } else {
-            self.writer.write_safe_str(w, "</figure>\n")?;
+            w.write_str("</figure>\n")?;
         }
         Ok(WalkStatus::Continue)
     }
@@ -641,14 +654,12 @@ where
 
 struct CaptionTextHtmlRenderer<W: TextWrite> {
     _phantom: std::marker::PhantomData<W>,
-    writer: html::Writer,
 }
 
 impl<W: TextWrite> CaptionTextHtmlRenderer<W> {
-    fn with_options(html_opts: html::Options) -> Self {
+    fn new() -> Self {
         Self {
             _phantom: std::marker::PhantomData,
-            writer: html::Writer::with_options(html_opts),
         }
     }
 }
@@ -664,9 +675,9 @@ impl<W: TextWrite> RenderNode<W> for CaptionTextHtmlRenderer<W> {
         _ctx: &mut renderer::Context,
     ) -> rushdown::Result<WalkStatus> {
         if entering {
-            self.writer.write_safe_str(w, "<figcaption>")?;
+            w.write_str("<figcaption>")?;
         } else {
-            self.writer.write_safe_str(w, "</figcaption>\n")?;
+            w.write_str("</figcaption>\n")?;
         }
         Ok(WalkStatus::Continue)
     }
@@ -689,11 +700,11 @@ where
 {
     RendererExtensionFn::new(move |r: &mut Renderer<'cb, W>| {
         r.add_node_renderer(
-            CaptionHtmlRenderer::with_options,
+            CaptionHtmlRenderer::new,
             rushdown::renderer::NoRendererOptions,
         );
         r.add_node_renderer(
-            CaptionTextHtmlRenderer::with_options,
+            CaptionTextHtmlRenderer::new,
             rushdown::renderer::NoRendererOptions,
         );
     })
@@ -726,8 +737,7 @@ mod tests {
 
     fn parse(source: &str) -> (Arena, NodeRef) {
         let parser = test_parser();
-        let mut reader = BasicReader::new(source);
-        parser.parse(&mut reader)
+        parser.parse(source, rushdown::parser::ParseOptions::default())
     }
 
     fn render_html(source: &str) -> String {
@@ -742,7 +752,13 @@ mod tests {
         );
         let mut output = String::new();
         renderer
-            .render(&mut output, source, &arena, doc_ref)
+            .render(
+                &mut output,
+                source,
+                &arena,
+                doc_ref,
+                rushdown::renderer::RenderOptions::default(),
+            )
             .unwrap();
         output
     }
@@ -791,7 +807,12 @@ mod tests {
         assert!(matches_extension_kind!(&arena, caption_text, CaptionText));
         let texts: Vec<_> = arena[caption_text]
             .children(&arena)
-            .map(|c| as_kind_data!(arena, c, Text).str(source).to_string())
+            .map(|c| {
+                as_kind_data!(arena, c, Text)
+                    .value()
+                    .str(source)
+                    .to_string()
+            })
             .collect();
         assert_eq!(texts, ["Values"]);
     }

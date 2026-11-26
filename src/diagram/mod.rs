@@ -19,7 +19,6 @@
 //! builds if the source content has not changed.
 
 use std::any::TypeId;
-use std::cell::RefCell;
 use std::fmt;
 use std::fmt::Write;
 use std::fs;
@@ -39,15 +38,13 @@ use rushdown::ast::walk;
 use rushdown::ast::{
     pp_indent, Arena, KindData, NodeKind, NodeRef, NodeType, PrettyPrint, WalkStatus,
 };
-use rushdown::context::{BoolValue, ContextKey, ContextKeyRegistry};
 use rushdown::matches_kind;
 use rushdown::parser::{
     AnyAstTransformer, AstTransformer, Parser, ParserExtension, ParserExtensionFn, ParserOptions,
 };
 use rushdown::renderer::html::{Renderer, RendererExtension, RendererExtensionFn};
 use rushdown::renderer::{
-    self, BoxRenderNode, NodeRenderer, NodeRendererRegistry, PostRender, Render, RenderNode,
-    RendererOptions, TextWrite,
+    self, BoxRenderNode, NodeRenderer, NodeRendererRegistry, RenderNode, RendererOptions, TextWrite,
 };
 use rushdown::text::{self, Reader as _};
 use rushdown::Result;
@@ -60,6 +57,7 @@ mod theme;
 mod transform;
 mod types;
 
+pub(crate) use html::write_mermaid_script;
 #[allow(unused_imports)]
 pub use html::{
     diagram_html_renderer_extension, DiagramHtmlRendererOptions, DiagramThemes, MermaidHtmlMode,

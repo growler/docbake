@@ -272,7 +272,7 @@ impl<'a> DocxRenderer<'a> {
         let path = &context.graph.document(context.doc_id).path;
         let mut size =
             self.size_attributes(arena, source, path, node_ref, context.max_width, || {
-                format!("image `{}`", image.destination_str(source))
+                format!("image `{}`", image.destination().str(source))
             })?;
         if size == (None, None) && crate::html::is_inline_image(arena, node_ref) {
             size.1 = Some(self.em);

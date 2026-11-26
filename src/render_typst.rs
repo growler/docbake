@@ -168,8 +168,13 @@ impl TypstRenderer {
                 }
                 out.push_str("#code(\"");
                 out.push_str(&escape_typst_string(&value));
-                if let Some(lang) = code.language_str(source) {
-                    write!(out, "\", lang: \"{}\"", escape_typst_string(lang))?;
+                let lang = code.language(source);
+                if let Some(lang) = lang.as_option() {
+                    write!(
+                        out,
+                        "\", lang: \"{}\"",
+                        escape_typst_string(&lang.str(source))
+                    )?;
                 } else {
                     out.push('"');
                 }
@@ -554,7 +559,7 @@ impl TypstRenderer {
         node_ref: NodeRef,
     ) -> Result<()> {
         let arena = context.arena;
-        let tight = as_extension_data!(arena, node_ref, DefinitionList).is_tight();
+        let tight = crate::definition_list_is_tight(arena, node_ref);
         write!(out, "#terms(tight: {tight}")?;
 
         let children = arena[node_ref].children(arena).collect::<Vec<_>>();
@@ -846,7 +851,7 @@ impl TypstRenderer {
         let logger = context.logger;
         match arena[node_ref].kind_data() {
             KindData::Text(text) => {
-                out.push_str(&escape_typst_markup(text.str(source)));
+                out.push_str(&escape_typst_markup(&text.value().str(source)));
                 if text.has_qualifiers(TextQualifier::HARD_LINE_BREAK) {
                     out.push_str(" \\\n");
                 } else if text.has_qualifiers(TextQualifier::SOFT_LINE_BREAK) {
@@ -857,7 +862,7 @@ impl TypstRenderer {
                 write!(
                     out,
                     "#inline-code(\"{}\")",
-                    escape_typst_string(&cs.str(source))
+                    escape_typst_string(&cs.value().value(source))
                 )?;
             }
             KindData::Emphasis(_) => self.wrap_inline(out, "emph", context, node_ref)?,
@@ -870,7 +875,7 @@ impl TypstRenderer {
                     .ok_or_else(|| {
                         anyhow!(
                             "missing resolved link target for `{}` in {}",
-                            link.destination_str(source),
+                            link.destination().str(source),
                             prepared.graph().document(scope.doc_id).path.display()
                         )
                     })?
@@ -890,7 +895,7 @@ impl TypstRenderer {
                     }
                     LinkKind::Auto(auto) => {
                         write!(out, "#link(\"{}\")[", escape_typst_string(&dest))?;
-                        out.push_str(&escape_typst_markup(auto.text_str(source)));
+                        out.push_str(&escape_typst_markup(&auto.text().str(source)));
                         out.push(']');
                         return Ok(());
                     }
@@ -908,7 +913,7 @@ impl TypstRenderer {
                     .ok_or_else(|| {
                         anyhow!(
                             "missing resolved image target for `{}` in {}",
-                            image.destination_str(source),
+                            image.destination().str(source),
                             prepared.graph().document(scope.doc_id).path.display()
                         )
                     })?

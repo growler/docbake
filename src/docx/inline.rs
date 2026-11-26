@@ -17,8 +17,13 @@ impl<'a> DocxRenderer<'a> {
         let source = context.source;
         let runs = match arena[node_ref].kind_data() {
             KindData::Text(text) => {
-                let content = text.str(source);
-                let mut runs = vec![run_child(Run::new().add_text(content))];
+                let content = text.value().str(source);
+                // A link with no text has one empty text node. It gives no
+                // run, so that the link stays without text.
+                let mut runs = Vec::new();
+                if !content.is_empty() {
+                    runs.push(run_child(Run::new().add_text(content)));
+                }
                 if text.has_qualifiers(TextQualifier::HARD_LINE_BREAK) {
                     runs.push(run_child(Run::new().add_break(BreakType::TextWrapping)));
                 } else if text.has_qualifiers(TextQualifier::SOFT_LINE_BREAK) {
@@ -27,7 +32,7 @@ impl<'a> DocxRenderer<'a> {
                 runs
             }
             KindData::CodeSpan(cs) => {
-                let content = cs.str(source);
+                let content = cs.value().value(source);
                 vec![run_child(
                     Run::new()
                         .add_text(content.into_owned())
@@ -129,7 +134,7 @@ impl<'a> DocxRenderer<'a> {
         for child in arena[node_ref].children(arena) {
             match arena[child].kind_data() {
                 KindData::Text(t) => {
-                    text.push_str(t.str(source));
+                    text.push_str(&t.value().str(source));
                     if t.has_qualifiers(TextQualifier::SOFT_LINE_BREAK) {
                         text.push(' ');
                     } else if t.has_qualifiers(TextQualifier::HARD_LINE_BREAK) {
@@ -137,7 +142,7 @@ impl<'a> DocxRenderer<'a> {
                     }
                 }
                 KindData::CodeSpan(cs) => {
-                    text.push_str(&cs.str(source));
+                    text.push_str(&cs.value().value(source));
                 }
                 KindData::Extension(_)
                     if rushdown::matches_extension_kind!(arena, child, FootnoteReference) =>
@@ -174,7 +179,7 @@ impl<'a> DocxRenderer<'a> {
         for child in arena[node_ref].children(arena) {
             match arena[child].kind_data() {
                 KindData::Text(text) => {
-                    buf.push_str(text.str(source));
+                    buf.push_str(&text.value().str(source));
                     if text.has_qualifiers(TextQualifier::SOFT_LINE_BREAK) {
                         buf.push(' ');
                     } else if text.has_qualifiers(TextQualifier::HARD_LINE_BREAK) {
@@ -182,7 +187,7 @@ impl<'a> DocxRenderer<'a> {
                     }
                 }
                 KindData::CodeSpan(cs) => {
-                    buf.push_str(&cs.str(source));
+                    buf.push_str(&cs.value().value(source));
                 }
                 _ => {
                     buf.push_str(&Self::collect_inline_text(arena, source, child));

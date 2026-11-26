@@ -193,15 +193,13 @@ pub(crate) fn node_is_visible(
 #[cfg(test)]
 mod tests {
     use rushdown::ast::{Arena, NodeRef, WalkStatus};
-    use rushdown::text::BasicReader;
     use serde_json::{Map as JsonMap, Value as JsonValue};
 
     use super::{normalize_variants, parse_fence_conditions, EffectiveFormat, RenderProfile};
 
     fn parse(source: &str) -> (Arena, NodeRef) {
         let parser = crate::build::markdown_parser();
-        let mut reader = BasicReader::new(source);
-        parser.parse(&mut reader)
+        parser.parse(source, rushdown::parser::ParseOptions::default())
     }
 
     fn first_fenced_div(arena: &Arena, root: NodeRef) -> NodeRef {

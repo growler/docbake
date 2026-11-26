@@ -1,9 +1,11 @@
 use std::any::TypeId;
+use std::cell::Cell;
+use std::rc::Rc;
 
 use rushdown::as_extension_data;
 use rushdown::as_kind_data;
-use rushdown::ast::{self, Arena, Document, Heading, Image, KindData, Link, NodeRef, WalkStatus};
-use rushdown::context::{ContextKey, NodeRefValue, UsizeValue};
+use rushdown::ast::{self, Arena, Heading, Image, KindData, Link, NodeRef, WalkStatus};
+use rushdown::context::{ContextKey, NodeRefValue};
 use rushdown::renderer;
 use rushdown::renderer::html;
 use rushdown::renderer::{
@@ -50,10 +52,10 @@ pub(crate) fn heading_text_html(arena: &Arena, node_ref: NodeRef, source: &str) 
             return Ok(WalkStatus::Continue);
         }
         match arena[child_ref].kind_data() {
-            KindData::Text(value) => html.push_str(&html_escape(value.str(source))),
+            KindData::Text(value) => html.push_str(&html_escape(&value.value().str(source))),
             KindData::CodeSpan(cs) => {
                 html.push_str("<code>");
-                html.push_str(&html_escape(&cs.str(source)));
+                html.push_str(&html_escape(&cs.value().value(source)));
                 html.push_str("</code>");
             }
             _ => {}
@@ -164,7 +166,6 @@ pub(crate) struct ImageRenderData<'a> {
 
 pub(crate) fn render_link_open_tag<W: TextWrite>(
     w: &mut W,
-    writer: &html::Writer,
     format_options: &html::Options,
     data: &LinkRenderData<'_>,
 ) -> rushdown::Result<()> {
@@ -175,24 +176,23 @@ pub(crate) fn render_link_open_tag<W: TextWrite>(
             ..EscapeUrlOptions::for_url()
         },
     );
-    writer.write_safe_str(w, "<a href=\"")?;
+    w.write_str("<a href=\"")?;
     if format_options.allows_unsafe || !html::is_dangerous_url(&dest) {
         dest = escape_html(dest);
         w.write_str(&String::from_utf8_lossy(&dest))?;
     }
-    writer.write_safe_str(w, "\"")?;
-    if let Some(title) = data.link.title() {
-        writer.write_safe_str(w, " title=\"")?;
-        writer.write(w, &title.str(data.source))?;
-        writer.write_safe_str(w, "\"")?;
+    w.write_str("\"")?;
+    if let Some(title) = data.link.title().as_option() {
+        w.write_str(" title=\"")?;
+        title.write_to(&mut html::TextWriter::new(w), data.source)?;
+        w.write_str("\"")?;
     }
     html::render_attributes(w, data.source, data.arena[data.node_ref].attributes(), None)?;
-    writer.write_safe_str(w, ">")
+    w.write_str(">")
 }
 
 pub(crate) fn render_image_tag<W: TextWrite>(
     w: &mut W,
-    writer: &html::Writer,
     format_options: &html::Options,
     data: &ImageRenderData<'_>,
 ) -> rushdown::Result<()> {
@@ -203,18 +203,18 @@ pub(crate) fn render_image_tag<W: TextWrite>(
             ..EscapeUrlOptions::for_url()
         },
     );
-    writer.write_safe_str(w, "<img src=\"")?;
+    w.write_str("<img src=\"")?;
     if format_options.allows_unsafe || !html::is_dangerous_url(&dest) {
         dest = escape_html(dest);
         w.write_str(&String::from_utf8_lossy(&dest))?;
     }
-    writer.write_safe_str(w, "\" alt=\"")?;
-    render_image_alt_text(w, writer, data.source, data.arena, data.node_ref)?;
-    writer.write_safe_str(w, "\"")?;
-    if let Some(title) = data.image.title() {
-        writer.write_safe_str(w, " title=\"")?;
-        writer.write(w, &title.str(data.source))?;
-        writer.write_safe_str(w, "\"")?;
+    w.write_str("\" alt=\"")?;
+    render_image_alt_text(w, data.source, data.arena, data.node_ref)?;
+    w.write_str("\"")?;
+    if let Some(title) = data.image.title().as_option() {
+        w.write_str(" title=\"")?;
+        title.write_to(&mut html::TextWriter::new(w), data.source)?;
+        w.write_str("\"")?;
     }
     render_image_attributes(w, data.source, data.arena, data.node_ref, format_options)
 }
@@ -231,39 +231,47 @@ pub(crate) fn render_footnote_reference<W: TextWrite>(
 
 fn render_image_alt_text<W: TextWrite>(
     w: &mut W,
-    writer: &html::Writer,
     source: &str,
     arena: &Arena,
     node_ref: NodeRef,
 ) -> rushdown::Result<()> {
     for child in arena[node_ref].children(arena) {
         match arena[child].kind_data() {
-            KindData::Text(text) => writer.write(w, text.str(source))?,
-            KindData::CodeSpan(cs) => writer.write(w, &cs.str(source))?,
-            _ => render_image_alt_text(w, writer, source, arena, child)?,
+            KindData::Text(text) => text
+                .value()
+                .write_to(&mut html::TextWriter::new(w), source)?,
+            KindData::CodeSpan(cs) => cs.value().write_to(&mut html::TextWriter::new(w), source)?,
+            _ => render_image_alt_text(w, source, arena, child)?,
         }
     }
     Ok(())
 }
 
+/// Values that a page build sets before each `render` call and that node
+/// renderers read or set. One value is shared by all renderers of one page.
+#[derive(Debug, Default)]
+pub(crate) struct RenderState {
+    /// Graph ID of the document that owns the nodes in the render call.
+    pub current_doc_id: Cell<usize>,
+    /// Number of levels to add to each heading level.
+    pub heading_shift: Cell<usize>,
+    /// Set by the diagram renderer when it writes a client-side Mermaid
+    /// diagram.
+    pub has_mermaid_diagram: Cell<bool>,
+}
+
 pub(crate) struct SharedHeadingHtmlRenderer<W: TextWrite> {
     _phantom: std::marker::PhantomData<W>,
-    writer: html::Writer,
     skip_heading_key: ContextKey<NodeRefValue>,
-    heading_shift_key: Option<ContextKey<UsizeValue>>,
+    state: Rc<RenderState>,
 }
 
 impl<W: TextWrite> SharedHeadingHtmlRenderer<W> {
-    pub(crate) fn new(
-        options: html::Options,
-        skip_heading_key: ContextKey<NodeRefValue>,
-        heading_shift_key: Option<ContextKey<UsizeValue>>,
-    ) -> Self {
+    pub(crate) fn new(skip_heading_key: ContextKey<NodeRefValue>, state: Rc<RenderState>) -> Self {
         Self {
             _phantom: std::marker::PhantomData,
-            writer: html::Writer::with_options(options),
             skip_heading_key,
-            heading_shift_key,
+            state,
         }
     }
 }
@@ -287,15 +295,12 @@ impl<W: TextWrite> RenderNode<W> for SharedHeadingHtmlRenderer<W> {
                 return Ok(WalkStatus::SkipChildren);
             }
         }
-        let shift = self
-            .heading_shift_key
-            .and_then(|key| ctx.get(key).copied())
-            .unwrap_or(0);
+        let shift = self.state.heading_shift.get();
         let level = (heading.level() as usize + shift).min(6);
         if entering {
             w.write_str(&format!("<h{level}"))?;
             html::render_attributes(w, source, arena[node_ref].attributes(), None)?;
-            self.writer.write_safe_str(w, ">")?;
+            w.write_str(">")?;
         } else {
             w.write_str(&format!("</h{level}>\n"))?;
         }
@@ -314,7 +319,6 @@ where
 
 pub(crate) struct SharedFormatFencedDivHtmlRenderer<W: TextWrite> {
     _phantom: std::marker::PhantomData<W>,
-    writer: html::Writer,
     skip_heading_key: ContextKey<NodeRefValue>,
     skip_include_blocks: bool,
     profile: RenderProfile,
@@ -322,14 +326,12 @@ pub(crate) struct SharedFormatFencedDivHtmlRenderer<W: TextWrite> {
 
 impl<W: TextWrite> SharedFormatFencedDivHtmlRenderer<W> {
     pub(crate) fn with_options(
-        options: html::Options,
         skip_heading_key: ContextKey<NodeRefValue>,
         skip_include_blocks: bool,
         profile: RenderProfile,
     ) -> Self {
         Self {
             _phantom: std::marker::PhantomData,
-            writer: html::Writer::with_options(options),
             skip_heading_key,
             skip_include_blocks,
             profile,
@@ -400,7 +402,7 @@ impl<W: TextWrite> RenderNode<W> for SharedFormatFencedDivHtmlRenderer<W> {
                     }
                 }
             } else {
-                self.writer.write_safe_str(w, "<div")?;
+                w.write_str("<div")?;
                 for (key, value) in arena[node_ref].attributes().iter() {
                     if key == "if-format" || key == "if-variant" {
                         continue;
@@ -412,10 +414,10 @@ impl<W: TextWrite> RenderNode<W> for SharedFormatFencedDivHtmlRenderer<W> {
                     w.write_str(std::str::from_utf8(&escaped).unwrap_or_default())?;
                     w.write_str("\"")?;
                 }
-                self.writer.write_safe_str(w, ">")?;
+                w.write_str(">")?;
             }
         } else {
-            self.writer.write_safe_str(w, "</div>")?;
+            w.write_str("</div>")?;
         }
         Ok(WalkStatus::Continue)
     }
@@ -433,36 +435,6 @@ where
 // ---------------------------------------------------------------------------
 // Shared renderer structs for suppressing default node rendering
 // ---------------------------------------------------------------------------
-
-/// Suppress default Document node rendering (returns `SkipChildren`).
-///
-/// Both single-page and multi-page renderers use a custom pre-render hook to
-/// drive document traversal, so the built-in Document renderer must be
-/// replaced with this no-op that prevents double rendering.
-pub(crate) struct SuppressDocumentRenderer;
-
-impl<W: TextWrite> RenderNode<W> for SuppressDocumentRenderer {
-    fn render_node<'a>(
-        &self,
-        _w: &mut W,
-        _source: &'a str,
-        _arena: &'a Arena,
-        _node_ref: NodeRef,
-        _entering: bool,
-        _ctx: &mut renderer::Context,
-    ) -> rushdown::Result<WalkStatus> {
-        Ok(WalkStatus::SkipChildren)
-    }
-}
-
-impl<'cb, W> NodeRenderer<'cb, W> for SuppressDocumentRenderer
-where
-    W: TextWrite + 'cb,
-{
-    fn register_node_renderer_fn(self, nrr: &mut impl NodeRendererRegistry<'cb, W>) {
-        nrr.register_node_renderer_fn(TypeId::of::<Document>(), BoxRenderNode::new(self));
-    }
-}
 
 /// Suppress inline footnote definitions (returns `SkipChildren`).
 ///

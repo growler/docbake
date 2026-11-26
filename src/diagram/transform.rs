@@ -82,15 +82,15 @@ pub(crate) fn transform_diagram_images(
             continue;
         };
         let image = as_kind_data!(arena[image_ref], Image);
-        let dest = image.destination_str(source);
-        let Some(diagram_type) = diagram_type_for_path(dest) else {
+        let dest = image.destination().str(source);
+        let Some(diagram_type) = diagram_type_for_path(&dest) else {
             continue;
         };
 
         // Strip fragment before path resolution (e.g. `diagram.drawio#1` → `diagram.drawio`).
-        let path_part = dest.split('#').next().unwrap_or(dest);
+        let path_part = dest.split('#').next().unwrap_or(&dest);
         let drawio_page = if diagram_type == DiagramType::DrawIo {
-            drawio_page_from_dest(dest)
+            drawio_page_from_dest(&dest)
         } else {
             None
         };
@@ -120,8 +120,9 @@ pub(crate) fn transform_diagram_images(
     // Phase 2: replace each paragraph with a Diagram node.
     for (paragraph_ref, image_ref, diagram_type, file_path, drawio_page) in candidates {
         let dest = as_kind_data!(arena[image_ref], Image)
-            .destination_str(source)
-            .to_owned();
+            .destination()
+            .str(source)
+            .into_owned();
         let diagram_node = if diagram_type == DiagramType::DrawIo {
             // Draw.io diagrams store the resolved path for deferred
             // rendering — the actual SVG/PDF conversion happens at render

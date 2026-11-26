@@ -66,8 +66,9 @@ impl AstTransformer for DiagramAstTransformer {
                     return Ok(WalkStatus::Continue);
                 }
                 let code_block = as_kind_data!(arena[node_ref], CodeBlock);
-                if let Some(lang) = code_block.language_str(reader.source()) {
-                    let dominated = match lang {
+                let lang = code_block.language(reader.source());
+                if let Some(lang) = lang.as_option().map(|v| v.str(reader.source())) {
+                    let dominated = match lang.as_ref() {
                         "mermaid" => self.options.mermaid_enabled,
                         "plantuml" => self.options.plantuml_enabled,
                         "typst" => self.options.typst_enabled,
@@ -87,7 +88,8 @@ impl AstTransformer for DiagramAstTransformer {
         for code_ref in target_codes {
             let code_block = as_kind_data!(arena[code_ref], CodeBlock);
             let lines = code_block.value().clone();
-            let diagram_type = match code_block.language_str(reader.source()) {
+            let lang = code_block.language(reader.source());
+            let diagram_type = match lang.as_option().map(|v| v.str(reader.source())).as_deref() {
                 Some("mermaid") => DiagramType::Mermaid,
                 Some("plantuml") => DiagramType::PlantUml,
                 Some("typst") => DiagramType::Typst,

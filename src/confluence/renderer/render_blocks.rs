@@ -84,7 +84,7 @@ impl<'a> ConfluenceRenderer<'a> {
                 out.push_str("<hr />\n");
             }
             KindData::CodeBlock(code) => {
-                let lang = code.language_str(source).unwrap_or_default().to_string();
+                let lang = code.language(source).str(source).to_string();
                 let mut value = String::new();
                 for line in code.value().iter(source) {
                     value.push_str(line.as_ref());

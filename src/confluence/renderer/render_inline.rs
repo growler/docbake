@@ -39,7 +39,7 @@ impl<'a> ConfluenceRenderer<'a> {
         self.render_anchor_if_node_has_id(out, arena, source, node_ref)?;
         match arena[node_ref].kind_data() {
             KindData::Text(text) => {
-                out.push_str(&xml_escape(text.str(source)));
+                out.push_str(&xml_escape(&text.value().str(source)));
                 if text.has_qualifiers(TextQualifier::HARD_LINE_BREAK) {
                     out.push_str("<br />\n");
                 } else if text.has_qualifiers(TextQualifier::SOFT_LINE_BREAK) {
@@ -47,7 +47,11 @@ impl<'a> ConfluenceRenderer<'a> {
                 }
             }
             KindData::CodeSpan(cs) => {
-                write!(out, "<code>{}</code>", xml_escape(&cs.str(source)))?;
+                write!(
+                    out,
+                    "<code>{}</code>",
+                    xml_escape(&cs.value().value(source))
+                )?;
             }
             KindData::Emphasis(_) => {
                 out.push_str("<em>");
@@ -72,7 +76,7 @@ impl<'a> ConfluenceRenderer<'a> {
                     .ok_or_else(|| {
                         anyhow!(
                             "missing resolved link target for `{}` in {}",
-                            link.destination_str(source),
+                            link.destination().str(source),
                             prepared.graph().document(scope.doc_id).path.display()
                         )
                     })?
@@ -84,14 +88,14 @@ impl<'a> ConfluenceRenderer<'a> {
                             self.render_internal_link(
                                 out,
                                 &dest,
-                                &xml_escape(auto.text_str(source)),
+                                &xml_escape(&auto.text().str(source)),
                             )?;
                         } else {
                             write!(
                                 out,
                                 "<a href=\"{}\">{}</a>",
                                 xml_attr_escape(&dest),
-                                xml_escape(auto.text_str(source))
+                                xml_escape(&auto.text().str(source))
                             )?;
                         }
                     }
@@ -117,7 +121,7 @@ impl<'a> ConfluenceRenderer<'a> {
                     .ok_or_else(|| {
                         anyhow!(
                             "missing resolved image target for `{}` in {}",
-                            image.destination_str(source),
+                            image.destination().str(source),
                             prepared.graph().document(scope.doc_id).path.display()
                         )
                     })?
@@ -236,8 +240,8 @@ fn collect_image_alt_text(arena: &Arena, node_ref: NodeRef, source: &str) -> Str
     let mut alt = String::new();
     for child in arena[node_ref].children(arena) {
         match arena[child].kind_data() {
-            KindData::Text(text) => alt.push_str(text.str(source)),
-            KindData::CodeSpan(cs) => alt.push_str(&cs.str(source)),
+            KindData::Text(text) => alt.push_str(&text.value().str(source)),
+            KindData::CodeSpan(cs) => alt.push_str(&cs.value().value(source)),
             _ => {}
         }
     }

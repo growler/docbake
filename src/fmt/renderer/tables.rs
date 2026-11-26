@@ -268,7 +268,7 @@ impl MarkdownFmtRenderer {
         source: &str,
     ) -> Result<()> {
         if let KindData::Text(text) = arena[node_ref].kind_data() {
-            out.push_str(text.str(source));
+            out.push_str(&text.value().str(source));
             if text.has_qualifiers(TextQualifier::HARD_LINE_BREAK) {
                 out.push_str("<br>");
             } else if text.has_qualifiers(TextQualifier::SOFT_LINE_BREAK) {
@@ -542,8 +542,8 @@ impl MarkdownFmtRenderer {
         source: &str,
     ) -> Result<()> {
         if let KindData::Text(text) = arena[node_ref].kind_data() {
-            let s = text.str(source);
-            out.push_str(s);
+            let s = text.value().str(source);
+            out.push_str(&s);
             if text.has_qualifiers(TextQualifier::HARD_LINE_BREAK) {
                 // Preserve the source-level hard-break marker so the
                 // physical-line layout we emit ALSO encodes "this is a

@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use anyhow::{Context, Result};
 use rushdown::renderer::html::{self, RendererExtension};
@@ -10,13 +11,20 @@ use crate::code_block_attribute::{
     code_block_attribute_html_renderer_extension, CodeBlockAttributeHtmlRendererOptions,
 };
 use crate::conditional::RenderProfile;
-use crate::diagram::{diagram_html_renderer_extension, DiagramHtmlRendererOptions, DiagramThemes};
+use crate::diagram::{
+    diagram_html_renderer_extension, write_mermaid_script, DiagramHtmlRendererOptions,
+    DiagramThemes,
+};
 use crate::graph::PreparedDocument;
+use crate::html::RenderState;
 
 use super::footnotes::build_page_footnote_plan;
 use super::path_utils::{compute_asset_prefix, compute_relative_href};
 use super::plan::build_multi_page_plan;
-use super::renderer_hooks::{multi_format_fenced_div_renderer, multi_page_renderer_extension};
+use super::renderer_hooks::{
+    multi_format_fenced_div_renderer, multi_page_renderer_extension, render_page_document,
+    render_page_footnotes,
+};
 use super::toc::{build_intra_page_toc, build_page_toc, build_page_toc_expanded};
 
 #[derive(Debug, Clone, Serialize)]
@@ -57,7 +65,6 @@ pub(crate) fn build_multi_page_html(
     for page_idx in 0..plan.pages.len() {
         let page_info = &plan.pages[page_idx];
         let doc_id = page_info.doc_id;
-        let doc = graph.document(doc_id);
 
         // Compute relative prefix from this page back to the output root.
         let asset_prefix = compute_asset_prefix(&page_info.output_path);
@@ -65,6 +72,13 @@ pub(crate) fn build_multi_page_html(
         // Build body HTML.
         let footnotes = build_page_footnote_plan(graph, doc_id, profile)?;
         let mut body = String::new();
+        let state = Rc::new(RenderState::default());
+        let diagram_opts = DiagramHtmlRendererOptions {
+            themes: diagram_themes.clone(),
+            cache: cache.clone(),
+            state: state.clone(),
+            ..Default::default()
+        };
         let renderer = html::Renderer::with_extensions(
             html::Options::default(),
             rushdown_fenced_div::fenced_div_html_renderer_extension(FencedDivHtmlRendererOptions)
@@ -75,25 +89,22 @@ pub(crate) fn build_multi_page_html(
                 .and(crate::bracketed_span::bracketed_span_html_renderer_extension())
                 .and(crate::caption::caption_html_renderer_extension())
                 .and(multi_format_fenced_div_renderer(profile.clone()))
-                .and(diagram_html_renderer_extension(
-                    DiagramHtmlRendererOptions {
-                        themes: diagram_themes.clone(),
-                        cache: cache.clone(),
-                        ..Default::default()
-                    },
-                ))
+                .and(diagram_html_renderer_extension(diagram_opts.clone()))
                 .and(multi_page_renderer_extension(
                     graph,
-                    profile.clone(),
+                    state.clone(),
                     &plan,
                     page_idx,
                     base_dir,
                     &asset_prefix,
-                    footnotes,
+                    footnotes.clone(),
                 )),
         );
-        renderer
-            .render(&mut body, &doc.source, &doc.arena, doc.doc_ref)
+        render_page_document(&renderer, &mut body, graph, profile, &state, doc_id)
+            .and_then(|()| write_mermaid_script(&mut body, &diagram_opts))
+            .and_then(|()| {
+                render_page_footnotes(&renderer, &mut body, graph, &state, doc_id, &footnotes)
+            })
             .map_err(|error| anyhow::anyhow!("failed to render HTML body: {error:?}"))?;
 
         // Build TOC variants.

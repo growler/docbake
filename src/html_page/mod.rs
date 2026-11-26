@@ -6,17 +6,19 @@ use std::rc::Rc;
 use crate::code_block_attribute::{
     code_block_attribute_html_renderer_extension, CodeBlockAttributeHtmlRendererOptions,
 };
-use crate::diagram::{diagram_html_renderer_extension, DiagramHtmlRendererOptions, DiagramThemes};
+use crate::diagram::{
+    diagram_html_renderer_extension, write_mermaid_script, DiagramHtmlRendererOptions,
+    DiagramThemes,
+};
 use anyhow::{bail, Context, Result};
 use rushdown::as_extension_data;
 use rushdown::as_kind_data;
 use rushdown::ast::{Arena, Image, KindData, Link, NodeRef, WalkStatus};
-use rushdown::context::{ContextKey, ContextKeyRegistry, NodeRefValue, UsizeValue};
+use rushdown::context::{ContextKeyRegistry, NodeRefValue};
 use rushdown::renderer;
 use rushdown::renderer::html::{self, Renderer, RendererExtension, RendererExtensionFn};
 use rushdown::renderer::{
-    BoxRenderNode, NodeRenderer, NodeRendererRegistry, PostRender, PreRender, Render, RenderNode,
-    TextWrite,
+    BoxRenderNode, NodeRenderer, NodeRendererRegistry, RenderNode, RenderOptions, TextWrite,
 };
 use rushdown_definition_list::definition_list_html_renderer_extension;
 use rushdown_fenced_div::FencedDivHtmlRendererOptions;
@@ -26,30 +28,12 @@ use crate::conditional::RenderProfile;
 use crate::graph::{DocumentGraph, NodeLocation, PreparedDocument};
 use crate::html::{
     heading_text_html, html_escape, is_admonition_title_heading, render_footnote_reference,
-    render_image_tag, render_link_open_tag, ImageRenderData, LinkRenderData,
-    SharedFormatFencedDivHtmlRenderer, SharedHeadingHtmlRenderer, SuppressDocumentRenderer,
+    render_image_tag, render_link_open_tag, ImageRenderData, LinkRenderData, RenderState,
+    SharedFormatFencedDivHtmlRenderer, SharedHeadingHtmlRenderer,
     SuppressFootnoteDefinitionRenderer,
 };
 
-const CURRENT_DOC_ID: &str = "docbake-html-current-doc-id";
-const HEADING_SHIFT: &str = "docbake-html-heading-shift";
 const SKIP_ADMONITION_HEADING: &str = "docbake-skip-admonition-heading";
-
-#[derive(Clone, Copy)]
-struct GraphRenderKeys {
-    current_doc_id: ContextKey<UsizeValue>,
-    heading_shift: ContextKey<UsizeValue>,
-}
-
-impl GraphRenderKeys {
-    fn new(reg: Rc<RefCell<ContextKeyRegistry>>) -> Self {
-        let mut reg = reg.borrow_mut();
-        Self {
-            current_doc_id: reg.get_or_create::<UsizeValue>(CURRENT_DOC_ID),
-            heading_shift: reg.get_or_create::<UsizeValue>(HEADING_SHIFT),
-        }
-    }
-}
 
 #[derive(Clone)]
 struct FootnoteEntry {
@@ -118,9 +102,11 @@ pub fn build_html_document(
     cache: &crate::cache::Cache,
     diagram_themes: &DiagramThemes,
 ) -> Result<String> {
+    let state = Rc::new(RenderState::default());
     let diagram_opts = DiagramHtmlRendererOptions {
         themes: diagram_themes.clone(),
         cache: cache.clone(),
+        state: state.clone(),
         ..Default::default()
     };
 
@@ -136,16 +122,17 @@ pub fn build_html_document(
             .and(crate::bracketed_span::bracketed_span_html_renderer_extension())
             .and(crate::caption::caption_html_renderer_extension())
             .and(format_specific_fenced_div_renderer(profile.clone()))
-            .and(diagram_html_renderer_extension(diagram_opts))
+            .and(diagram_html_renderer_extension(diagram_opts.clone()))
             .and(graph_html_renderer_extension(
                 prepared,
-                profile.clone(),
-                footnotes,
+                state.clone(),
+                footnotes.clone(),
             )),
     );
-    let root = prepared.graph().root_document();
-    renderer
-        .render(&mut body, &root.source, &root.arena, root.doc_ref)
+    let root_id = prepared.graph().root_id;
+    render_graph_document(&renderer, &mut body, prepared, profile, &state, root_id, 0)
+        .and_then(|()| write_mermaid_script(&mut body, &diagram_opts))
+        .and_then(|()| render_graph_footnotes(&renderer, &mut body, prepared, &state, &footnotes))
         .map_err(|error| anyhow::anyhow!("failed to render HTML body: {error:?}"))?;
 
     let mut page = context.clone();
@@ -240,74 +227,62 @@ pub fn build_toc(graph: &DocumentGraph, profile: &RenderProfile) -> Result<Strin
     Ok(html)
 }
 
-struct GraphRenderHook<'a> {
-    prepared: &'a PreparedDocument,
-    profile: RenderProfile,
-    keys: GraphRenderKeys,
-}
-
-impl<'a, W: TextWrite> PreRender<W> for GraphRenderHook<'a> {
-    fn pre_render(
-        &self,
-        writer: &mut W,
-        _source: &str,
-        _arena: &Arena,
-        _node_ref: NodeRef,
-        render: &dyn Render<W>,
-        context: &mut renderer::Context,
-    ) -> rushdown::Result<()> {
-        self.render_document(writer, self.prepared.graph().root_id, 0, render, context)
-    }
-}
-
-impl<'a> GraphRenderHook<'a> {
-    fn render_document<W: TextWrite>(
-        &self,
-        writer: &mut W,
-        doc_id: usize,
-        heading_shift: usize,
-        render: &dyn Render<W>,
-        context: &mut renderer::Context,
-    ) -> rushdown::Result<()> {
-        let doc = self.prepared.graph().document(doc_id);
-        for child in doc.arena[doc.doc_ref].children(&doc.arena) {
-            let visible =
-                crate::conditional::node_is_visible(&doc.arena, child, &doc.source, &self.profile)
-                    .map_err(|error| rushdown::Error::io(format!("{error:#}"), None))?;
-            if !visible {
-                continue;
-            }
-            if let Some(entries) = self.prepared.graph().include_entries(doc_id, child) {
-                for entry in entries {
-                    self.render_document(
-                        writer,
-                        entry.doc_id,
-                        heading_shift + entry.heading_shift,
-                        render,
-                        context,
-                    )?;
-                }
-                continue;
-            }
-            context.insert(self.keys.current_doc_id, doc_id);
-            context.insert(self.keys.heading_shift, heading_shift);
-            render.render(writer, &doc.source, &doc.arena, child, context)?;
+/// Renders the visible children of document `doc_id` and, in place of each
+/// `:::include` block, the documents that it includes.
+fn render_graph_document<W: TextWrite>(
+    renderer: &Renderer<'_, W>,
+    writer: &mut W,
+    prepared: &PreparedDocument,
+    profile: &RenderProfile,
+    state: &RenderState,
+    doc_id: usize,
+    heading_shift: usize,
+) -> rushdown::Result<()> {
+    let doc = prepared.graph().document(doc_id);
+    for child in doc.arena[doc.doc_ref].children(&doc.arena) {
+        let visible = crate::conditional::node_is_visible(&doc.arena, child, &doc.source, profile)
+            .map_err(|error| rushdown::Error::io(format!("{error:#}"), None))?;
+        if !visible {
+            continue;
         }
-        Ok(())
+        if let Some(entries) = prepared.graph().include_entries(doc_id, child) {
+            for entry in entries {
+                render_graph_document(
+                    renderer,
+                    writer,
+                    prepared,
+                    profile,
+                    state,
+                    entry.doc_id,
+                    heading_shift + entry.heading_shift,
+                )?;
+            }
+            continue;
+        }
+        state.current_doc_id.set(doc_id);
+        state.heading_shift.set(heading_shift);
+        renderer.render(
+            writer,
+            &doc.source,
+            &doc.arena,
+            child,
+            RenderOptions::default(),
+        )?;
     }
+    Ok(())
 }
 
 struct GraphFootnoteReferenceHtmlRenderer<W: TextWrite> {
     _phantom: std::marker::PhantomData<W>,
-    keys: GraphRenderKeys,
+    state: Rc<RenderState>,
     footnotes: FootnotePlan,
 }
 
 impl<W: TextWrite> GraphFootnoteReferenceHtmlRenderer<W> {
-    fn new(_options: html::Options, keys: GraphRenderKeys, footnotes: FootnotePlan) -> Self {
+    fn new(state: Rc<RenderState>, footnotes: FootnotePlan) -> Self {
         Self {
             _phantom: std::marker::PhantomData,
-            keys,
+            state,
             footnotes,
         }
     }
@@ -321,13 +296,13 @@ impl<W: TextWrite> RenderNode<W> for GraphFootnoteReferenceHtmlRenderer<W> {
         arena: &'a Arena,
         node_ref: NodeRef,
         entering: bool,
-        ctx: &mut renderer::Context,
+        _ctx: &mut renderer::Context,
     ) -> rushdown::Result<WalkStatus> {
         let _ = as_extension_data!(arena, node_ref, FootnoteReference);
         if !entering {
             return Ok(WalkStatus::SkipChildren);
         }
-        let doc_id = ctx.get(self.keys.current_doc_id).copied().unwrap_or(0);
+        let doc_id = self.state.current_doc_id.get();
         let (index, ref_index) = self
             .footnotes
             .refs
@@ -348,85 +323,55 @@ where
     }
 }
 
-struct GraphFootnotePostRenderHook<'a> {
-    prepared: &'a PreparedDocument,
-    keys: GraphRenderKeys,
-    footnotes: FootnotePlan,
-    writer: html::Writer,
-}
-
-impl<'a> GraphFootnotePostRenderHook<'a> {
-    fn new(
-        prepared: &'a PreparedDocument,
-        options: html::Options,
-        keys: GraphRenderKeys,
-        footnotes: FootnotePlan,
-    ) -> Self {
-        Self {
-            prepared,
-            keys,
-            footnotes,
-            writer: html::Writer::with_options(options),
-        }
+/// Renders the footnote section of the page: one list item for each entry of
+/// `footnotes`, in plan order.
+fn render_graph_footnotes<W: TextWrite>(
+    renderer: &Renderer<'_, W>,
+    w: &mut W,
+    prepared: &PreparedDocument,
+    state: &RenderState,
+    footnotes: &FootnotePlan,
+) -> rushdown::Result<()> {
+    if footnotes.ordered.is_empty() {
+        return Ok(());
     }
-}
 
-impl<'a, W: TextWrite> PostRender<W> for GraphFootnotePostRenderHook<'a> {
-    fn post_render(
-        &self,
-        w: &mut W,
-        _source: &str,
-        _arena: &Arena,
-        _node_ref: NodeRef,
-        render: &dyn Render<W>,
-        ctx: &mut renderer::Context,
-    ) -> rushdown::Result<()> {
-        if self.footnotes.ordered.is_empty() {
-            return Ok(());
+    w.write_str("<div class=\"footnotes\" role=\"doc-endnotes\">\n<hr>\n<ol>\n")?;
+    for footnote in &footnotes.ordered {
+        let doc = prepared.graph().document(footnote.doc_id);
+        let definition = doc
+            .footnote_definition(&footnote.label)
+            .ok_or_else(|| rushdown::Error::io("missing footnote body", None))?;
+        w.write_str(&format!("<li id=\"fn:{}\">", footnote.index))?;
+        state.current_doc_id.set(footnote.doc_id);
+        state.heading_shift.set(0);
+        for child in doc.arena[definition.node_ref].children(&doc.arena) {
+            renderer.render(w, &doc.source, &doc.arena, child, RenderOptions::default())?;
         }
-
-        self.writer.write_safe_str(
-            w,
-            "<div class=\"footnotes\" role=\"doc-endnotes\">\n<hr>\n<ol>\n",
-        )?;
-        for footnote in &self.footnotes.ordered {
-            let doc = self.prepared.graph().document(footnote.doc_id);
-            let definition = doc
-                .footnote_definition(&footnote.label)
-                .ok_or_else(|| rushdown::Error::io("missing footnote body", None))?;
-            w.write_str(&format!("<li id=\"fn:{}\">", footnote.index))?;
-            ctx.insert(self.keys.current_doc_id, footnote.doc_id);
-            ctx.insert(self.keys.heading_shift, 0);
-            for child in doc.arena[definition.node_ref].children(&doc.arena) {
-                render.render(w, &doc.source, &doc.arena, child, ctx)?;
-            }
-            for ref_index in &footnote.reference_indices {
-                w.write_str(&format!(
-                    "&#160;<a href=\"#fnref:{ref_index}\" class=\"footnote-backref\" role=\"doc-backlink\">↩</a>"
-                ))?;
-            }
-            self.writer.write_safe_str(w, "</li>\n")?;
+        for ref_index in &footnote.reference_indices {
+            w.write_str(&format!(
+                "&#160;<a href=\"#fnref:{ref_index}\" class=\"footnote-backref\" role=\"doc-backlink\">↩</a>"
+            ))?;
         }
-        self.writer.write_safe_str(w, "</ol>\n</div>\n")?;
-        Ok(())
+        w.write_str("</li>\n")?;
     }
+    w.write_str("</ol>\n</div>\n")?;
+    Ok(())
 }
 
 struct GraphLinkHtmlRenderer<'a, W: TextWrite> {
     prepared: &'a PreparedDocument,
     _phantom: std::marker::PhantomData<W>,
-    writer: html::Writer,
-    keys: GraphRenderKeys,
+    state: Rc<RenderState>,
     format_options: html::Options,
 }
 
 impl<'a, W: TextWrite> GraphLinkHtmlRenderer<'a, W> {
-    fn new(prepared: &'a PreparedDocument, options: html::Options, keys: GraphRenderKeys) -> Self {
+    fn new(prepared: &'a PreparedDocument, options: html::Options, state: Rc<RenderState>) -> Self {
         Self {
             prepared,
             _phantom: std::marker::PhantomData,
-            writer: html::Writer::with_options(options.clone()),
-            keys,
+            state,
             format_options: options,
         }
     }
@@ -440,11 +385,11 @@ impl<'a, W: TextWrite> RenderNode<W> for GraphLinkHtmlRenderer<'a, W> {
         arena: &'b Arena,
         node_ref: NodeRef,
         entering: bool,
-        ctx: &mut renderer::Context,
+        _ctx: &mut renderer::Context,
     ) -> rushdown::Result<WalkStatus> {
         if entering {
             let link = as_kind_data!(arena, node_ref, Link);
-            let doc_id = ctx.get(self.keys.current_doc_id).copied().unwrap_or(0);
+            let doc_id = self.state.current_doc_id.get();
             let target = self
                 .prepared
                 .graph()
@@ -453,7 +398,7 @@ impl<'a, W: TextWrite> RenderNode<W> for GraphLinkHtmlRenderer<'a, W> {
                     rushdown::Error::io(
                         format!(
                             "missing resolved link target for `{}` in {}",
-                            link.destination_str(source),
+                            link.destination().str(source),
                             self.prepared.graph().document(doc_id).path.display()
                         ),
                         None,
@@ -462,7 +407,6 @@ impl<'a, W: TextWrite> RenderNode<W> for GraphLinkHtmlRenderer<'a, W> {
                 .to_string();
             render_link_open_tag(
                 w,
-                &self.writer,
                 &self.format_options,
                 &LinkRenderData {
                     source,
@@ -473,7 +417,7 @@ impl<'a, W: TextWrite> RenderNode<W> for GraphLinkHtmlRenderer<'a, W> {
                 },
             )?;
         } else {
-            self.writer.write_safe_str(w, "</a>")?;
+            w.write_str("</a>")?;
         }
         Ok(WalkStatus::Continue)
     }
@@ -492,18 +436,16 @@ where
 struct GraphImageHtmlRenderer<'a, W: TextWrite> {
     prepared: &'a PreparedDocument,
     _phantom: std::marker::PhantomData<W>,
-    writer: html::Writer,
-    keys: GraphRenderKeys,
+    state: Rc<RenderState>,
     format_options: html::Options,
 }
 
 impl<'a, W: TextWrite> GraphImageHtmlRenderer<'a, W> {
-    fn new(prepared: &'a PreparedDocument, options: html::Options, keys: GraphRenderKeys) -> Self {
+    fn new(prepared: &'a PreparedDocument, options: html::Options, state: Rc<RenderState>) -> Self {
         Self {
             prepared,
             _phantom: std::marker::PhantomData,
-            writer: html::Writer::with_options(options.clone()),
-            keys,
+            state,
             format_options: options,
         }
     }
@@ -517,11 +459,11 @@ impl<'a, W: TextWrite> RenderNode<W> for GraphImageHtmlRenderer<'a, W> {
         arena: &'b Arena,
         node_ref: NodeRef,
         entering: bool,
-        ctx: &mut renderer::Context,
+        _ctx: &mut renderer::Context,
     ) -> rushdown::Result<WalkStatus> {
         if entering {
             let image = as_kind_data!(arena, node_ref, Image);
-            let doc_id = ctx.get(self.keys.current_doc_id).copied().unwrap_or(0);
+            let doc_id = self.state.current_doc_id.get();
             let target = self
                 .prepared
                 .graph()
@@ -530,7 +472,7 @@ impl<'a, W: TextWrite> RenderNode<W> for GraphImageHtmlRenderer<'a, W> {
                     rushdown::Error::io(
                         format!(
                             "missing resolved image target for `{}` in {}",
-                            image.destination_str(source),
+                            image.destination().str(source),
                             self.prepared.graph().document(doc_id).path.display()
                         ),
                         None,
@@ -539,7 +481,6 @@ impl<'a, W: TextWrite> RenderNode<W> for GraphImageHtmlRenderer<'a, W> {
                 .to_string();
             render_image_tag(
                 w,
-                &self.writer,
                 &self.format_options,
                 &ImageRenderData {
                     source,
@@ -572,12 +513,11 @@ where
 {
     RendererExtensionFn::new(move |renderer: &mut Renderer<'cb, W>| {
         renderer.add_node_renderer(
-            move |options: html::Options, reg: Rc<RefCell<ContextKeyRegistry>>| {
+            move |reg: Rc<RefCell<ContextKeyRegistry>>| {
                 let skip_heading_key = reg
                     .borrow_mut()
                     .get_or_create::<NodeRefValue>(SKIP_ADMONITION_HEADING);
                 SharedFormatFencedDivHtmlRenderer::with_options(
-                    options,
                     skip_heading_key,
                     false,
                     profile.clone(),
@@ -590,76 +530,48 @@ where
 
 fn graph_html_renderer_extension<'cb, W>(
     prepared: &'cb PreparedDocument,
-    profile: RenderProfile,
+    state: Rc<RenderState>,
     footnotes: FootnotePlan,
 ) -> impl RendererExtension<'cb, W>
 where
     W: TextWrite + 'cb,
 {
     RendererExtensionFn::new(move |renderer: &mut Renderer<'cb, W>| {
-        let ref_footnotes = footnotes.clone();
-        let post_footnotes = footnotes.clone();
-        let hook_profile = profile.clone();
-        renderer.add_pre_render_hook(
-            move |reg: Rc<RefCell<ContextKeyRegistry>>| GraphRenderHook {
-                prepared,
-                profile: hook_profile.clone(),
-                keys: GraphRenderKeys::new(reg),
-            },
-            rushdown::renderer::NoRendererOptions,
-            1000,
-        );
+        let heading_state = state.clone();
         renderer.add_node_renderer(
-            || SuppressDocumentRenderer,
-            rushdown::renderer::NoRendererOptions,
-        );
-        renderer.add_node_renderer(
-            move |options: html::Options, reg: Rc<RefCell<ContextKeyRegistry>>| {
-                let keys = GraphRenderKeys::new(reg.clone());
+            move |reg: Rc<RefCell<ContextKeyRegistry>>| {
                 let skip_heading_key = reg
                     .borrow_mut()
                     .get_or_create::<NodeRefValue>(SKIP_ADMONITION_HEADING);
-                SharedHeadingHtmlRenderer::new(options, skip_heading_key, Some(keys.heading_shift))
+                SharedHeadingHtmlRenderer::new(skip_heading_key, heading_state.clone())
             },
             rushdown::renderer::NoRendererOptions,
         );
+        let link_state = state.clone();
         renderer.add_node_renderer(
-            move |options: html::Options, reg: Rc<RefCell<ContextKeyRegistry>>| {
-                GraphLinkHtmlRenderer::new(prepared, options, GraphRenderKeys::new(reg))
+            move |options: html::Options| {
+                GraphLinkHtmlRenderer::new(prepared, options, link_state.clone())
             },
             rushdown::renderer::NoRendererOptions,
         );
+        let image_state = state.clone();
         renderer.add_node_renderer(
-            move |options: html::Options, reg: Rc<RefCell<ContextKeyRegistry>>| {
-                GraphImageHtmlRenderer::new(prepared, options, GraphRenderKeys::new(reg))
+            move |options: html::Options| {
+                GraphImageHtmlRenderer::new(prepared, options, image_state.clone())
             },
             rushdown::renderer::NoRendererOptions,
         );
+        let ref_state = state.clone();
+        let ref_footnotes = footnotes.clone();
         renderer.add_node_renderer(
-            move |options: html::Options, reg: Rc<RefCell<ContextKeyRegistry>>| {
-                GraphFootnoteReferenceHtmlRenderer::new(
-                    options,
-                    GraphRenderKeys::new(reg),
-                    ref_footnotes.clone(),
-                )
+            move || {
+                GraphFootnoteReferenceHtmlRenderer::new(ref_state.clone(), ref_footnotes.clone())
             },
             rushdown::renderer::NoRendererOptions,
         );
         renderer.add_node_renderer(
             || SuppressFootnoteDefinitionRenderer,
             rushdown::renderer::NoRendererOptions,
-        );
-        renderer.add_post_render_hook(
-            move |options: html::Options, reg: Rc<RefCell<ContextKeyRegistry>>| {
-                GraphFootnotePostRenderHook::new(
-                    prepared,
-                    options,
-                    GraphRenderKeys::new(reg),
-                    post_footnotes.clone(),
-                )
-            },
-            rushdown::renderer::NoRendererOptions,
-            500,
         );
     })
 }

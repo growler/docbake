@@ -68,7 +68,7 @@ fn rewrite_graph_links_in_place(prepared: &mut PreparedDocument) {
         let doc = graph.document_mut(rewrite.doc_id);
         if rewrite.is_image {
             let Some(new_kind) = (match doc.arena[rewrite.node_ref].kind_data() {
-                KindData::Image(image) => Some(if let Some(title) = image.title() {
+                KindData::Image(image) => Some(if let Some(title) = image.title().as_option() {
                     KindData::Image(rushdown::ast::Image::inline_with_title(
                         rewrite.destination.clone(),
                         title.clone(),
@@ -90,7 +90,7 @@ fn rewrite_graph_links_in_place(prepared: &mut PreparedDocument) {
                     KindData::Link(Link::auto(rewrite.destination.clone(), auto.text().clone()))
                 }
                 _ => {
-                    if let Some(title) = link.title() {
+                    if let Some(title) = link.title().as_option() {
                         KindData::Link(Link::inline_with_title(
                             rewrite.destination.clone(),
                             title.clone(),

@@ -2025,9 +2025,9 @@ dependencies = [
 
 [[package]]
 name = "rushdown"
-version = "0.18.0"
+version = "0.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57358ca9b61ea373ec6bf1c9e916f521f19a919587d9179624d47c40da2ffc5d"
+checksum = "f5ffdc5468c3c6870a9d3a05d9b0e703291b40477ef6f1d1df97f2ce0133ae81"
 dependencies = [
  "bitflags",
  "memchr",
@@ -2037,45 +2037,45 @@ dependencies = [
 
 [[package]]
 name = "rushdown-definition-list"
-version = "0.9.2"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e686456f46f9f9511dde72f66e2ff20cfd1c6140e322d6b8b379bbc04e1b4cef"
+checksum = "f7d32fe2ca14bdb2ebb870d06f254abe3de4d22003b9bff09a43109a278f7071"
 dependencies = [
  "rushdown",
 ]
 
 [[package]]
 name = "rushdown-fenced-div"
-version = "0.1.5"
+version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e96e4a9226d8b89fa706a6015d661782cfc5e46772c047f3ca24249e068b21e5"
+checksum = "be566c7e815be92b27820b51ac2f84e7b243a0745dfd6bd82fed0a121ceb6b41"
 dependencies = [
  "rushdown",
 ]
 
 [[package]]
 name = "rushdown-footnote"
-version = "0.9.8"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "827f5ccd7304b0e827adb920c7fa5fc7db074c9014bd5083d884c6329d398bca"
+checksum = "7e0b87b073dd5d885a2e4f90ef157fe51a914aefd91e5bc2fe1246ec4fc56e70"
 dependencies = [
  "rushdown",
 ]
 
 [[package]]
 name = "rushdown-link-attribute"
-version = "0.9.1"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72b9a52dca0dc3ca08d525472f1dac51af67b5cd7e5aa3b2d00646b077ee1de5"
+checksum = "00b3ac9d37c65b65e1accc0ac62ccbfdef65ba1c104e57f381173cc88c2d6cc9"
 dependencies = [
  "rushdown",
 ]
 
 [[package]]
 name = "rushdown-meta"
-version = "0.9.9"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "edac26161c43766c168e7e3d2ae85708d9abf6ffe96181e0c8a3a0051b934dbd"
+checksum = "008f6f475dd7f1902fac4a7bf8076f54e404298d5ca4c8ed3f7cceb42bddbdc0"
 dependencies = [
  "rushdown",
  "yaml-peg",

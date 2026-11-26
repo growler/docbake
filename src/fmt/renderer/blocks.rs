@@ -62,7 +62,7 @@ impl MarkdownFmtRenderer {
                     let opening = opening_fence_from_source(arena, node_ref, source)
                         .unwrap_or_else(|| {
                             let mut line = String::from("```");
-                            line.push_str(code.info_str(source).unwrap_or(""));
+                            line.push_str(&code.info().str(source));
                             line
                         });
                     let closing =
@@ -81,7 +81,7 @@ impl MarkdownFmtRenderer {
                 }
                 _ => {
                     out.push_str("```");
-                    out.push_str(code.info_str(source).unwrap_or(""));
+                    out.push_str(&code.info().str(source));
                     out.push('\n');
                     for line in code.value().iter(source) {
                         out.push_str(line.as_ref());
@@ -216,9 +216,9 @@ impl MarkdownFmtRenderer {
                     out,
                     "[{}]: {}",
                     def.label().str(source),
-                    def.destination_str(source)
+                    def.destination().str(source)
                 )?;
-                if let Some(title) = def.title() {
+                if let Some(title) = def.title().as_option() {
                     write!(
                         out,
                         " \"{}\"",
@@ -477,7 +477,7 @@ impl MarkdownFmtRenderer {
         footnote_labels: &FootnoteLabels,
         heading_shift: usize,
     ) -> Result<()> {
-        let tight = as_extension_data!(arena, node_ref, DefinitionList).is_tight();
+        let tight = crate::definition_list_is_tight(arena, node_ref);
         let children: Vec<NodeRef> = arena[node_ref].children(arena).collect();
         let mut index = 0usize;
 

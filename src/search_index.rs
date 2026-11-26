@@ -229,18 +229,19 @@ fn collect_node_text(arena: &Arena, node_ref: NodeRef, source: &str, out: &mut S
     match arena[node_ref].kind_data() {
         // Leaf text nodes — the most common case.
         KindData::Text(value) => {
-            out.push_str(value.str(source));
+            out.push_str(&value.value().str(source));
             out.push(' ');
         }
         KindData::CodeSpan(cs) => {
-            out.push_str(&cs.str(source));
+            out.push_str(&cs.value().value(source));
             out.push(' ');
         }
         // Code blocks — include content unless it's a diagram language.
         KindData::CodeBlock(cb) => {
             if cb.code_block_kind() == CodeBlockKind::Fenced {
-                if let Some(lang) = cb.language_str(source) {
-                    if DIAGRAM_LANGUAGES.contains(&lang) {
+                let lang = cb.language(source);
+                if let Some(lang) = lang.as_option().map(|v| v.str(source)) {
+                    if DIAGRAM_LANGUAGES.contains(&lang.as_ref()) {
                         return; // skip diagram content
                     }
                 }
@@ -274,8 +275,8 @@ fn plain_text(arena: &Arena, node_ref: NodeRef, source: &str) -> String {
             return Ok(WalkStatus::Continue);
         }
         match arena[child_ref].kind_data() {
-            KindData::Text(value) => text.push_str(value.str(source)),
-            KindData::CodeSpan(cs) => text.push_str(&cs.str(source)),
+            KindData::Text(value) => text.push_str(&value.value().str(source)),
+            KindData::CodeSpan(cs) => text.push_str(&cs.value().value(source)),
             _ => {}
         }
         Ok(WalkStatus::Continue)
@@ -288,7 +289,7 @@ fn plain_text(arena: &Arena, node_ref: NodeRef, source: &str) -> String {
 /// The info string has the form `language Description text {#id .class}`.
 /// Returns `Some("Description text")` or `None` if there is no description.
 fn code_block_description(cb: &CodeBlock, source: &str) -> Option<String> {
-    let info = cb.info_str(source)?;
+    let info = cb.info().as_option()?.str(source);
     // Skip the language token (first word).
     let rest = info.split_once(char::is_whitespace).map(|(_, r)| r)?;
     // Strip any trailing attribute block {#id .class key=val}.

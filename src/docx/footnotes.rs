@@ -150,7 +150,7 @@ impl<'a> DocxRenderer<'a> {
         let definition = context
             .graph
             .document(context.doc_id)
-            .footnote_definition(label)
+            .footnote_definition(&label)
             .ok_or_else(|| anyhow!("missing footnote definition for `{label}`"))?;
 
         let id = self.footnotes.borrow_mut().start()?;

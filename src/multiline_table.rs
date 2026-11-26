@@ -712,6 +712,8 @@ struct MultilineTableCandidate {
     state: CandidateState,
 }
 
+impl rushdown::ast::InlineChars for MultilineTableCandidate {}
+
 impl NodeKind for MultilineTableCandidate {
     fn typ(&self) -> NodeType {
         NodeType::LeafBlock
@@ -1262,7 +1264,6 @@ mod tests {
     use rushdown::matches_kind;
     use rushdown::parser;
     use rushdown::renderer::html;
-    use rushdown::text::BasicReader;
     use rushdown::Result;
 
     // ── Helpers ──────────────────────────────────────────────────────────────
@@ -1280,18 +1281,24 @@ mod tests {
 
     fn parse(input: &str) -> (Arena, NodeRef) {
         let p = make_parser();
-        let mut reader = BasicReader::new(input);
-        p.parse(&mut reader)
+        p.parse(input, rushdown::parser::ParseOptions::default())
     }
 
     fn render(input: &str) -> String {
         let p = make_parser();
-        let mut reader = BasicReader::new(input);
-        let (arena, doc) = p.parse(&mut reader);
+        let (arena, doc) = p.parse(input, rushdown::parser::ParseOptions::default());
         let renderer =
             html::Renderer::with_extensions(html::Options::default(), html::NO_EXTENSIONS);
         let mut out = String::new();
-        renderer.render(&mut out, input, &arena, doc).unwrap();
+        renderer
+            .render(
+                &mut out,
+                input,
+                &arena,
+                doc,
+                rushdown::renderer::RenderOptions::default(),
+            )
+            .unwrap();
         out
     }
 
@@ -1986,8 +1993,7 @@ Following paragraph.
 
     fn parse_with_deflist(input: &str) -> (Arena, NodeRef) {
         let p = make_parser_with_deflist();
-        let mut reader = BasicReader::new(input);
-        p.parse(&mut reader)
+        p.parse(input, rushdown::parser::ParseOptions::default())
     }
 
     /// Returns the first descendant of any of the given kind names.
@@ -2019,11 +2025,11 @@ Following paragraph.
             }
             if arena[node_ref].kind_data().kind_name() == "Text" {
                 let text = rushdown::as_kind_data!(arena, node_ref, Text);
-                let s = text.str(source);
+                let s = text.value().str(source);
                 if !buf.is_empty() && !buf.ends_with(' ') {
                     buf.push(' ');
                 }
-                buf.push_str(s);
+                buf.push_str(&s);
             }
             Ok(WalkStatus::Continue)
         })

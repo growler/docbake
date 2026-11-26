@@ -9,7 +9,7 @@ use anyhow::{bail, Context, Result};
 use rushdown::parser::{self, ParserExtension};
 use rushdown_definition_list::definition_list_parser_extension;
 use rushdown_footnote::footnote_parser_extension;
-use rushdown_meta::{meta_parser_extension, MetaParserOptions};
+use rushdown_meta::meta_parser_extension;
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::graph::resolve::static_asset_path;
@@ -23,7 +23,7 @@ pub(crate) fn markdown_parser() -> parser::Parser {
             ..Default::default()
         },
         parser::gfm(parser::GfmOptions::default())
-            .and(meta_parser_extension(MetaParserOptions::default()))
+            .and(meta_parser_extension())
             .and(definition_list_parser_extension())
             .and(footnote_parser_extension())
             .and(rushdown_link_attribute::link_attribute_parser_extension())

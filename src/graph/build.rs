@@ -7,6 +7,7 @@ use rushdown::ast::{self, Arena, KindData, NodeRef, WalkStatus};
 use rushdown::parser::AstTransformer as _;
 use rushdown::text::BasicReader;
 use rushdown_fenced_div::FencedDiv;
+use rushdown_meta::MetaBlock;
 
 use super::types::{DocumentOccurrence, FootnoteDefinitionEntry, IncludeEntry};
 use super::DocumentGraph;
@@ -110,8 +111,9 @@ impl GraphBuilder {
         };
 
         let parser = markdown_parser();
-        let mut reader = BasicReader::new(&parsed_source);
-        let (mut arena, doc_ref) = parser.parse(&mut reader);
+        let (mut arena, doc_ref) =
+            parser.parse(&parsed_source, rushdown::parser::ParseOptions::default());
+        remove_front_matter_block(&mut arena, doc_ref, &canonical)?;
 
         // Transform diagram images (.puml, .mmd, .drawio) into Diagram AST nodes.
         let source_dir = canonical.parent().unwrap_or(&self.base_dir);
@@ -292,7 +294,7 @@ fn extract_include_spec(
             bail!("include entry link must have a label in {}", path.display());
         }
 
-        let target = link.destination_str(source);
+        let target = link.destination().str(source);
         if target.contains('#') {
             bail!(
                 "include targets may not contain fragments in {}",
@@ -310,6 +312,27 @@ fn extract_include_spec(
 
 fn resolve_include_target(base_dir: &Path, base: &Path, target: &str) -> Result<PathBuf> {
     super::resolve::resolve_base_path(base_dir, base, target)
+}
+
+/// Deletes the front matter block that the meta parser puts first in the
+/// document at `doc_ref`. The metadata stays in the `Document` node.
+/// Returns an error when the front matter of `path` is not a YAML mapping.
+pub(crate) fn remove_front_matter_block(
+    arena: &mut Arena,
+    doc_ref: NodeRef,
+    path: &Path,
+) -> Result<()> {
+    let Some(first) = arena[doc_ref].first_child() else {
+        return Ok(());
+    };
+    if !rushdown::matches_extension_kind!(arena, first, MetaBlock) {
+        return Ok(());
+    }
+    if let Some(error) = rushdown::as_extension_data!(arena, first, MetaBlock).error() {
+        bail!("{}: invalid YAML front matter: {error}", path.display());
+    }
+    first.delete(arena);
+    Ok(())
 }
 
 pub(crate) fn split_front_matter(input: &str) -> (Option<String>, &str) {

@@ -456,8 +456,7 @@ pub(crate) fn apply_meta_overrides(
 /// Dot-separated keys traverse nested objects (e.g. `confluence.server`).
 fn meta_command(input: &Path, key: &str) -> Result<()> {
     use rushdown::ast::KindData;
-    use rushdown::text::BasicReader;
-    use rushdown_meta::{meta_parser_extension, MetaParserOptions};
+    use rushdown_meta::meta_parser_extension;
     use serde_json::{Map as JsonMap, Value as JsonValue};
 
     use crate::graph::types::meta_to_json;
@@ -473,10 +472,10 @@ fn meta_command(input: &Path, key: &str) -> Result<()> {
     // Parse with a minimal rushdown parser (meta extension only).
     let parser = rushdown::parser::Parser::with_extensions(
         rushdown::parser::Options::default(),
-        meta_parser_extension(MetaParserOptions::default()),
+        meta_parser_extension(),
     );
-    let mut reader = BasicReader::new(&content);
-    let (arena, doc_ref) = parser.parse(&mut reader);
+    let (mut arena, doc_ref) = parser.parse(&content, rushdown::parser::ParseOptions::default());
+    crate::graph::build::remove_front_matter_block(&mut arena, doc_ref, input)?;
 
     let KindData::Document(doc) = arena[doc_ref].kind_data() else {
         bail!("{}: failed to parse document", input.display());
@@ -847,9 +846,8 @@ pub(crate) fn enforce_visible_target_policy(
         let location = format!("{}:{}", doc.path.display(), node_ref);
 
         if let rushdown::ast::KindData::Link(link) = doc.arena[node_ref].kind_data() {
-            let target = graph
-                .link_target(doc_id, node_ref)
-                .unwrap_or_else(|| link.destination_str(&doc.source));
+            let destination = link.destination().str(&doc.source);
+            let target = graph.link_target(doc_id, node_ref).unwrap_or(&destination);
             if !is_resolved_internal_target(target) {
                 issues.push(format!(
                     "{location}: unresolved visible link target `{}`",
@@ -859,9 +857,8 @@ pub(crate) fn enforce_visible_target_policy(
         }
 
         if let rushdown::ast::KindData::Image(image) = doc.arena[node_ref].kind_data() {
-            let target = graph
-                .image_target(doc_id, node_ref)
-                .unwrap_or_else(|| image.destination_str(&doc.source));
+            let destination = image.destination().str(&doc.source);
+            let target = graph.image_target(doc_id, node_ref).unwrap_or(&destination);
             if !is_resolved_internal_target(target) {
                 issues.push(format!(
                     "{location}: unresolved visible image target `{}`",
@@ -1091,6 +1088,19 @@ fn check_command(
 pub(crate) const ADMONITION_TYPES: &[&str] =
     &["note", "warning", "important", "caution", "tip", "related"];
 
+/// Returns `true` when every definition of the definition list at `node_ref`
+/// is tight. One loose definition makes the full list loose.
+pub(crate) fn definition_list_is_tight(
+    arena: &rushdown::ast::Arena,
+    node_ref: rushdown::ast::NodeRef,
+) -> bool {
+    arena[node_ref].children(arena).all(|child| {
+        !rushdown::matches_extension_kind!(arena, child, rushdown_definition_list::TermDefinition)
+            || rushdown::as_extension_data!(arena, child, rushdown_definition_list::TermDefinition)
+                .is_tight()
+    })
+}
+
 /// Check whether a space-separated class string contains an admonition type.
 /// Returns the first matching admonition type, if any.
 pub(crate) fn admonition_type(classes: &str) -> Option<&'static str> {
@@ -1122,7 +1132,6 @@ mod tests {
 
     use rushdown::ast::{Arena, KindData, NodeRef};
     use rushdown::parser::{self, ParserExtension};
-    use rushdown::text::BasicReader;
 
     use crate::html::is_inline_image;
 
@@ -1135,8 +1144,7 @@ mod tests {
             parser::gfm(parser::GfmOptions::default())
                 .and(rushdown_link_attribute::link_attribute_parser_extension()),
         );
-        let mut reader = BasicReader::new(source);
-        parser.parse(&mut reader)
+        parser.parse(source, rushdown::parser::ParseOptions::default())
     }
 
     /// Find the first `Image` node anywhere in the tree.

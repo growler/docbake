@@ -37,7 +37,7 @@ use rushdown::parser::{
     AnyAstTransformer, AstTransformer, Context, NoParserOptions, Parser, ParserExtension,
     ParserExtensionFn,
 };
-use rushdown::text::{BasicReader, Index, Reader, Value};
+use rushdown::text::{BasicReader, Decoder, Index, Reader, Value};
 
 #[derive(Debug)]
 struct CellHardBreakTransformer;
@@ -82,7 +82,7 @@ fn process_cell(arena: &mut Arena, cell: NodeRef, source: &str) {
         let is_br = matches!(arena[child].kind_data(), KindData::RawHtml(raw) if is_br_html(&raw.str(source)));
         if is_br {
             let replacement = arena.new_node(Text::with_qualifiers(
-                Value::String(String::new()),
+                Value::String(String::new(), Decoder::Default),
                 TextQualifier::HARD_LINE_BREAK,
             ));
             cell.replace_child(arena, child, replacement);
@@ -108,7 +108,7 @@ fn process_cell(arena: &mut Arena, cell: NodeRef, source: &str) {
         let (cur_str_owned, cur_index, cur_has_soft) = {
             let t = as_kind_data!(arena, cur, Text);
             (
-                t.str(source).to_owned(),
+                t.value().str(source).into_owned(),
                 t.index().map(|idx| (idx.start(), idx.stop())),
                 t.has_qualifiers(TextQualifier::SOFT_LINE_BREAK),
             )
@@ -126,7 +126,7 @@ fn process_cell(arena: &mut Arena, cell: NodeRef, source: &str) {
             .map(|(_n, node)| match node.kind_data() {
                 KindData::Text(t) => {
                     t.has_qualifiers(TextQualifier::SOFT_LINE_BREAK)
-                        && t.str(source).chars().all(char::is_whitespace)
+                        && t.value().str(source).chars().all(char::is_whitespace)
                 }
                 _ => false,
             })
@@ -134,8 +134,10 @@ fn process_cell(arena: &mut Arena, cell: NodeRef, source: &str) {
 
         let new_len = cur_str_owned.len() - marker_len;
         let new_value = match cur_index {
-            Some((start, _stop)) => Value::Index(Index::new(start, start + new_len)),
-            None => Value::String(cur_str_owned[..new_len].to_owned()),
+            Some((start, _stop)) => {
+                Value::Index(Index::new(start, start + new_len), Decoder::Default)
+            }
+            None => Value::String(cur_str_owned[..new_len].to_owned(), Decoder::Default),
         };
 
         if cur_has_soft || next_is_empty_soft {
@@ -312,7 +314,7 @@ mod tests {
             .children(arena)
             .filter_map(|c| match arena[c].kind_data() {
                 KindData::Text(t) => Some((
-                    t.str(source).to_owned(),
+                    t.value().str(source).into_owned(),
                     t.has_qualifiers(TextQualifier::HARD_LINE_BREAK),
                     t.has_qualifiers(TextQualifier::SOFT_LINE_BREAK),
                 )),
@@ -333,8 +335,7 @@ mod tests {
 -----------  -----------
 ";
         let p = make_parser();
-        let mut reader = rushdown::text::BasicReader::new(input);
-        let (arena, doc) = p.parse(&mut reader);
+        let (arena, doc) = p.parse(input, rushdown::parser::ParseOptions::default());
         let cell = first_body_cell(&arena, doc);
         let summary = cell_text_summary(&arena, cell, input);
         // Expect: "First line" with HARD_LINE_BREAK, then "continued".
@@ -369,8 +370,7 @@ mod tests {
 -----------  -----------
 ";
         let p = make_parser();
-        let mut reader = rushdown::text::BasicReader::new(input);
-        let (arena, doc) = p.parse(&mut reader);
+        let (arena, doc) = p.parse(input, rushdown::parser::ParseOptions::default());
         let cell = first_body_cell(&arena, doc);
         let summary = cell_text_summary(&arena, cell, input);
         // We're looking at the first body cell (column 1). It only has
@@ -404,8 +404,7 @@ mod tests {
 -----------  -----------
 ";
         let p = make_parser();
-        let mut reader = rushdown::text::BasicReader::new(input);
-        let (arena, doc) = p.parse(&mut reader);
+        let (arena, doc) = p.parse(input, rushdown::parser::ParseOptions::default());
         let cell = first_body_cell(&arena, doc);
         let summary = cell_text_summary(&arena, cell, input);
         // No HARD_LINE_BREAK should appear in this cell — the trailing `\\`
@@ -425,15 +424,16 @@ mod tests {
 -----------  -----------
 ";
         let p = make_parser();
-        let mut reader = rushdown::text::BasicReader::new(input);
-        let (arena, doc) = p.parse(&mut reader);
+        let (arena, doc) = p.parse(input, rushdown::parser::ParseOptions::default());
         let cell = first_body_cell(&arena, doc);
         // Expect: Text("a"), then an empty Text(HARD_LINE_BREAK), then Text("b").
         let children: Vec<_> = arena[cell].children(&arena).collect();
         let mut found_hard = false;
         for c in &children {
             if let KindData::Text(t) = arena[*c].kind_data() {
-                if t.has_qualifiers(TextQualifier::HARD_LINE_BREAK) && t.str(input).is_empty() {
+                if t.has_qualifiers(TextQualifier::HARD_LINE_BREAK)
+                    && t.value().str(input).is_empty()
+                {
                     found_hard = true;
                 }
             }
@@ -462,14 +462,13 @@ mod tests {
 "
             );
             let p = make_parser();
-            let mut reader = rushdown::text::BasicReader::new(&input);
-            let (arena, doc) = p.parse(&mut reader);
+            let (arena, doc) = p.parse(&input, rushdown::parser::ParseOptions::default());
             let cell = first_body_cell(&arena, doc);
             let children: Vec<_> = arena[cell].children(&arena).collect();
             assert!(
                 children.iter().any(|c| matches!(arena[*c].kind_data(),
                     KindData::Text(t) if t.has_qualifiers(TextQualifier::HARD_LINE_BREAK)
-                        && t.str(&input).is_empty())),
+                        && t.value().str(&input).is_empty())),
                 "expected hard-break Text for variant {variant}; got children {children:?}"
             );
             assert!(
@@ -492,8 +491,7 @@ mod tests {
 +----------+----------+
 ";
         let p = make_parser();
-        let mut reader = rushdown::text::BasicReader::new(input);
-        let (arena, doc) = p.parse(&mut reader);
+        let (arena, doc) = p.parse(input, rushdown::parser::ParseOptions::default());
         let cell = first_body_cell(&arena, doc);
         let summary = cell_text_summary(&arena, cell, input);
         assert!(

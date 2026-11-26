@@ -116,6 +116,8 @@ impl Diagram {
     }
 }
 
+impl rushdown::ast::InlineChars for Diagram {}
+
 impl NodeKind for Diagram {
     fn typ(&self) -> NodeType {
         NodeType::LeafBlock

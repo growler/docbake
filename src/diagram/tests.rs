@@ -1,7 +1,6 @@
 use super::*;
 use rushdown::matches_extension_kind;
 use rushdown::parser;
-use rushdown::text::BasicReader;
 
 fn test_parser() -> parser::Parser {
     parser::Parser::with_extensions(
@@ -16,8 +15,7 @@ fn test_parser() -> parser::Parser {
 
 fn parse(source: &str) -> (Arena, NodeRef) {
     let parser = test_parser();
-    let mut reader = BasicReader::new(source);
-    parser.parse(&mut reader)
+    parser.parse(source, rushdown::parser::ParseOptions::default())
 }
 
 #[test]
@@ -75,8 +73,7 @@ fn disabled_mermaid_leaves_code_block() {
         parser::gfm(parser::GfmOptions::default()).and(diagram_parser_extension(opts)),
     );
     let source = "```mermaid\ngraph LR\n```\n";
-    let mut reader = BasicReader::new(source);
-    let (arena, doc_ref) = parser.parse(&mut reader);
+    let (arena, doc_ref) = parser.parse(source, rushdown::parser::ParseOptions::default());
 
     let children: Vec<_> = arena[doc_ref].children(&arena).collect();
     assert!(
@@ -123,8 +120,7 @@ fn disabled_typst_leaves_code_block() {
         parser::gfm(parser::GfmOptions::default()).and(diagram_parser_extension(opts)),
     );
     let source = "```typst\n#rect(width: 50pt, height: 30pt)\n```\n";
-    let mut reader = BasicReader::new(source);
-    let (arena, doc_ref) = parser.parse(&mut reader);
+    let (arena, doc_ref) = parser.parse(source, rushdown::parser::ParseOptions::default());
 
     let children: Vec<_> = arena[doc_ref].children(&arena).collect();
     assert!(
@@ -232,8 +228,7 @@ fn disabled_d2_leaves_code_block() {
         parser::gfm(parser::GfmOptions::default()).and(diagram_parser_extension(opts)),
     );
     let source = "```d2\nx -> y: hello\n```\n";
-    let mut reader = BasicReader::new(source);
-    let (arena, doc_ref) = parser.parse(&mut reader);
+    let (arena, doc_ref) = parser.parse(source, rushdown::parser::ParseOptions::default());
 
     let children: Vec<_> = arena[doc_ref].children(&arena).collect();
     assert!(
@@ -271,8 +266,7 @@ fn parse_with_attrs(source: &str) -> (Arena, NodeRef) {
             .and(crate::code_block_attribute::code_block_attribute_parser_extension())
             .and(diagram_parser_extension(DiagramParserOptions::default())),
     );
-    let mut reader = BasicReader::new(source);
-    parser.parse(&mut reader)
+    parser.parse(source, rushdown::parser::ParseOptions::default())
 }
 
 #[test]

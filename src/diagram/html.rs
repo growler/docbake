@@ -63,8 +63,6 @@ fn make_svg_responsive(svg: &str) -> String {
     }
 }
 
-const HAS_MERMAID_DIAGRAM: &str = "docbake-diagram-has-mermaid";
-
 const DEFAULT_MERMAID_CDN_URL: &str =
     "https://cdn.jsdelivr.net/npm/mermaid@latest/dist/mermaid.esm.min.mjs";
 
@@ -106,6 +104,8 @@ pub struct DiagramHtmlRendererOptions {
     pub themes: DiagramThemes,
     /// Artifact cache for rendered diagrams.
     pub cache: crate::cache::Cache,
+    /// Page render state. The renderer sets `has_mermaid_diagram` in it.
+    pub state: Rc<crate::html::RenderState>,
 }
 
 impl RendererOptions for DiagramHtmlRendererOptions {}
@@ -113,24 +113,13 @@ impl RendererOptions for DiagramHtmlRendererOptions {}
 struct DiagramHtmlRenderer<W: TextWrite> {
     _phantom: std::marker::PhantomData<W>,
     options: DiagramHtmlRendererOptions,
-    writer: rd_html::Writer,
-    has_mermaid_diagram: ContextKey<BoolValue>,
 }
 
 impl<W: TextWrite> DiagramHtmlRenderer<W> {
-    fn new(
-        html_opts: rd_html::Options,
-        options: DiagramHtmlRendererOptions,
-        reg: Rc<RefCell<ContextKeyRegistry>>,
-    ) -> Self {
-        let has_mermaid_diagram = reg
-            .borrow_mut()
-            .get_or_create::<BoolValue>(HAS_MERMAID_DIAGRAM);
+    fn new(options: DiagramHtmlRendererOptions) -> Self {
         Self {
             _phantom: std::marker::PhantomData,
             options,
-            writer: rd_html::Writer::with_options(html_opts),
-            has_mermaid_diagram,
         }
     }
 }
@@ -143,7 +132,7 @@ impl<W: TextWrite> RenderNode<W> for DiagramHtmlRenderer<W> {
         arena: &'a Arena,
         node_ref: NodeRef,
         entering: bool,
-        ctx: &mut renderer::Context,
+        _ctx: &mut renderer::Context,
     ) -> Result<WalkStatus> {
         let has_attrs = !arena[node_ref].attributes().is_empty();
 
@@ -198,20 +187,20 @@ impl<W: TextWrite> RenderNode<W> for DiagramHtmlRenderer<W> {
                 let _ = write!(tag, " {key}=\"{v}\"");
             }
             tag.push('>');
-            self.writer.write_html(w, &tag)?;
+            rd_html::write_html(w, &tag)?;
         }
 
         let diagram = as_extension_data!(arena, node_ref, Diagram);
         match diagram.diagram_type() {
             DiagramType::Mermaid => {
-                ctx.insert(self.has_mermaid_diagram, true);
+                self.options.state.has_mermaid_diagram.set(true);
                 if entering {
-                    self.writer.write_safe_str(w, "<pre class=\"mermaid\">\n")?;
+                    w.write_str("<pre class=\"mermaid\">\n")?;
                     let src = collect_diagram_source(diagram, source);
                     let src = apply_mermaid_theme(&src, self.options.themes.mermaid.as_deref());
-                    self.writer.raw_write(w, &src)?;
+                    rd_html::write_text(w, &src)?;
                 } else {
-                    self.writer.write_safe_str(w, "</pre>\n")?;
+                    w.write_str("</pre>\n")?;
                 }
             }
             DiagramType::PlantUml => {
@@ -234,12 +223,10 @@ impl<W: TextWrite> RenderNode<W> for DiagramHtmlRenderer<W> {
                             } else {
                                 svg.into_owned()
                             };
-                            self.writer.write_html(w, &svg)?;
+                            rd_html::write_html(w, &svg)?;
                         }
                         Err(e) => {
-                            self.writer.write_html(
-                                w,
-                                &format!(
+                            rd_html::write_html(w, &format!(
                                     "<pre class=\"plantuml-error\">Error rendering PlantUML diagram: {e}</pre>"
                                 ),
                             )?;
@@ -262,12 +249,10 @@ impl<W: TextWrite> RenderNode<W> for DiagramHtmlRenderer<W> {
                             } else {
                                 svg
                             };
-                            self.writer.write_html(w, &svg)?;
+                            rd_html::write_html(w, &svg)?;
                         }
                         Err(e) => {
-                            self.writer.write_html(
-                                w,
-                                &format!(
+                            rd_html::write_html(w, &format!(
                                     "<pre class=\"typst-error\">Error rendering Typst diagram: {e}</pre>"
                                 ),
                             )?;
@@ -297,12 +282,10 @@ impl<W: TextWrite> RenderNode<W> for DiagramHtmlRenderer<W> {
                                 } else {
                                     svg
                                 };
-                                self.writer.write_html(w, &svg)?;
+                                rd_html::write_html(w, &svg)?;
                             }
                             Err(e) => {
-                                self.writer.write_html(
-                                    w,
-                                    &format!(
+                                rd_html::write_html(w, &format!(
                                         "<pre class=\"drawio-error\">Error rendering Draw.io diagram: {e}</pre>"
                                     ),
                                 )?;
@@ -324,10 +307,10 @@ impl<W: TextWrite> RenderNode<W> for DiagramHtmlRenderer<W> {
                             } else {
                                 svg
                             };
-                            self.writer.write_html(w, &svg)?;
+                            rd_html::write_html(w, &svg)?;
                         }
                         Err(e) => {
-                            self.writer.write_html(
+                            rd_html::write_html(
                                 w,
                                 &format!(
                                     "<pre class=\"d2-error\">Error rendering D2 diagram: {e}</pre>"
@@ -341,7 +324,7 @@ impl<W: TextWrite> RenderNode<W> for DiagramHtmlRenderer<W> {
 
         // Close the attribute wrapper <div> after the diagram content.
         if has_attrs && !entering {
-            self.writer.write_safe_str(w, "</div>\n")?;
+            w.write_str("</div>\n")?;
         }
 
         Ok(WalkStatus::Continue)
@@ -358,55 +341,23 @@ where
 }
 
 // ============================================================================
-// Post-render hook (Mermaid CDN script injection)
+// Mermaid CDN script
 // ============================================================================
 
-struct DiagramPostRenderHook<W: TextWrite> {
-    _phantom: std::marker::PhantomData<W>,
-    writer: rd_html::Writer,
-    mermaid: MermaidHtmlMode,
-    has_mermaid_diagram: ContextKey<BoolValue>,
-}
-
-impl<W: TextWrite> DiagramPostRenderHook<W> {
-    fn new(
-        html_opts: rd_html::Options,
-        options: DiagramHtmlRendererOptions,
-        reg: Rc<RefCell<ContextKeyRegistry>>,
-    ) -> Self {
-        let has_mermaid_diagram = reg
-            .borrow_mut()
-            .get_or_create::<BoolValue>(HAS_MERMAID_DIAGRAM);
-        Self {
-            _phantom: std::marker::PhantomData,
-            writer: rd_html::Writer::with_options(html_opts),
-            mermaid: options.mermaid,
-            has_mermaid_diagram,
-        }
+/// Writes the `<script>` element that loads Mermaid when the diagram renderer
+/// wrote a client-side Mermaid diagram into the page of `options.state`.
+pub(crate) fn write_mermaid_script<W: TextWrite>(
+    w: &mut W,
+    options: &DiagramHtmlRendererOptions,
+) -> Result<()> {
+    if options.state.has_mermaid_diagram.get() {
+        let MermaidHtmlMode::ClientSide { ref mermaid_url } = options.mermaid;
+        rd_html::write_html(
+            w,
+            &format!("<script type=\"module\">\nimport mermaid from '{mermaid_url}';\n</script>\n"),
+        )?;
     }
-}
-
-impl<W: TextWrite> PostRender<W> for DiagramPostRenderHook<W> {
-    fn post_render(
-        &self,
-        w: &mut W,
-        _source: &str,
-        _arena: &Arena,
-        _node_ref: NodeRef,
-        _render: &dyn Render<W>,
-        ctx: &mut renderer::Context,
-    ) -> Result<()> {
-        if *ctx.get(self.has_mermaid_diagram).unwrap_or(&false) {
-            let MermaidHtmlMode::ClientSide { ref mermaid_url } = self.mermaid;
-            self.writer.write_html(
-                w,
-                &format!(
-                    "<script type=\"module\">\nimport mermaid from '{mermaid_url}';\n</script>\n"
-                ),
-            )?;
-        }
-        Ok(())
-    }
+    Ok(())
 }
 
 /// Returns a renderer extension that renders [`Diagram`] nodes in HTML.
@@ -417,7 +368,6 @@ where
     W: TextWrite + 'cb,
 {
     RendererExtensionFn::new(move |r: &mut Renderer<'cb, W>| {
-        r.add_post_render_hook(DiagramPostRenderHook::new, options.clone(), 500);
         r.add_node_renderer(DiagramHtmlRenderer::new, options);
     })
 }

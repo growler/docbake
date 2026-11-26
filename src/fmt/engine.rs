@@ -23,8 +23,7 @@ pub(crate) fn format_markdown(input: &str) -> Result<String> {
     let (front_matter, body) = crate::graph::build::split_front_matter(input);
 
     let parser = crate::build::markdown_parser();
-    let mut reader = BasicReader::new(body);
-    let (mut arena, doc_ref) = parser.parse(&mut reader);
+    let (mut arena, doc_ref) = parser.parse(body, rushdown::parser::ParseOptions::default());
 
     {
         let mut reader = BasicReader::new(body);

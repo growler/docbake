@@ -78,7 +78,7 @@ fn byte_offset_to_line(source: &str, offset: usize) -> usize {
 /// for heap-allocated strings (synthesised by transforms).
 fn destination_byte_offset(dest: &text::Value) -> Option<usize> {
     match dest {
-        text::Value::Index(idx) => Some(idx.start()),
+        text::Value::Index(idx, _) => Some(idx.start()),
         _ => None,
     }
 }
@@ -305,7 +305,7 @@ fn caption_text_content(arena: &Arena, caption_ref: NodeRef, source: &str) -> St
 ///   - `"rust"` → `None`
 ///   - `""` / no info string → `None`
 fn code_block_description(code_block: &CodeBlock, source: &str) -> Option<String> {
-    let info = code_block.info_str(source)?;
+    let info = code_block.info().as_option()?.str(source);
     let trimmed = info.trim();
     if trimmed.is_empty() {
         return None;
@@ -364,15 +364,18 @@ fn rewrite_graph_targets(
                     doc_id,
                     node_ref,
                     is_image: false,
-                    destination: link.destination_str(&doc.source).to_string(),
-                    link_title: link.title().map(|title| title.str(&doc.source).to_string()),
+                    destination: link.destination().str(&doc.source).to_string(),
+                    link_title: link
+                        .title()
+                        .as_option()
+                        .map(|title| title.str(&doc.source).to_string()),
                     dest_byte_offset: destination_byte_offset(link.destination()),
                 }),
                 KindData::Image(image) => Some(TargetInfo {
                     doc_id,
                     node_ref,
                     is_image: true,
-                    destination: image.destination_str(&doc.source).to_string(),
+                    destination: image.destination().str(&doc.source).to_string(),
                     link_title: None,
                     dest_byte_offset: destination_byte_offset(image.destination()),
                 }),
@@ -449,9 +452,9 @@ pub(crate) fn heading_text(arena: &Arena, node_ref: NodeRef, source: &str) -> St
             return Ok(WalkStatus::Continue);
         }
         match arena[child_ref].kind_data() {
-            KindData::Text(value) => text.push_str(value.str(source)),
+            KindData::Text(value) => text.push_str(&value.value().str(source)),
             KindData::CodeSpan(cs) => {
-                text.push_str(&cs.str(source));
+                text.push_str(&cs.value().value(source));
             }
             _ => {}
         }

@@ -34,7 +34,7 @@ impl MarkdownFmtRenderer {
     ) -> Result<()> {
         match arena[node_ref].kind_data() {
             KindData::Text(text) => {
-                out.push_str(text.str(source));
+                out.push_str(&text.value().str(source));
                 if text.has_qualifiers(TextQualifier::HARD_LINE_BREAK) {
                     out.push_str(hard_line_break_marker(arena, node_ref, source));
                 } else if text.has_qualifiers(TextQualifier::SOFT_LINE_BREAK) {
@@ -42,7 +42,7 @@ impl MarkdownFmtRenderer {
                 }
             }
             KindData::CodeSpan(cs) => {
-                let text = cs.str(source).to_string();
+                let text = cs.value().value(source).to_string();
                 let fence = backtick_fence(&text);
                 let preserve_padding = code_span_has_explicit_padding(arena, node_ref, source);
                 if preserve_padding || text.starts_with('`') || text.ends_with('`') {
@@ -69,7 +69,7 @@ impl MarkdownFmtRenderer {
                 out.push_str("~~");
             }
             KindData::Link(link) => match link.link_kind() {
-                LinkKind::Auto(auto) => out.push_str(auto.text_str(source)),
+                LinkKind::Auto(auto) => out.push_str(&auto.text().str(source)),
                 LinkKind::Reference(_) => {
                     if let Some(raw) = original_reference_link(arena, node_ref, source) {
                         out.push_str(&raw);
@@ -84,8 +84,8 @@ impl MarkdownFmtRenderer {
                     self.render_inline_children(out, arena, node_ref, source)?;
                     out.push(']');
                     out.push('(');
-                    out.push_str(&format_inline_destination(link.destination_str(source)));
-                    if let Some(title) = link.title() {
+                    out.push_str(&format_inline_destination(&link.destination().str(source)));
+                    if let Some(title) = link.title().as_option() {
                         write!(out, " \"{}\"", escape_md_title(&title.str(source)))?;
                     }
                     out.push(')');
@@ -96,8 +96,8 @@ impl MarkdownFmtRenderer {
                 self.render_image_alt_text(out, arena, node_ref, source)?;
                 out.push(']');
                 out.push('(');
-                out.push_str(&format_inline_destination(image.destination_str(source)));
-                if let Some(title) = image.title() {
+                out.push_str(&format_inline_destination(&image.destination().str(source)));
+                if let Some(title) = image.title().as_option() {
                     write!(out, " \"{}\"", escape_md_title(&title.str(source)))?;
                 }
                 out.push(')');
@@ -141,8 +141,8 @@ impl MarkdownFmtRenderer {
     ) -> Result<()> {
         for child in arena[node_ref].children(arena) {
             match arena[child].kind_data() {
-                KindData::Text(text) => out.push_str(text.str(source)),
-                KindData::CodeSpan(cs) => out.push_str(&cs.str(source)),
+                KindData::Text(text) => out.push_str(&text.value().str(source)),
+                KindData::CodeSpan(cs) => out.push_str(&cs.value().value(source)),
                 _ => self.render_inline(out, arena, child, source)?,
             }
         }
