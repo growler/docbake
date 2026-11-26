@@ -102,7 +102,10 @@ fn rejects_non_top_level_include_blocks() {
 fn root_front_matter_is_not_in_the_ast() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
-    write(&root.join("doc/index.md"), "---\ntitle: Root\n---\n# Root\n");
+    write(
+        &root.join("doc/index.md"),
+        "---\ntitle: Root\n---\n# Root\n",
+    );
 
     let prepared = prepare_document(
         &DebugDumper::new(false),

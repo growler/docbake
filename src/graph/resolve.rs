@@ -320,10 +320,9 @@ fn code_block_description(code_block: &CodeBlock, source: &str) -> Option<String
         };
 
     // Strip the leading language token (first whitespace-delimited word).
-    let after_lang = match without_attrs.find(char::is_whitespace) {
-        Some(pos) => without_attrs[pos..].trim_start(),
-        None => return None, // Only a language token, no description.
-    };
+    // Only a language token means no description.
+    let pos = without_attrs.find(char::is_whitespace)?;
+    let after_lang = without_attrs[pos..].trim_start();
 
     if after_lang.is_empty() {
         None
