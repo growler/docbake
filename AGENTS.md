@@ -150,12 +150,8 @@ included. `packages.<system>.default` builds the same derivation for
 
 ## Release Process
 
-Two independent version lines, each with its own tag namespace (tags use the
-`v*` / `tree/v*` form — never a `debian/` prefix):
-
-- **Package** (`vX.Y.Z`) — the `docbake` crate / Debian package.
-- **Builder tree** (`tree/vN`) — the debles doc-server image that bundles
-  the package.
+Package versions use tags of the form `vX.Y.Z` (never a `debian/` prefix) for
+the `docbake` crate and Debian package.
 
 Release a new package version:
 
@@ -172,20 +168,6 @@ Release a new package version:
    own clamp is one-directional and is not sufficient on its own).
 3. **Commit** the bump (`Cargo.toml`, `Cargo.lock`, `debian/changelog`) and tag
    `vX.Y.Z`.
-
-Refresh the builder tree to ship the new package:
-
-4. Point the `_DOCBAKE_DEB` constant in `server/doc-server.les` at the new
-   `../target/docbake_X.Y.Z_amd64.deb`.
-5. Refresh the lock file: `debles lock server/doc-server.les` (re-hashes the
-   local `.deb` and re-resolves against the pinned snapshot).
-6. Verify the tree builds: `scripts/build-doc-server` (no flags; (re)builds the
-   `image` and `container_image` targets). `--update` additionally re-locks
-   before building; `--version <tree-version>` is CI-only and commits/publishes
-   the OSTree image.
-7. Commit the tree update (`server/doc-server.les`,
-   `server/doc-server.amd64.lock`) and tag `tree/vN` (increment the latest
-   `tree/v*`).
 
 ## Include Mechanism
 
@@ -269,23 +251,8 @@ Summary with line counts for quick scanning.
 
 ## Continuous Learning
 
-Start memory workflow at `docs/memory/operating-memory.md` (single front door).
-
-Guidance:
-
-1. For non-trivial and meaningful work, append an event in
-   `docs/memory/events/YYYY-MM.md`.
-2. Minimum bar for event entries: include `Decision`, `Reuse next time`, and
-   `Evidence`.
-3. Update `docs/memory/operating-memory.md` only when active guidance changes.
-4. Include failed paths/root cause when the miss is meaningful.
-5. If a pattern repeats, promote it to `Distilled Learnings`.
-
-Optional fields when useful: `Scope`, `What worked`, `What did not work`, `Risk
-left`, `Revisit trigger`, `ROI`.
-
-Cross-session learnings still go in `MEMORY.md` (auto-loaded). Decision
-rationale belongs in commit messages and `docs/DECISIONS.md`.
+Cross-session learnings go in `MEMORY.md` (auto-loaded). Decision rationale
+belongs in commit messages.
 
 **After hitting a dead end**: identify root cause, note what didn't work,
 document if a future agent would hit the same wall.
