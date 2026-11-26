@@ -1,3 +1,13 @@
+docbake (0.2.1) unstable; urgency=medium
+
+  * feat(skill): add the docbake-docs agent skill and Claude Code plugin
+    manifests
+  * feat(ci): add a reusable GitHub Action to check and build docs
+  * fix(ci): install Typst and retry downloads in the Pages build
+  * ci: publish the manual to GitHub Pages on release tags
+
+ -- Alexey Naidyonov <alexey.naidyonov@gmail.com>  Thu, 26 Nov 2026 19:46:47 +0100
+
 docbake (0.2.0) unstable; urgency=medium
 
   * feat!: add the front-matter logo field and make the theme logo optional
