@@ -22,6 +22,10 @@
 //!
 //! The `CONFLUENCE_TOKEN` environment variable, when set, takes
 //! precedence over any stored credential.
+//!
+//! The `gdoc` section can hold the Google OAuth2 client as the keys
+//! `client_id` and `client_secret`. The `DOCBAKE_GDOC_CLIENT_ID` and
+//! `DOCBAKE_GDOC_CLIENT_SECRET` environment variables take precedence.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -173,6 +177,63 @@ pub(crate) fn store_gdoc_oauth(credential_json: &str) -> Result<()> {
 pub(crate) fn load_gdoc_oauth() -> Result<Option<String>> {
     let store = read_store()?;
     Ok(store.get(GDOC_KEY).and_then(|m| m.get("oauth")).cloned())
+}
+
+/// Environment variable with the Google OAuth2 client ID.
+const GDOC_CLIENT_ID_ENV: &str = "DOCBAKE_GDOC_CLIENT_ID";
+
+/// Environment variable with the Google OAuth2 client secret.
+const GDOC_CLIENT_SECRET_ENV: &str = "DOCBAKE_GDOC_CLIENT_SECRET";
+
+/// Resolve the Google OAuth2 client ID and client secret of a Google Cloud
+/// "Desktop app" OAuth client.
+///
+/// For each value, the environment variable (`DOCBAKE_GDOC_CLIENT_ID`,
+/// `DOCBAKE_GDOC_CLIENT_SECRET`) has priority over the `client_id` and
+/// `client_secret` keys in the `gdoc` section of the credential store.
+pub(crate) fn resolve_gdoc_oauth_client() -> Result<(String, String)> {
+    let store = read_store()?;
+    if let Some(client) = gdoc_oauth_client(|name| std::env::var(name).ok(), &store) {
+        return Ok(client);
+    }
+
+    let path_hint = credentials_file_path()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "<config-dir>/docbake/credentials.json".to_string());
+
+    bail!(
+        "Google OAuth2 client not configured.\n\
+         \n\
+         Create an OAuth client of type \"Desktop app\" in Google Cloud Console,\n\
+         then provide its client ID and client secret in one of these ways:\n\
+         \n\
+         1. Set the {GDOC_CLIENT_ID_ENV} and {GDOC_CLIENT_SECRET_ENV}\n\
+            environment variables, or\n\
+         2. Add the \"client_id\" and \"client_secret\" keys to the \"gdoc\"\n\
+            section of {path_hint}",
+    );
+}
+
+/// Select the OAuth2 client ID and secret from `env` and `store`.
+///
+/// Empty environment values are ignored.
+fn gdoc_oauth_client(
+    env: impl Fn(&str) -> Option<String>,
+    store: &CredentialStore,
+) -> Option<(String, String)> {
+    let lookup = |var: &str, key: &str| {
+        env(var).filter(|v| !v.is_empty()).or_else(|| {
+            store
+                .get(GDOC_KEY)
+                .and_then(|m| m.get(key))
+                .filter(|v| !v.is_empty())
+                .cloned()
+        })
+    };
+    Some((
+        lookup(GDOC_CLIENT_ID_ENV, "client_id")?,
+        lookup(GDOC_CLIENT_SECRET_ENV, "client_secret")?,
+    ))
 }
 
 /// Resolve a Google Docs access token.
@@ -338,6 +399,35 @@ mod tests {
             normalize_server("https://HOST.COM:8443/"),
             "https://host.com:8443"
         );
+    }
+
+    fn gdoc_store(id: &str, secret: &str) -> CredentialStore {
+        let mut store = CredentialStore::new();
+        let gdoc = store.entry(GDOC_KEY.to_string()).or_default();
+        gdoc.insert("client_id".to_string(), id.to_string());
+        gdoc.insert("client_secret".to_string(), secret.to_string());
+        store
+    }
+
+    #[test]
+    fn gdoc_oauth_client_env_has_priority_over_store() {
+        let store = gdoc_store("store-id", "store-secret");
+        let env = |name: &str| match name {
+            GDOC_CLIENT_ID_ENV => Some("env-id".to_string()),
+            GDOC_CLIENT_SECRET_ENV => Some(String::new()),
+            _ => None,
+        };
+        assert_eq!(
+            gdoc_oauth_client(env, &store),
+            Some(("env-id".to_string(), "store-secret".to_string()))
+        );
+    }
+
+    #[test]
+    fn gdoc_oauth_client_requires_both_values() {
+        let store = gdoc_store("store-id", "");
+        assert_eq!(gdoc_oauth_client(|_| None, &store), None);
+        assert_eq!(gdoc_oauth_client(|_| None, &CredentialStore::new()), None);
     }
 
     #[test]

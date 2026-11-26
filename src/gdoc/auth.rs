@@ -26,17 +26,6 @@ const GDOC_SCOPES: &str =
     "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/documents";
 const GDOC_SCOPES_URLENC: &str = "https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fdrive.file%20https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fdocuments";
 
-/// Hardcoded OAuth2 client ID for the docbake desktop application.
-///
-/// This is not a secret — Google's security model for "Desktop" app type
-/// relies on the redirect to `http://127.0.0.1` + PKCE, not on client
-/// secret confidentiality.
-///
-/// Replace these with your own values from Google Cloud Console.
-const OAUTH_CLIENT_ID: &str =
-    "YOUR_CLIENT_ID.apps.googleusercontent.com";
-const OAUTH_CLIENT_SECRET: &str = "YOUR_CLIENT_SECRET";
-
 // ── Service account types ───────────────────────────────────────────────
 
 /// Subset of a Google service account JSON key file.
@@ -148,6 +137,7 @@ pub(crate) fn oauth2_authorization_flow() -> Result<OAuthCredential> {
     // Generate PKCE code verifier (43-128 chars, RFC 7636).
     let code_verifier = generate_code_verifier()?;
     let code_challenge = generate_code_challenge(&code_verifier);
+    let (client_id, client_secret) = crate::credentials::resolve_gdoc_oauth_client()?;
 
     // Exchange code for tokens — agent reused below.
     let agent = ureq::Agent::new_with_defaults();
@@ -166,7 +156,7 @@ pub(crate) fn oauth2_authorization_flow() -> Result<OAuthCredential> {
 
     let auth_url = format!(
         "{GOOGLE_AUTH_URL}?\
-         client_id={OAUTH_CLIENT_ID}&\
+         client_id={client_id}&\
          redirect_uri={redirect_uri}&\
          response_type=code&\
          scope={GDOC_SCOPES_URLENC}&\
@@ -231,8 +221,8 @@ pub(crate) fn oauth2_authorization_flow() -> Result<OAuthCredential> {
         .as_secs();
 
     let form = format!(
-        "client_id={OAUTH_CLIENT_ID}&\
-         client_secret={OAUTH_CLIENT_SECRET}&\
+        "client_id={client_id}&\
+         client_secret={client_secret}&\
          code={code}&\
          code_verifier={code_verifier}&\
          grant_type=authorization_code&\
@@ -267,10 +257,11 @@ pub(crate) fn refresh_access_token(refresh_token: &str) -> Result<(String, u64)>
         .context("system clock error")?
         .as_secs();
 
+    let (client_id, client_secret) = crate::credentials::resolve_gdoc_oauth_client()?;
     let agent = ureq::Agent::new_with_defaults();
     let form = format!(
-        "client_id={OAUTH_CLIENT_ID}&\
-         client_secret={OAUTH_CLIENT_SECRET}&\
+        "client_id={client_id}&\
+         client_secret={client_secret}&\
          refresh_token={refresh_token}&\
          grant_type=refresh_token"
     );
