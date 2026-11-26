@@ -1,0 +1,12 @@
+{
+  "name": "docbake",
+  "owner": { "name": "Alexey Naidyonov" },
+  "description": "Plugins for the docbake documentation builder.",
+  "plugins": [
+    {
+      "name": "docbake-docs",
+      "source": "./",
+      "description": "Skill for writing and editing Markdown documentation that docbake compiles to HTML, PDF, DOCX, Confluence, or Google Docs."
+    }
+  ]
+}

@@ -195,6 +195,29 @@ build:docs:confluence:
 For the Confluence job, set the `CONFLUENCE_TOKEN` CI/CD variable to a Personal
 Access Token.
 
+## Agent skill
+
+The `docbake-docs` skill teaches a coding agent the docbake Markdown syntax and
+the `check` and `fmt` commands. The skill is in `skills/docbake-docs/`. It uses
+the [Agent Skills](https://agentskills.io) format.
+
+Install the skill in Claude Code as a plugin:
+
+```text
+/plugin marketplace add growler/docbake
+/plugin install docbake-docs@docbake
+```
+
+Install the skill for other agents (Codex, Cursor, OpenCode, and others) with
+the [skills](https://github.com/vercel-labs/skills) CLI:
+
+```bash
+npx skills add growler/docbake
+```
+
+To install the skill manually, copy `skills/docbake-docs/` to the skills
+directory of the agent, for example `~/.claude/skills/docbake-docs/`.
+
 ## Special thanks
 
 Special thanks to Yusuke Inuzuka ([@yuin](https://github.com/yuin)), the author
