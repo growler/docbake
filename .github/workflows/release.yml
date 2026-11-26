@@ -79,6 +79,32 @@ jobs:
             --verify-tag \
             --generate-notes
 
+  homebrew:
+    name: update Homebrew tap
+    needs: github-release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: growler/homebrew-tap
+          ssh-key: ${{ secrets.HOMEBREW_TAP_KEY }}
+          path: tap
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --pattern SHA256SUMS --dir "$RUNNER_TEMP"
+          .github/homebrew/formula.sh "${GITHUB_REF_NAME#v}" \
+            "$RUNNER_TEMP/SHA256SUMS" > tap/Formula/docbake.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/docbake.rb
+          git commit -m "feat(docbake): update to $GITHUB_REF_NAME"
+          git push
+
   crates-io:
     name: publish to crates.io
     needs: build

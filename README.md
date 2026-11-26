@@ -22,6 +22,23 @@ documentation for the latest release is at
 - Publication: publication to Confluence Server through the REST API, and to
   Google Docs
 
+## Installation
+
+On macOS and Linux, install docbake with Homebrew:
+
+```bash
+brew install growler/tap/docbake
+```
+
+The formula also installs Typst for PDF output. To install the diagram tools,
+add `--with-d2`, `--with-mermaid-cli`, or `--with-plantuml`.
+
+Other ways to install docbake:
+
+- Download a binary from the
+  [releases](https://github.com/growler/docbake/releases).
+- Build from source with `cargo install docbake`.
+
 ## Usage
 
 ```bash

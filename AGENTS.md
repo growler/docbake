@@ -91,7 +91,12 @@ GitHub Actions workflows are in `.github/workflows/`:
   (`x86_64-unknown-linux-musl`, `aarch64-apple-darwin`, `x86_64-apple-darwin`,
   `x86_64-pc-windows-msvc`), creates a GitHub release with the archives and
   `SHA256SUMS`, and publishes the crate to crates.io. The crates.io job uses the
-  `crates-io` environment and the `CARGO_REGISTRY_TOKEN` secret.
+  `crates-io` environment and the `CARGO_REGISTRY_TOKEN` secret. The
+  `homebrew` job runs `.github/homebrew/formula.sh <version> SHA256SUMS` to
+  write `Formula/docbake.rb` and pushes it to the tap repository
+  `growler/homebrew-tap` (`brew install growler/tap/docbake`). It uses the
+  `HOMEBREW_TAP_KEY` secret. This secret is the private half of a deploy key
+  with write access on the tap repository.
 - `pages.yml` runs when a `vX.Y.Z` tag is pushed, or by hand. It runs the local
   action with a debug build and all diagram tools to build `doc/en/index.md`
   with `-f site -b doc`, and deploys the result to GitHub Pages at

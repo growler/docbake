@@ -489,6 +489,15 @@ rewritten blocks.
 
 You can install the Builder in one of these ways:
 
+- On macOS and Linux, use [Homebrew]:
+
+    ~~~
+  $ brew install growler/tap/docbake
+    ~~~
+
+  The formula also installs Typst. To install the diagram tools, add the options
+  `--with-d2`, `--with-mermaid-cli`, and `--with-plantuml`.
+
 - If Rust is installed, use the `cargo install` command:
 
     ~~~
