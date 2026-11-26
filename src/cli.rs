@@ -15,7 +15,7 @@ pub struct Cli {
     /// Theme name or directory.
     ///
     /// Resolution order:
-    /// 1. built-in embedded theme name (`blank`, `blank`, `digitaltide`)
+    /// 1. built-in embedded theme name (`blank`)
     /// 2. local filesystem directory
     ///
     /// When omitted the built-in `blank` theme is used.

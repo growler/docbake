@@ -104,7 +104,7 @@ theme-dir/
 ```
 
 Embedded themes are bundled from `themes/` via `include_dir`.
-Current built-ins: `blank`, `blank` (default), `digitaltide`.
+Current built-in: `blank` (default).
 Use `init-theme` to export a selected theme for customisation.
 
 Template context variables are documented in comments at the top of each default

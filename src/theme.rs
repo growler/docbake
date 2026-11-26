@@ -14,7 +14,7 @@ use crate::docx::params::DocxParams;
 static EMBEDDED_THEMES_ROOT: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/themes");
 
 pub(crate) const EMBEDDED_DEFAULT_THEME: &str = "blank";
-pub(crate) const EMBEDDED_THEME_NAMES: &[&str] = &["blank", "blank", "digitaltide"];
+pub(crate) const EMBEDDED_THEME_NAMES: &[&str] = &["blank"];
 
 // ============================================================================
 // Convention file names
@@ -48,7 +48,7 @@ impl Theme {
     /// Resolve theme selection from CLI `-t/--theme`.
     ///
     /// Resolution order for provided values:
-    /// 1. embedded top-level theme directory (`blank`, `blank`, `digitaltide`)
+    /// 1. embedded top-level theme directory (`blank`)
     /// 2. local filesystem directory
     pub fn resolve(selected: Option<&Path>) -> Result<Self> {
         match selected {
