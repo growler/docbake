@@ -192,3 +192,11 @@ build:docs:confluence:
 
 For the Confluence job, set the `CONFLUENCE_TOKEN` CI/CD variable to a Personal
 Access Token.
+
+## Special thanks
+
+Special thanks to Yusuke Inuzuka ([@yuin](https://github.com/yuin)), the author
+of [rushdown](https://github.com/yuin/rushdown). Docbake uses rushdown and its
+extension crates to parse and render Markdown. The predecessor of docbake,
+written in Go, used [goldmark](https://github.com/yuin/goldmark) by the same
+author.
