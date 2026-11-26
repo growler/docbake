@@ -74,8 +74,22 @@ Global: `--debug-dump`, `-t/--theme <dir>`, `--cache <dir>`, `--no-cache`
 Build: `-f/--format <page|site|pdf|typst|markdown|docx>`,
 `-i/--input <file.md>`, `-o/--output <target>`, `-b/--base <dir>`
 
-No custom lint, fmt, or CI config exists — standard `cargo fmt`, `cargo clippy`,
-`cargo test` apply with Rust defaults.
+Lint and test with Rust defaults: `cargo fmt --check`,
+`cargo clippy --all-targets -- -D warnings`, `cargo test`.
+
+## CI/CD
+
+GitHub Actions workflows are in `.github/workflows/`:
+
+- `ci.yml` runs on each push to `main` and on each pull request. It runs fmt
+  and clippy (warnings are errors), tests on Linux and macOS, `cargo check` with
+  the MSRV toolchain, and a build for each release target.
+- `release.yml` runs when a `vX.Y.Z` tag is pushed. It checks that the tag
+  matches the `Cargo.toml` version, builds release binaries on native runners
+  (`x86_64-unknown-linux-musl`, `aarch64-apple-darwin`, `x86_64-apple-darwin`,
+  `x86_64-pc-windows-msvc`), creates a GitHub release with the archives and
+  `SHA256SUMS`, and publishes the crate to crates.io. The crates.io job uses the
+  `crates-io` environment and the `CARGO_REGISTRY_TOKEN` secret.
 
 ## Constraints
 
@@ -168,6 +182,8 @@ Release a new package version:
    own clamp is one-directional and is not sufficient on its own).
 3. **Commit** the bump (`Cargo.toml`, `Cargo.lock`, `debian/changelog`) and tag
    `vX.Y.Z`.
+4. **Push** the commit and the tag. `release.yml` makes the GitHub release and
+   publishes to crates.io.
 
 ## Include Mechanism
 
