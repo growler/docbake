@@ -17,6 +17,8 @@
      root_href      — relative link back to the root/index page
      asset_prefix   — relative path prefix to reach the output root
                       (e.g. "" for root, "../" for one level deep, etc.)
+     logo           — logo path relative to the output root; not set if
+                      the document has no logo
      breadcrumbs    — array of {href, title} from root to current page
                       (last entry has empty href = current page)
      prev           — previous page navigation (object with .href, .title)
@@ -54,9 +56,11 @@
   <header id="title-block-header">
     <div class="title-row">
       <div class="title-brand">
+        {% if logo %}
         <a class="title-logo" href="{{ root_href }}" aria-label="{{ title }}">
-          <img class="site-logo" src="{{ asset_prefix }}assets/logo.svg" alt="" />
+          <img class="site-logo" src="{{ asset_prefix }}{{ logo }}" alt="" />
         </a>
+        {% endif %}
         <div class="title-meta">
           <h1 class="title"><a href="{{ root_href }}">{{ title }}</a></h1>
           {% if subtitle is defined %}<p class="subtitle">{{ subtitle }}</p>{% endif %}

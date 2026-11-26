@@ -147,8 +147,8 @@ fn theme_logo_skips_png_with_zero_dimension() {
 
 #[test]
 fn theme_logo_rasterises_svg() {
-    let logo = Theme::Embedded("blank").logo_asset().unwrap();
-    let pic = with_renderer(logo, |r| r.theme_logo()).unwrap();
+    let logo = (LOGO_SVG.to_vec(), "svg".to_string());
+    let pic = with_renderer(Some(logo), |r| r.theme_logo()).unwrap();
     assert_eq!(pic.size, (532 * 9525, 103 * 9525));
 }
 
@@ -163,14 +163,16 @@ fn logo_at_height_keeps_aspect_ratio() {
     assert_eq!(logo_at_height(&pic, Twips(210)).size, (688_759, 133_350));
 }
 
-/// The blank logo, rasterised to PNG one time for all renders.
+/// The SVG logo for tests.
+const LOGO_SVG: &[u8] = include_bytes!("../testdata/logo.svg");
+
+/// The test logo, rasterised to PNG one time for all renders.
 static BLANK_LOGO_PNG: LazyLock<(Vec<u8>, String)> = LazyLock::new(|| {
-    let (svg, _) = Theme::Embedded("blank").logo_asset().unwrap().unwrap();
-    let png = with_renderer(None, |r| r.svg_to_png(&svg)).unwrap();
+    let png = with_renderer(None, |r| r.svg_to_png(LOGO_SVG)).unwrap();
     (png, "png".to_string())
 });
 
-/// Renders `markdown` with the blank theme and its logo.
+/// Renders `markdown` with the blank theme and the test logo.
 fn render_package(markdown: &str) -> Result<Package> {
     render_package_with_logo(markdown, Some(BLANK_LOGO_PNG.clone()))
 }
@@ -250,7 +252,7 @@ fn render_in_with_params(
     renderer.render(&prepared, &metadata)
 }
 
-/// Renders `markdown` with the blank theme and its logo, and gives the
+/// Renders `markdown` with the blank theme and the test logo, and gives the
 /// parts of the DOCX file by name.
 fn render_parts(markdown: &str) -> Result<impl Fn(&str) -> String> {
     Ok(parts(render_package(markdown)?.into_bytes()?))
@@ -425,7 +427,7 @@ fn title_page_uses_styles_and_title_field() {
     // follows it.
     let logo = between(&document, "<w:body>", "</w:p>");
     assert!(
-        logo.contains(r#"<wp:extent cx="1712058" cy="331470" />"#),
+        logo.contains(r#"<wp:extent cx="3719299" cy="720090" />"#),
         "{logo}"
     );
     let start = document.find(logo).unwrap() + logo.len();

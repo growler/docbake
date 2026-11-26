@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use notify::RecursiveMode;
 use notify_debouncer_mini::new_debouncer;
 use tiny_http::{Header, Response, Server, StatusCode};
@@ -17,6 +17,7 @@ use crate::diagram::DiagramThemes;
 use crate::graph::prepare_document;
 use crate::html_page::{build_html_document, build_toc};
 use crate::html_site::build_multi_page_html;
+use crate::logo::Logo;
 use crate::theme::Theme;
 use crate::DebugDumper;
 
@@ -254,13 +255,22 @@ fn rebuild(
         RenderProfile::from_metadata(EffectiveFormat::from_output_format(format), &metadata)?;
     crate::enforce_visible_target_policy(build.graph(), &render_profile, broken_links)?;
 
-    let document_assets =
+    let source_dir = source
+        .parent()
+        .ok_or_else(|| anyhow!("input path has no parent directory: {}", source.display()))?;
+    let logo = Logo::resolve(theme, &metadata, base_dir, source_dir)?;
+
+    let mut document_assets =
         crate::visible_asset_targets_for_profile(build.graph(), base_dir, &render_profile)?;
+    if let Some(source) = logo.as_ref().and_then(|logo| logo.source.clone()) {
+        document_assets.insert(source);
+    }
     copy_assets(base_dir, output_dir, &document_assets, logger)?;
     theme.copy_assets_to(output_dir)?;
 
     let style = theme.style_css()?;
     let mut template_context = build_template_context(&metadata, style.as_deref())?;
+    Logo::insert_into(logo.as_ref(), &mut template_context);
     template_context.insert("live_update", LIVE_UPDATE_JS);
 
     let diagram_themes = DiagramThemes {

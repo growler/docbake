@@ -8,6 +8,8 @@
 //
 //   body           — rendered document body as Typst markup
 //   asset_prefix   — relative path prefix to the output root (always "")
+//   logo           — logo path relative to the output root; not set if
+//                    the document has no logo
 //
 // Front-matter metadata (from the root Markdown file):
 //
@@ -22,12 +24,12 @@
 //
 // All front-matter keys are optional.
 //
-// Theme choices (fonts, colours, logo) are hardcoded below.
+// Theme choices (fonts, colours) are hardcoded below.
 // To customise, run `docbake init-theme <dir>` and edit the copy.
 // ─────────────────────────────────────────────────────────────────────────
 
 // the highlight color
-#let hfcolor = color.rgb("#ee721c")
+#let hfcolor = color.rgb("#0f4c81")
 
 
 // text size
@@ -116,7 +118,7 @@
       stack(dir: ttb,
         stack(dir: ltr,
           h(6pt),
-          image("{{ asset_prefix }}assets/logo.svg", height: footnotesize),
+          {% if logo %}image("{{ asset_prefix }}{{ logo }}", height: footnotesize),{% endif %}
           align(right, text(size: footnotesize, fill: hfcolor, "{{ title | default(value="") }}")),
           h(6pt),
         ),
@@ -345,7 +347,7 @@
 )
 
 // ── Title page ──────────────────────────────────────────────────────────
-#align(left, image("{{ asset_prefix }}assets/logo.svg", height: 1cm))
+{% if logo %}#align(left, image("{{ asset_prefix }}{{ logo }}", height: 2cm)){% endif %}
 #v(1fr)
 {% if title %}
 #block(width: 100%,

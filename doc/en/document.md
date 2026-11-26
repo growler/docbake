@@ -31,6 +31,24 @@ hyphens. All parameters are optional.
 
 :  The document version. The PDF title page uses it.
 
+`logo`
+
+:  The path to the document logo file. The file format must be SVG, PNG, or
+   JPEG. A relative path starts from the directory of the main file. A path that
+   starts with `/` starts from the base directory. The file must be in the base
+   directory.
+
+   The logo replaces the logo of the theme. If you do not set `logo`, the
+   document uses the theme logo. If the theme has no logo, the document has no
+   logo. If the file does not exist or has a different format, the build stops
+   with an error.
+
+   Example:
+
+   ~~~yaml
+   logo: images/logo.svg
+   ~~~
+
 `keywords`
 
 :  The document keywords. The PDF document properties and the HTML document

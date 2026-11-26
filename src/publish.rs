@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value as JsonValue;
 
 use crate::cache::Cache;
@@ -449,7 +449,11 @@ pub(crate) fn publish_gdoc_command(
         mermaid: theme.mermaid_theme()?,
         d2: theme.d2_theme()?,
     };
-    let logo_asset = theme.logo_asset()?;
+    let source_dir = source
+        .parent()
+        .ok_or_else(|| anyhow!("input path has no parent directory: {}", source.display()))?;
+    let logo_asset = crate::logo::Logo::resolve(theme, &metadata, &base_dir, source_dir)?
+        .map(|logo| (logo.data, logo.ext));
     let docx_params = theme.docx_params()?;
 
     // ── render to DOCX ──────────────────────────────────────────────────

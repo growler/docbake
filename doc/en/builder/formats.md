@@ -178,6 +178,11 @@ The template gets these variables:
    example, `../`). Use it for links to files in the `assets/` directory of the
    theme.
 
+`logo`
+:  The path to the document logo, relative to the output root (if the document
+   has a logo). Use it with `asset_prefix`, for example
+   `{{ asset_prefix }}{{ logo }}`. See [Logo](config.md#logo).
+
 ### HTML template example
 
 ~~~html
@@ -256,8 +261,12 @@ The template gets the same metadata variables as HTML (`title`, `subtitle`,
 `asset_prefix`
 :  The relative path to the output root. For PDF, it is always an empty string.
 
-The `template.typ` template sets the fonts, colors, resource paths (for example,
-the logo), and other design parameters. To make your own design, export the
+`logo`
+:  The path to the document logo, relative to the output root (if the document
+   has a logo). See [Logo](config.md#logo).
+
+The `template.typ` template sets the fonts, colors, resource paths, and other
+design parameters. To make your own design, export the
 built-in theme with the `docbake init-theme` command. Then edit the file.
 
 ### PDF template example

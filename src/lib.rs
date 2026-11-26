@@ -16,6 +16,7 @@ pub(crate) mod grid_table;
 mod html;
 mod html_page;
 mod html_site;
+mod logo;
 pub(crate) mod multiline_table;
 mod publish;
 mod render_confluence;
@@ -42,6 +43,7 @@ use crate::conditional::{EffectiveFormat, RenderProfile};
 use crate::graph::prepare_document;
 use crate::html_page::{build_html_document, build_toc};
 use crate::html_site::build_multi_page_html;
+use crate::logo::Logo;
 use crate::render_typst::TypstRenderer;
 use crate::theme::Theme;
 use anyhow::{anyhow, bail, Context, Result};
@@ -654,6 +656,11 @@ pub(crate) fn build_command(
 
     enforce_visible_target_policy(build.graph(), &render_profile, broken_links)?;
 
+    let source_dir = source
+        .parent()
+        .ok_or_else(|| anyhow!("input path has no parent directory: {}", source.display()))?;
+    let logo = Logo::resolve(theme, &metadata, &base_dir, source_dir)?;
+
     // ── DOCX format (no Tera template) ──────────────────────────────────
     // Uses the same DocxRenderer as `publish gdoc` — diagrams are rendered
     // to PNG and embedded, images are read from disk and embedded.
@@ -663,7 +670,7 @@ pub(crate) fn build_command(
             mermaid: theme.mermaid_theme()?,
             d2: theme.d2_theme()?,
         };
-        let logo_asset = theme.logo_asset()?;
+        let logo_asset = logo.map(|logo| (logo.data, logo.ext));
         let docx_params = theme.docx_params()?;
         let renderer = docx::DocxRenderer::new(
             cache,
@@ -707,13 +714,17 @@ pub(crate) fn build_command(
     };
 
     // ── Collect and copy assets ─────────────────────────────────────────
-    let document_assets =
+    let mut document_assets =
         visible_asset_targets_for_profile(build.graph(), &base_dir, &render_profile)?;
+    if let Some(source) = logo.as_ref().and_then(|logo| logo.source.clone()) {
+        document_assets.insert(source);
+    }
     copy_assets(&base_dir, &work_dir, &document_assets, logger)?;
     theme.copy_assets_to(&work_dir)?;
 
     let style = theme.style_css()?;
     let mut template_context = build_template_context(&metadata, style.as_deref())?;
+    Logo::insert_into(logo.as_ref(), &mut template_context);
 
     // ── Diagram themes ──────────────────────────────────────────────────
     let diagram_themes = crate::diagram::DiagramThemes {

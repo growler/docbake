@@ -41,8 +41,8 @@ Then edit the exported files:
 ~~~
 $ docbake init-theme my-theme
 $ ls my-theme/
-assets/  docx.yaml  style.css  template-multipage.html  template.html
-template.typ  theme.d2  theme.mmd  theme.puml
+docx.yaml  style.css  template-multipage.html  template.html  template.typ
+theme.d2  theme.mmd  theme.puml
 ~~~
 
 Then use the theme in a build:
@@ -108,6 +108,34 @@ directory. Templates can refer to these files with a relative path, for example:
 The `asset_prefix` variable is empty for single-page HTML and PDF. For
 multi-page HTML, it contains the relative path back to the output root (for
 example, `../`).
+
+### Logo {#logo}
+
+The theme logo is the first file of this list in the `assets/` directory of the
+theme:
+
+1. `logo.svg`
+2. `logo.png`
+3. `logo.jpg`
+4. `logo.jpeg`
+
+The theme logo is optional. The built-in theme `blank` has no logo. The `logo`
+front matter parameter sets a different logo for a document (see [Document
+parameters](../document.md#document-parameters)). The Builder copies this file
+to the `static` subdirectory of the output directory.
+
+The templates get the path to the logo in the `logo` variable. The path is
+relative to the output root. If the document has no logo, the `logo` variable
+is not set. Templates show the logo only when the variable is set:
+
+~~~html
+{% if logo %}
+<img src="{{ asset_prefix }}{{ logo }}" alt="logo" />
+{% endif %}
+~~~
+
+DOCX output and Google Docs publication put the logo on the title page and in
+the page header. The `logo` section of `docx.yaml` sets the logo heights.
 
 ## Diagram themes {#diagram-themes}
 

@@ -22,10 +22,10 @@ page:
     header: 1.5cm # 851 tw
     footer: 1.75cm # 992 tw
 
-# The heights of the theme logo (assets/logo.*). The width keeps the
-# aspect ratio of the image.
+# The heights of the document logo (the front-matter `logo` file or the
+# theme assets/logo.*). The width keeps the aspect ratio of the image.
 logo:
-  title_height: 0.92cm # 522 tw, title page
+  title_height: 2cm # 1134 tw, title page
   header_height: 10.5pt # 210 tw, page header
 
 fonts:
@@ -34,7 +34,7 @@ fonts:
   mono: PT Mono
 
 colors:
-  accent: EE721C
+  accent: 0F4C81
   dark: "333333"
   muted: "888888"
   subtle: "666666"

@@ -30,9 +30,9 @@
     --c-text-secondary: #3e5169;
     --c-text-tertiary:  #7487a0;
 
-    --c-accent:       #0f5fbc;
-    --c-accent-hover: #0b4c97;
-    --c-accent-bg:    #e7f0fc;
+    --c-accent:       #0f4c81;
+    --c-accent-hover: #0c3d67;
+    --c-accent-bg:    #e7ecf2;
 
     /* Layout */
     --content-max-w:  104rem;

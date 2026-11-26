@@ -465,7 +465,7 @@ mod tests {
     #[test]
     fn blank_docx_params_match_template() {
         let params = Theme::Embedded("blank").docx_params().unwrap();
-        let accent = Rgb([0xEE, 0x72, 0x1C]);
+        let accent = Rgb([0x0F, 0x4C, 0x81]);
         let accent_rule = Border {
             width: EighthPoints(4),
             color: accent,
@@ -477,7 +477,7 @@ mod tests {
             [m.top, m.bottom, m.left, m.right, m.header, m.footer],
             [1134, 1134, 1134, 567, 851, 992].map(Twips)
         );
-        assert_eq!(params.logo.title_height, Twips(522));
+        assert_eq!(params.logo.title_height, Twips(1134));
         assert_eq!(params.logo.header_height, Twips(210));
         let c = &params.table.cell_margins;
         assert_eq!(

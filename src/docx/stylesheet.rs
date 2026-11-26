@@ -924,7 +924,7 @@ styles:
             h1,
             concat!(
                 "<w:pPr><w:keepNext/>",
-                r#"<w:pBdr><w:bottom w:val="single" w:sz="4" w:space="1" w:color="EE721C"/></w:pBdr>"#,
+                r#"<w:pBdr><w:bottom w:val="single" w:sz="4" w:space="1" w:color="0F4C81"/></w:pBdr>"#,
                 r#"<w:spacing w:before="360" w:after="120" w:line="240" w:lineRule="auto"/>"#,
                 r#"<w:jc w:val="left"/><w:outlineLvl w:val="0"/></w:pPr>"#,
             ),
@@ -934,7 +934,7 @@ styles:
             concat!(
                 "<w:rPr>",
                 r#"<w:rFonts w:ascii="PT Sans" w:hAnsi="PT Sans" w:eastAsia="PT Sans" w:cs="PT Sans"/>"#,
-                r#"<w:b/><w:bCs/><w:color w:val="EE721C"/><w:sz w:val="56"/><w:szCs w:val="56"/>"#,
+                r#"<w:b/><w:bCs/><w:color w:val="0F4C81"/><w:sz w:val="56"/><w:szCs w:val="56"/>"#,
                 "</w:rPr></w:style>",
             ),
         );

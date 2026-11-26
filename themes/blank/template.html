@@ -9,6 +9,8 @@
      search_index   — JSON array of search entries for Fuse.js
      asset_prefix   — relative path prefix to reach the output root
                       (always empty for single-page; used by multi-page)
+     logo           — logo path relative to the output root; not set if
+                      the document has no logo
 
    Front-matter metadata (from the root Markdown file):
 
@@ -43,9 +45,11 @@
   <header id="title-block-header">
     <div class="title-row">
       <div class="title-brand">
+        {% if logo %}
         <span class="title-logo" aria-hidden="true">
-          <img class="site-logo" src="{{ asset_prefix | default(value="") }}assets/logo.svg" alt="" />
+          <img class="site-logo" src="{{ asset_prefix | default(value="") }}{{ logo }}" alt="" />
         </span>
+        {% endif %}
         <div class="title-meta">
           <h1 class="title">{{ title }}</h1>
           {% if subtitle is defined %}<p class="subtitle">{{ subtitle }}</p>{% endif %}

@@ -2,6 +2,7 @@
 title:   Documentation Build System
 lang:    en-US
 version: 0.1.0
+logo: ../assets/logo.svg
 confluence: 
   server: https://confluence.example.com
   space: DOCS

@@ -217,10 +217,11 @@ impl<'a> DocxRenderer<'a> {
         }
     }
 
-    /// Decode the theme logo. An SVG logo is rasterised to PNG. The logo
-    /// has its pixel size at 96 DPI.
+    /// Decode the document logo (the front-matter `logo` file or the theme
+    /// logo). An SVG logo is rasterised to PNG. The logo has its pixel size
+    /// at 96 DPI.
     ///
-    /// Returns `None` when the theme has no logo, the logo does not
+    /// Returns `None` when the document has no logo, the logo does not
     /// decode, or the logo has a zero width or height.
     pub(super) fn theme_logo(&self) -> Option<Pic> {
         let (bytes, ext) = self.logo_asset.as_ref()?;
@@ -236,7 +237,7 @@ impl<'a> DocxRenderer<'a> {
         };
         if px.0 == 0 || px.1 == 0 {
             self.logger
-                .log("warning: theme logo has a zero width or height, skipping");
+                .log("warning: logo has a zero width or height, skipping");
             return None;
         }
         let max = u64::from(u32::MAX);
