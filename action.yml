@@ -1,0 +1,176 @@
+name: docbake
+description: Check and build Markdown documentation with docbake
+author: growler
+branding:
+  icon: book-open
+  color: orange
+
+inputs:
+  input:
+    description: Root Markdown file.
+    required: true
+  output:
+    description: Output file or directory.
+    required: true
+  format:
+    description: 'Output format: page, site, pdf, typst, markdown, or docx.'
+    required: true
+  base:
+    description: >-
+      Base directory for absolute paths in includes and links. The default is
+      the directory of the input file.
+    default: ''
+  theme:
+    description: Theme name or theme directory. The default is the built-in theme.
+    default: ''
+  check:
+    description: Run `docbake check` before the build. The step fails on broken links and diagrams.
+    default: 'true'
+  version:
+    description: >-
+      Release tag of docbake to download, for example v0.3.0. The default is
+      the tag in the `uses:` reference of this action.
+    default: ''
+  binary:
+    description: Path to a docbake binary. When set, the action does not download docbake.
+    default: ''
+  plantuml:
+    description: Install PlantUML. The runner must have Java.
+    default: 'false'
+  d2:
+    description: Install D2.
+    default: 'false'
+  typst:
+    description: Install Typst. The action always installs Typst when the format is pdf.
+    default: 'false'
+  drawio:
+    description: Install Draw.io and Xvfb. This step uses sudo and apt-get.
+    default: 'false'
+
+outputs:
+  output:
+    description: Path of the build output.
+    value: ${{ steps.build.outputs.output }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check runner
+      shell: bash
+      run: |
+        if [ "$RUNNER_OS" != Linux ] || [ "$RUNNER_ARCH" != X64 ]; then
+          echo "::error::the docbake action supports only Linux x64 runners"
+          exit 1
+        fi
+
+    - name: Install docbake
+      shell: bash
+      env:
+        BINARY: ${{ inputs.binary }}
+        VERSION: ${{ inputs.version }}
+        ACTION_REF: ${{ github.action_ref }}
+        ACTION_REPO: ${{ github.action_repository }}
+      run: |
+        set -euo pipefail
+        bin="$RUNNER_TEMP/docbake-bin"
+        mkdir -p "$bin"
+        if [ -n "$BINARY" ]; then
+          ln -sf "$(realpath "$BINARY")" "$bin/docbake"
+        else
+          version="${VERSION:-$ACTION_REF}"
+          if ! [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::no docbake release for ref '$version'. Set the 'version' input to a release tag."
+            exit 1
+          fi
+          url="https://github.com/${ACTION_REPO:-growler/docbake}/releases/download/$version"
+          dl="$RUNNER_TEMP/docbake-$version"
+          mkdir -p "$dl"
+          curl -fsSL --retry 3 --retry-all-errors -o "$dl/docbake-linux-amd64.tar.gz" \
+            "$url/docbake-linux-amd64.tar.gz"
+          curl -fsSL --retry 3 --retry-all-errors -o "$dl/SHA256SUMS" "$url/SHA256SUMS"
+          (cd "$dl" && grep ' docbake-linux-amd64.tar.gz$' SHA256SUMS | sha256sum -c -)
+          tar xzf "$dl/docbake-linux-amd64.tar.gz" -C "$bin"
+        fi
+        echo "$bin" >> "$GITHUB_PATH"
+        "$bin/docbake" --version
+
+    - name: Install diagram tools
+      shell: bash
+      env:
+        FORMAT: ${{ inputs.format }}
+        PLANTUML: ${{ inputs.plantuml }}
+        D2: ${{ inputs.d2 }}
+        TYPST: ${{ inputs.typst }}
+        DRAWIO: ${{ inputs.drawio }}
+        PLANTUML_VERSION: 1.2026.10
+        D2_VERSION: 0.9.0
+        TYPST_VERSION: 0.15.1
+        DRAWIO_VERSION: 32.7.4
+      run: |
+        set -euo pipefail
+        bin="$RUNNER_TEMP/docbake-tools"
+        mkdir -p "$bin"
+        fetch() { curl -fsSL --retry 3 --retry-all-errors "$@"; }
+
+        if [ "$PLANTUML" = true ]; then
+          fetch -o "$RUNNER_TEMP/plantuml.jar" \
+            "https://github.com/plantuml/plantuml/releases/download/v${PLANTUML_VERSION}/plantuml-${PLANTUML_VERSION}.jar"
+          printf '#!/bin/sh\nexec java -Djava.awt.headless=true -jar "%s" "$@"\n' \
+            "$RUNNER_TEMP/plantuml.jar" > "$bin/plantuml"
+        fi
+
+        if [ "$D2" = true ]; then
+          fetch "https://github.com/terrastruct/d2/releases/download/v${D2_VERSION}/d2-v${D2_VERSION}-linux-amd64.tar.gz" \
+            | tar xz -C "$RUNNER_TEMP"
+          ln -sf "$RUNNER_TEMP/d2-v${D2_VERSION}/bin/d2" "$bin/d2"
+        fi
+
+        if [ "$TYPST" = true ] || [ "$FORMAT" = pdf ]; then
+          fetch "https://github.com/typst/typst/releases/download/v${TYPST_VERSION}/typst-x86_64-unknown-linux-musl.tar.xz" \
+            | tar xJ -C "$RUNNER_TEMP"
+          ln -sf "$RUNNER_TEMP/typst-x86_64-unknown-linux-musl/typst" "$bin/typst"
+        fi
+
+        # Draw.io is an Electron app: it needs a virtual display.
+        if [ "$DRAWIO" = true ]; then
+          fetch -o "$RUNNER_TEMP/drawio.deb" \
+            "https://github.com/jgraph/drawio-desktop/releases/download/v${DRAWIO_VERSION}/drawio-amd64-${DRAWIO_VERSION}.deb"
+          sudo apt-get update
+          sudo apt-get install -y xvfb "$RUNNER_TEMP/drawio.deb"
+          printf '#!/bin/sh\nexec xvfb-run -a /opt/drawio/drawio --no-sandbox --disable-gpu "$@"\n' \
+            > "$bin/drawio"
+        fi
+
+        chmod +x "$bin"/* 2>/dev/null || true
+        echo "$bin" >> "$GITHUB_PATH"
+
+    # `build` exits 0 when a diagram tool fails and writes the error into
+    # the output. `check` fails on broken diagrams and links.
+    - name: Check and build
+      id: build
+      shell: bash
+      env:
+        INPUT: ${{ inputs.input }}
+        OUTPUT: ${{ inputs.output }}
+        FORMAT: ${{ inputs.format }}
+        BASE: ${{ inputs.base }}
+        THEME: ${{ inputs.theme }}
+        CHECK: ${{ inputs.check }}
+      run: |
+        set -euo pipefail
+        case "$FORMAT" in
+          page | html | site | html-multi) check_format=html ;;
+          pdf | typst) check_format=pdf ;;
+          docx | docx-gdoc) check_format=docx ;;
+          markdown) check_format=markdown ;;
+          *) echo "::error::unknown format '$FORMAT'"; exit 1 ;;
+        esac
+        global=()
+        [ -n "$THEME" ] && global+=(-t "$THEME")
+        base=()
+        [ -n "$BASE" ] && base+=(-b "$BASE")
+        if [ "$CHECK" = true ]; then
+          docbake "${global[@]}" check -f "$check_format" "${base[@]}" -i "$INPUT"
+        fi
+        docbake "${global[@]}" build -f "$FORMAT" "${base[@]}" -i "$INPUT" -o "$OUTPUT"
+        echo "output=$OUTPUT" >> "$GITHUB_OUTPUT"

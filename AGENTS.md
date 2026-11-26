@@ -83,20 +83,31 @@ GitHub Actions workflows are in `.github/workflows/`:
 
 - `ci.yml` runs on each push to `main` and on each pull request. It runs fmt
   and clippy (warnings are errors), tests on Linux and macOS, `cargo check` with
-  the MSRV toolchain, and a build for each release target.
+  the MSRV toolchain, and a build for each release target. The `action` job
+  runs the local action (`uses: ./`) with a debug build to make the PDF of
+  `doc/en/index.md`.
 - `release.yml` runs when a `vX.Y.Z` tag is pushed. It checks that the tag
   matches the `Cargo.toml` version, builds release binaries on native runners
   (`x86_64-unknown-linux-musl`, `aarch64-apple-darwin`, `x86_64-apple-darwin`,
   `x86_64-pc-windows-msvc`), creates a GitHub release with the archives and
   `SHA256SUMS`, and publishes the crate to crates.io. The crates.io job uses the
   `crates-io` environment and the `CARGO_REGISTRY_TOKEN` secret.
-- `pages.yml` runs when a `vX.Y.Z` tag is pushed, or by hand. It installs
-  PlantUML, D2, Typst, and Draw.io (through `xvfb-run`), runs `docbake check`,
-  builds `doc/en/index.md` with `-f site -b doc`, and deploys the result to
-  GitHub Pages at <https://growler.github.io/docbake/>. `docbake build` exits 0
-  when a diagram tool fails, so `check` is the gate. Tool versions are pinned
-  in the workflow `env`. Pages source is "GitHub Actions", and the `github-pages`
-  environment allows deployment from `v*` tags.
+- `pages.yml` runs when a `vX.Y.Z` tag is pushed, or by hand. It runs the local
+  action with a debug build and all diagram tools to build `doc/en/index.md`
+  with `-f site -b doc`, and deploys the result to GitHub Pages at
+  <https://growler.github.io/docbake/>. Pages source is "GitHub Actions", and
+  the `github-pages` environment allows deployment from `v*` tags.
+
+`action.yml` in the repository root is a composite GitHub Action for other
+repositories (`uses: growler/docbake@vX.Y.Z`). It runs only on Linux x64. It
+downloads `docbake-linux-amd64.tar.gz` for the tag in `github.action_ref` (or
+the `version` input) and verifies it against `SHA256SUMS`; the `binary` input
+skips the download. It installs the opt-in diagram tools (PlantUML, D2, Typst,
+and Draw.io through `xvfb-run`; Typst is always installed for `pdf`), runs
+`docbake check`, then `docbake build`. `docbake build` exits 0 when a diagram
+tool fails, so `check` is the gate. Diagram tool versions are pinned in the
+`env` of the "Install diagram tools" step. User documentation is in
+`doc/en/builder/github-action.md`.
 
 ## Constraints
 

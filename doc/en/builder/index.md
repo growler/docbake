@@ -565,4 +565,5 @@ To make PDF documents, also install these tools:
 :::include
 ## [Themes and settings](config.md)
 ## [Formats](formats.md)
+## [GitHub Action](github-action.md)
 :::

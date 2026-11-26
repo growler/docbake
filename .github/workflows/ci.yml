@@ -77,3 +77,24 @@ jobs:
         with:
           key: ${{ matrix.target }}
       - run: cargo build --locked --target ${{ matrix.target }}
+
+  action:
+    name: action (pdf)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --locked
+      - id: docbake
+        uses: ./
+        with:
+          binary: target/debug/docbake
+          format: pdf
+          base: doc
+          input: doc/en/index.md
+          output: target/doc.pdf
+          plantuml: true
+          d2: true
+          drawio: true
+      - run: test -s "${{ steps.docbake.outputs.output }}"
