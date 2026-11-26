@@ -384,7 +384,7 @@ fn scan(xml: &[u8]) -> Scan {
             Event::Eof => break,
             _ => continue,
         };
-        let name = std::str::from_utf8(start.name().into_inner()).unwrap();
+        let name = start.name().into_inner();
         let count = counts.last_mut().unwrap();
         let position = *count;
         *count += 1;
@@ -438,7 +438,7 @@ fn val(element: &BytesStart<'_>) -> String {
         .try_get_attribute("w:val")
         .unwrap()
         .unwrap_or_else(|| panic!("no w:val in {element:?}"))
-        .unescape_value()
+        .normalized_value(quick_xml::XmlVersion::Implicit1_0)
         .unwrap()
         .into_owned()
 }
@@ -449,9 +449,13 @@ fn style_ids(xml: &[u8]) -> HashSet<String> {
     let mut ids = HashSet::new();
     loop {
         match reader.read_event().unwrap() {
-            Event::Start(e) | Event::Empty(e) if e.name().as_ref() == b"w:style" => {
+            Event::Start(e) | Event::Empty(e) if e.name().as_ref() == "w:style" => {
                 if let Some(id) = e.try_get_attribute("w:styleId").unwrap() {
-                    ids.insert(id.unescape_value().unwrap().into_owned());
+                    ids.insert(
+                        id.normalized_value(quick_xml::XmlVersion::Implicit1_0)
+                            .unwrap()
+                            .into_owned(),
+                    );
                 }
             }
             Event::Eof => break,

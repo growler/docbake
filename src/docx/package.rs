@@ -25,7 +25,7 @@ use std::io::{Cursor, Seek, Write};
 use anyhow::{anyhow, Context, Result};
 use docx_rs::{Docx, XMLDocx};
 use memchr::memmem;
-use zip::write::FileOptions;
+use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, DateTime, ZipWriter};
 
 use super::doc_props::{core_xml, custom_xml};
@@ -170,7 +170,7 @@ where
 {
     let mut zip = ZipWriter::new(w);
 
-    let stored = FileOptions::default()
+    let stored = SimpleFileOptions::default()
         .compression_method(CompressionMethod::Stored)
         .last_modified_time(DateTime::default())
         .unix_permissions(0o755);
@@ -338,7 +338,7 @@ mod tests {
         (0..archive.len())
             .map(|i| {
                 let mut file = archive.by_index(i).unwrap();
-                let t = file.last_modified();
+                let t = file.last_modified().unwrap();
                 let time = [
                     t.year(),
                     t.month().into(),
@@ -351,7 +351,7 @@ mod tests {
                 let mut data = Vec::new();
                 file.read_to_end(&mut data).unwrap();
                 (
-                    file.name().to_string(),
+                    file.name().unwrap().to_string(),
                     file.compression(),
                     file.is_dir(),
                     time,

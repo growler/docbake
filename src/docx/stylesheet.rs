@@ -1378,7 +1378,7 @@ styles:
                 Event::Eof => break,
                 _ => continue,
             };
-            let name = String::from_utf8(start.name().as_ref().to_vec()).unwrap();
+            let name = start.name().as_ref().to_string();
             if let Some((parent, last)) = open.last_mut() {
                 if let Some((_, order)) = SCHEMA_ORDER.iter().find(|(p, _)| p == parent) {
                     let index = order

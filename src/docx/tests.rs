@@ -273,7 +273,10 @@ fn parts(bytes: Vec<u8>) -> impl Fn(&str) -> String {
 /// Gives the names of the entries of the DOCX file `bytes`.
 fn entry_names(bytes: &[u8]) -> Vec<String> {
     let archive = ZipArchive::new(Cursor::new(bytes)).unwrap();
-    archive.file_names().map(str::to_string).collect()
+    archive
+        .file_names()
+        .map(|n| n.unwrap().into_owned())
+        .collect()
 }
 
 /// Gives the text of `xml` from the first occurrence of `start` to the

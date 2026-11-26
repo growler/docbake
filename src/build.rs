@@ -114,7 +114,7 @@ pub(crate) fn build_template_context(
         JsonValue::Object(metadata.clone()),
     );
 
-    let mut context = tera::Context::from_value(JsonValue::Object(data))
+    let mut context = tera::Context::from_serialize(&JsonValue::Object(data))
         .context("failed to build template context")?;
     if context.get("lang").is_none() {
         context.insert("lang", "en");
