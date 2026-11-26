@@ -177,7 +177,7 @@ mod tests {
 
     #[test]
     fn keeps_text_visually_aligned_for_right_aligned_columns() -> Result<()> {
-        let src = "Позиция | Цена\n:-------|----:\nSRV-001 | 100\nSRV-002 | 200\n";
+        let src = "Item | Cost\n:-------|----:\nSRV-001 | 100\nSRV-002 | 200\n";
         let formatted = super::format_markdown(src)?;
         assert!(formatted.contains(":------ | ---:"));
         assert!(formatted.contains("SRV-001 |  100"));
@@ -204,10 +204,10 @@ mod tests {
 
     #[test]
     fn preserves_unordered_list_marker_character() -> Result<()> {
-        let src = "* Элемент 1\n* Элемент 2\n* Элемент 3\n";
+        let src = "* Item 1\n* Item 2\n* Item 3\n";
         let formatted = super::format_markdown(src)?;
-        assert!(formatted.contains("* Элемент 1\n* Элемент 2\n* Элемент 3"));
-        assert!(!formatted.contains("- Элемент 1"));
+        assert!(formatted.contains("* Item 1\n* Item 2\n* Item 3"));
+        assert!(!formatted.contains("- Item 1"));
         Ok(())
     }
 
@@ -222,32 +222,32 @@ mod tests {
 
     #[test]
     fn preserves_ordered_list_marker_character_while_renumbering() -> Result<()> {
-        let src = "1) Элемент 1\n   1) Элемент 1.1\n   1) Элемент 1.2\n1) Элемент 2\n";
+        let src = "1) Item 1\n   1) Item 1.1\n   1) Item 1.2\n1) Item 2\n";
         let formatted = super::format_markdown(src)?;
 
-        assert!(formatted.contains("1) Элемент 1"));
-        assert!(formatted.contains("   1) Элемент 1.1"));
-        assert!(formatted.contains("   2) Элемент 1.2"));
-        assert!(formatted.contains("2) Элемент 2"));
-        assert!(!formatted.contains("1. Элемент 1"));
+        assert!(formatted.contains("1) Item 1"));
+        assert!(formatted.contains("   1) Item 1.1"));
+        assert!(formatted.contains("   2) Item 1.2"));
+        assert!(formatted.contains("2) Item 2"));
+        assert!(!formatted.contains("1. Item 1"));
 
         Ok(())
     }
 
     #[test]
     fn keeps_definition_list_structure() -> Result<()> {
-        let src = "Термин\n:  Определение\n\nТермин\n:  Определение\n";
+        let src = "Term\n:  Definition\n\nTerm\n:  Definition\n";
         let formatted = super::format_markdown(src)?;
-        assert!(formatted.contains("Термин\n:  Определение"));
-        assert!(!formatted.contains("Термин : Определение"));
+        assert!(formatted.contains("Term\n:  Definition"));
+        assert!(!formatted.contains("Term : Definition"));
         Ok(())
     }
 
     #[test]
     fn keeps_sparse_definition_list_spacing() -> Result<()> {
-        let src = "Термин\n\n:  Определение\n\n    ```\n    code example\n    ```\n";
+        let src = "Term\n\n:  Definition\n\n    ```\n    code example\n    ```\n";
         let formatted = super::format_markdown(src)?;
-        assert!(formatted.contains("Термин\n\n:  Определение"));
+        assert!(formatted.contains("Term\n\n:  Definition"));
         Ok(())
     }
 
@@ -270,11 +270,11 @@ mod tests {
 
     #[test]
     fn preserves_backslash_hard_break_marker() -> Result<()> {
-        let src = "\\*не курсив\\*\\\n\\# не заголовок\\\n\\[не ссылка\\]\n";
+        let src = "\\*not italic\\*\\\n\\# not a heading\\\n\\[not a link\\]\n";
         let formatted = super::format_markdown(src)?;
-        assert!(formatted.contains("\\*не курсив\\*\\\n\\# не заголовок\\\n\\[не ссылка\\]"));
-        assert!(!formatted.contains("\\*не курсив\\*  \n"));
-        assert!(!formatted.contains("\\# не заголовок  \n"));
+        assert!(formatted.contains("\\*not italic\\*\\\n\\# not a heading\\\n\\[not a link\\]"));
+        assert!(!formatted.contains("\\*not italic\\*  \n"));
+        assert!(!formatted.contains("\\# not a heading  \n"));
         Ok(())
     }
 
@@ -289,9 +289,9 @@ mod tests {
 
     #[test]
     fn preserves_reference_and_shortcut_links() -> Result<()> {
-        let src = "See [RFC 7763][rfc]. Also see [Сборщик].\n\n[rfc]: https://example.com\n[Сборщик]: builder/index.md\n";
+        let src = "See [RFC 7763][rfc]. Also see [Builder].\n\n[rfc]: https://example.com\n[Builder]: builder/index.md\n";
         let formatted = super::format_markdown(src)?;
-        assert!(formatted.contains("See [RFC 7763][rfc]. Also see [Сборщик]."));
+        assert!(formatted.contains("See [RFC 7763][rfc]. Also see [Builder]."));
         assert!(!formatted.contains("[RFC 7763](https://example.com)"));
         Ok(())
     }
@@ -309,11 +309,11 @@ mod tests {
     #[test]
     fn preserves_angle_brackets_for_destinations_with_spaces() -> Result<()> {
         let src = concat!(
-            "[Архитектура](<../../assets/Docbake High Level.drawio>)\n\n",
-            "![Архитектура](<../../assets/Docbake High Level.drawio>)\n",
+            "[Architecture](<../../assets/High Level Design.drawio>)\n\n",
+            "![Architecture](<../../assets/High Level Design.drawio>)\n",
         );
         let formatted = super::format_markdown(src)?;
-        assert!(formatted.contains("](<../../assets/Docbake High Level.drawio>)"));
+        assert!(formatted.contains("](<../../assets/High Level Design.drawio>)"));
         Ok(())
     }
 
@@ -327,7 +327,7 @@ mod tests {
 
     #[test]
     fn preserves_fenced_div_closing_fence_length() -> Result<()> {
-        let src = ":::: {.confluence}\nТекст\n\n:::::\n";
+        let src = ":::: {.confluence}\nText\n\n:::::\n";
         let formatted = super::format_markdown(src)?;
         assert!(formatted.contains("\n:::::\n"));
         Ok(())
@@ -337,12 +337,12 @@ mod tests {
     fn preserves_extra_blank_lines_between_fenced_div_blocks() -> Result<()> {
         let src = concat!(
             ":::alpha\n",
-            "Один\n",
+            "One\n",
             ":::\n",
             "\n",
             "\n",
             ":::beta\n",
-            "Два\n",
+            "Two\n",
             ":::\n",
         );
         let formatted = super::format_markdown(src)?;
@@ -354,14 +354,14 @@ mod tests {
     fn inserts_blank_line_before_nested_fenced_div_when_missing() -> Result<()> {
         let src = concat!(
             ":::: {.confluence}\n",
-            "Это текст\n",
+            "This is text\n",
             ":::warning\n",
-            "Внимание\n",
+            "Warning\n",
             ":::\n",
             ":::::::::::::::::::::::::::::::::::::::::\n",
         );
         let formatted = super::format_markdown(src)?;
-        assert!(formatted.contains("Это текст\n\n:::warning"));
+        assert!(formatted.contains("This is text\n\n:::warning"));
         Ok(())
     }
 
@@ -401,13 +401,13 @@ mod tests {
     fn wraps_definition_lines_without_turning_them_into_code_blocks() -> Result<()> {
         let src = concat!(
             "`lang`\n",
-            ":  Язык документа в формате RFC 5646 с достаточно длинным описанием, чтобы оно ",
-            "переносилось на следующую строку по правилу длины строки форматтера.\n"
+            ":  The document language in RFC 5646 format, with a description that is long ",
+            "enough to wrap to the next line by the line length rule of the formatter.\n"
         );
         let formatted = super::format_markdown(src)?;
-        assert!(formatted.contains(":  Язык документа"));
-        assert!(formatted.contains("\n   переносилось на следующую строку"));
-        assert!(!formatted.contains("\n    переносилось на следующую строку"));
+        assert!(formatted.contains(":  The document language"));
+        assert!(formatted.contains("\n   to wrap to the next line"));
+        assert!(!formatted.contains("\n    to wrap to the next line"));
         Ok(())
     }
 
@@ -422,7 +422,7 @@ mod tests {
 
     #[test]
     fn preserves_tilde_fence_inside_list_item() -> Result<()> {
-        let src = "* Элемент 1\n\n* Элемент 2\n\n  ~~~\n  code\n  ~~~\n\n* Элемент 3\n";
+        let src = "* Item 1\n\n* Item 2\n\n  ~~~\n  code\n  ~~~\n\n* Item 3\n";
         let formatted = super::format_markdown(src)?;
         assert_eq!(formatted, src);
         Ok(())
@@ -433,7 +433,7 @@ mod tests {
         let src = concat!(
             "`project/index.md`\n\n",
             ":  ~~~markdown\n",
-            "   # Назначение системы\n\n",
+            "   # System purpose\n\n",
             "     :::include\n",
             "   # [HLD](hld/index.md)\n",
             "   :::\n",
@@ -446,7 +446,7 @@ mod tests {
 
     #[test]
     fn preserves_loose_list_block_indent() -> Result<()> {
-        let src = "- Пункт\n\n    ~~~\n  code\n    ~~~\n";
+        let src = "- Point\n\n    ~~~\n  code\n    ~~~\n";
         let formatted = super::format_markdown(src)?;
         assert_eq!(formatted, src);
         Ok(())
@@ -455,9 +455,9 @@ mod tests {
     #[test]
     fn preserves_definition_list_marker_spacing_and_wrap_indent() -> Result<()> {
         let src = concat!(
-            "Апельсин\n",
-            ":   Плод вечнозеленых деревьев рода Citrus, который обычно имеет оранжевую кожуру и\n",
-            "    округлую форму.\n",
+            "Orange\n",
+            ":   A fruit of evergreen trees of the genus Citrus. The fruit has an orange skin and\n",
+            "    a round shape.\n",
         );
         let formatted = super::format_markdown(src)?;
         assert_eq!(formatted, src);
@@ -467,10 +467,10 @@ mod tests {
     #[test]
     fn preserves_block_style_footnote_definition() -> Result<()> {
         let src = concat!(
-            "Текст со сноской[^fn2].\n\n",
+            "Text with a footnote[^fn2].\n\n",
             "[^fn2]:\n",
-            "    А вот так выглядит сноска с несколькими параграфами.\n\n",
-            "    Параграфы должны выделяться четырьмя пробелами.\n",
+            "    This is a footnote with more than one paragraph.\n\n",
+            "    Indent each paragraph with four spaces.\n",
         );
         let formatted = super::format_markdown(src)?;
         assert_eq!(formatted, src);

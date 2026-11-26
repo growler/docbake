@@ -1,143 +1,163 @@
 # docbake
 
-CLI-утилита для сборки многофайловой Markdown-документации в различные выходные
-форматы: single-page HTML, multi-page HTML, PDF (через Typst), DOCX и
-Confluence.
+A CLI tool that builds multi-file Markdown documentation into a number of output
+formats: single-page HTML, multi-page HTML, PDF (with Typst), DOCX, Confluence,
+and Google Docs.
 
-Gitlab CI сервер для сборки и публикации документации.
+You can run it in a CI pipeline to build and publish documentation.
 
-Поддерживаемый синтаксис приведен в [документации](doc/ru/index.md).
+The [documentation](doc/en/index.md) describes the supported syntax.
 
-## Возможности
+## Features
 
-- **Форматы вывода:** `page`, `site`, `pdf`, `typst`, `markdown`, `docx`
-- **Диаграммы:** PlantUML, Mermaid, D2, Typst, DrawIO — рендерятся в SVG, результат кешируется
-- **Темы:** встроенные темы (`blank`, `blank`, `digitaltide`) + поддержка пользовательских тем
-- **Live-reload:** команда `serve` с автоматической пересборкой при изменении файлов
-- **Валидация:** команда `check` — проверка ссылок и рендеринг всех диаграмм
-- **Форматирование:** команда `fmt` — выравнивание таблиц и перенос параграфов
-- **Публикация:** прямая публикация в Confluence Server через REST API
+- Output formats: `page`, `site`, `pdf`, `typst`, `markdown`, `docx`
+- Diagrams: PlantUML, Mermaid, D2, Typst, DrawIO -- docbake renders them to SVG
+  and caches the result
+- Themes: the built-in theme `blank` (the default) and custom themes
+- Live reload: the `serve` command rebuilds the document when files change
+- Validation: the `check` command validates links and renders all diagrams
+- Formatting: the `fmt` command aligns tables and wraps paragraphs
+- Publication: publication to Confluence Server through the REST API, and to
+  Google Docs
 
-## Использование
+## Usage
 
 ```bash
 # Single-page HTML
-docbake build -f page -i doc/ru/index.md -o target/doc/output.html
+docbake build -f page -i doc/en/index.md -o target/doc/output.html
 
 # Multi-page HTML
-docbake build -f site -i doc/ru/index.md -o target/doc/html
+docbake build -f site -i doc/en/index.md -o target/doc/html
 
 # PDF
-docbake build -f pdf -i doc/ru/index.md -o target/doc/output.pdf
+docbake build -f pdf -i doc/en/index.md -o target/doc/output.pdf
 
-# Объединённый Markdown
-docbake build -f markdown -i doc/ru/index.md -o target/doc/output.md
+# Merged Markdown
+docbake build -f markdown -i doc/en/index.md -o target/doc/output.md
 
 # DOCX
-docbake build -f docx -i doc/ru/index.md -o target/doc/output.docx
+docbake build -f docx -i doc/en/index.md -o target/doc/output.docx
 
-# Live-reload сервер
-docbake serve -f page -i doc/ru/index.md
+# Live-reload server
+docbake serve -f page -i doc/en/index.md
 
-# Live-rebuild сервер (удобнее для PDF)
-docbake watch -f pdf -i doc/ru/index.md -o output.pdf
+# Live-rebuild server (use it for PDF)
+docbake watch -f pdf -i doc/en/index.md -o output.pdf
 
-Валидация документа (ссылки + диаграммы) для конкретного профиля
-docbake check -f html -i doc/ru/index.md
+# Validate the document (links and diagrams) for a specific profile
+docbake check -f html -i doc/en/index.md
 
-# Форматирование markdown-файла или каталога
-docbake fmt doc/ru
+# Format a Markdown file or directory
+docbake fmt doc/en
 
-# Проверка форматирования без записи (diff + код возврата)
-docbake fmt --check doc/ru
+# Check the formatting without a write (diff and exit code)
+docbake fmt --check doc/en
 ```
 
-Флаг `-b/--base` задаёт корневой каталог для разрешения абсолютных путей
-в include и ссылках. По умолчанию — каталог входного файла.
+The `-b/--base` flag sets the root directory for absolute paths in includes and
+links. The default is the directory of the input file.
 
-## Кросс-сборка
+## Cross-compilation
 
-- `make cross` — кросс-сборка в Linux-контейнере через `debles`.
-- `make mac-cross` — кросс-сборка напрямую на macOS-хосте (через `cargo-zigbuild`, без контейнера).
-
-Обе команды собирают цели:
+`make mac-cross` cross-compiles on a macOS host with `cargo-zigbuild`. It builds
+these targets:
 
 - `x86_64-unknown-linux-musl`
 - `x86_64-pc-windows-gnu`
 - `aarch64-apple-darwin`
 - `x86_64-apple-darwin`
 
-## Темы
+## Themes
 
-Экспорт выбранной темы для кастомизации (по умолчанию экспортируется `blank`):
+Export a theme to customize it (the default is `blank`):
 
 ```bash
 docbake init-theme my-theme
 ```
 
-Структура каталога темы:
+The theme directory has this structure:
 
 ```
 my-theme/
-  template.html              # Tera-шаблон для single-page HTML
-  template-multipage.html    # Tera-шаблон для multi-page HTML
-  template.typ               # Tera-шаблон для Typst/PDF
-  style.css                  # CSS (подставляется как {{ style }})
-  theme.puml                 # Тема PlantUML-диаграмм
-  theme.mmd                  # Тема Mermaid-диаграмм
-  theme.d2                   # Тема D2-диаграмм
-  docx.yaml                  # Параметры стилей DOCX
-  assets/                    # Статические файлы, доступные из шаблонов
+  template.html              # Tera template for single-page HTML
+  template-multipage.html    # Tera template for multi-page HTML
+  template.typ               # Tera template for Typst/PDF
+  style.css                  # CSS (inserted as {{ style }})
+  theme.puml                 # Theme for PlantUML diagrams
+  theme.mmd                  # Theme for Mermaid diagrams
+  theme.d2                   # Theme for D2 diagrams
+  docx.yaml                  # DOCX style parameters
+  assets/                    # Static files for the templates
 ```
 
-Подключение:
+Select a theme:
 
-- `docbake -t blank build ...` — встроенная тема по имени
-- `docbake -t my-theme build ...` — локальный каталог темы
+- `docbake -t blank build ...` -- the built-in theme, by name
+- `docbake -t my-theme build ...` -- a local theme directory
 
-## Публикация в Confluence
+## Publication to Confluence
 
-Команда `publish confluence` публикует документ в Confluence Server.
-Параметры подключения указываются в front matter входного файла или через
-CLI-флаги:
+The `publish confluence` command publishes a document to Confluence Server. Set
+the connection parameters in the front matter of the input file or with CLI
+flags:
 
 ```yaml
 ---
-title: Название документа
+title: Document title
 confluence:
   server: https://confluence.example.com
   space: PROJ
   path:
-    - Parent Page            # поиск по заголовку
-    - id:12345678            # или по content ID страницы
-    - Название страницы
+    - Parent Page            # find the page by title
+    - id:12345678            # or by the page content ID
+    - Page title
 ---
 ```
 
-Каждый элемент `path` (и каждый `--parent` в CLI) — это либо заголовок
-страницы, либо content ID с префиксом `id:`. Последний элемент — имя
-целевой страницы, остальные — цепочка родителей.
+Each `path` item (and each `--parent` in the CLI) is a page title or a content
+ID with the `id:` prefix. The last item is the name of the target page. The
+other items are the chain of parent pages.
 
-Использование `id:` удобно, когда заголовок родительской страницы
-слишком длинный или может измениться.
+Use `id:` when the title of a parent page is long or can change.
 
-По умолчанию в CI/CD публикация будет выполняется от имени пользователя 
-**documentabot** — ему необходимо предоставить права на запись в целевом 
-пространстве Confluence. Если надо публиковать от своего имени, то надо 
-в настройках CI/CD проекта задать переменную `CONFLUENCE_TOKEN` с личным 
-Personal Access Token.
+Docbake uses a Confluence Personal Access Token. It reads the token from the
+`CONFLUENCE_TOKEN` environment variable. If this variable is not set, docbake
+uses the token that you stored with `docbake auth confluence <server>`. The
+token owner must have write permission in the target Confluence space.
+
+## Publication to Google Docs
+
+The `publish gdoc` command renders the document as DOCX and uploads it to Google
+Drive as a Google Docs document.
+
+Before you use `docbake auth gdoc`, do these steps:
+
+1. In Google Cloud, create an OAuth client of the type "Desktop app".
+
+2. Give the client ID and the client secret to docbake. Use one of these methods:
+
+   - Set the `DOCBAKE_GDOC_CLIENT_ID` and `DOCBAKE_GDOC_CLIENT_SECRET` environment
+     variables.
+   - Add the `client_id` and `client_secret` keys to the `gdoc` section of the
+     credentials file `<config-dir>/docbake/credentials.json`.
+
+   If both are set, the environment variables take precedence.
+
+3. Run `docbake auth gdoc`. Docbake opens a browser for OAuth consent and stores
+   the refresh token.
+
+For CI/CD, use `docbake auth gdoc --service-account <key.json>` to store a
+service account key.
 
 ## CI/CD
 
-Примеры GitLab CI/CD job для генерации документации.
-
-### Прямой вызов docbake
+Examples of GitLab CI/CD jobs that build documentation.
 
 ```yaml
 build:docs:html:
   stage: build
   script:
-    - docbake build -f page -b doc -i doc/ru/index.md -o public/index.html
+    - docbake build -f page -b doc -i doc/en/index.md -o public/index.html
   artifacts:
     paths:
       - public/
@@ -145,7 +165,7 @@ build:docs:html:
 build:docs:html-multi:
   stage: build
   script:
-    - docbake build -f site -b doc -i doc/ru/index.md -o public
+    - docbake build -f site -b doc -i doc/en/index.md -o public
   artifacts:
     paths:
       - public/
@@ -153,42 +173,22 @@ build:docs:html-multi:
 build:docs:pdf:
   stage: build
   script:
-    - docbake build -f pdf -b doc -i doc/ru/index.md -o public/document.pdf
+    - docbake build -f pdf -b doc -i doc/en/index.md -o public/document.pdf
   artifacts:
     paths:
       - public/
 
-build:docs:kb:
+build:docs:confluence:
   stage: build
   script:
     - |
       docbake publish confluence \
         --meta confluence.server https://confluence.example.com \
-        --meta confluence.space SA \
-        --meta confluence.path id:204837448 \
-        --meta confluence.path "Document Publisher" \ 
-        -b doc -i doc/ru/index.md
+        --meta confluence.space PROJ \
+        --meta confluence.path id:12345678 \
+        --meta confluence.path "Document Publisher" \
+        -b doc -i doc/en/index.md
 ```
 
-### Сервер docs.blank 
-
-Есть сервис doc.blank с настроенным окружением для публикации документов. Для 
-удобства, там есть обёртка `publish-docs`, которая вызывает
-`docbake` с нужными параметрами и сразу публикует документ во всех форматах:
-
-HTML Single Page: `<giltab-group>/<gitlab-project>/<branch|tag>/html`\
-HTML Multi Page: `<giltab-group>/<gitlab-project>/<branch|tag>/site`\
-PDF: `<giltab-group>/<gitlab-project>/<branch|tag>/pdf/<gitlab-group>-<gitlab-project>.pdf`
-
-а также публикует в kb.blank.com, если в преамбуле есть соответствующие параметры.
-
-```yaml
-build:docs:
-  stage: build
-  tags:
-    - docs
-  rules:
-    - if: '$CI_COMMIT_BRANCH == "main"'
-  script:
-    - publish-docs -i doc/ru/index.md -b doc
-```
+For the Confluence job, set the `CONFLUENCE_TOKEN` CI/CD variable to a Personal
+Access Token.

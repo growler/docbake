@@ -51,20 +51,20 @@ cargo build                          # build the tool
 cargo test                           # run tests
 
 # Build a document
-cargo run -- build -f page -i doc/ru/index.md -o target/doc-out/builder.html
-cargo run -- build -f pdf -i doc/ru/index.md -o target/doc-out/builder.pdf
-cargo run -- build -f site -i doc/ru/index.md -o target/doc-out/builder
-cargo run -- build -f docx -b doc -i doc/ru/index.md -o target/doc-out/builder.docx
+cargo run -- build -f page -i doc/en/index.md -o target/doc-out/builder.html
+cargo run -- build -f pdf -i doc/en/index.md -o target/doc-out/builder.pdf
+cargo run -- build -f site -i doc/en/index.md -o target/doc-out/builder
+cargo run -- build -f docx -b doc -i doc/en/index.md -o target/doc-out/builder.docx
 
 # With a custom theme
-cargo run -- -t my-theme build -f page -i doc/ru/index.md -o target/out.html
+cargo run -- -t my-theme build -f page -i doc/en/index.md -o target/out.html
 
 # Export default theme for customisation
 cargo run -- init-theme my-theme
 
 # Debug/development
-cargo run -- dump doc/ru/index.md        # dump the include-graph
-cargo run -- parse doc/ru/index.md       # dump parsed AST
+cargo run -- dump doc/en/index.md        # dump the include-graph
+cargo run -- parse doc/en/index.md       # dump parsed AST
 ```
 
 ### CLI Flags
@@ -81,7 +81,7 @@ No custom lint, fmt, or CI config exists — standard `cargo fmt`, `cargo clippy
 
 - **MSRV: Rust 1.91** (set in `Cargo.toml`).
 - PDF output requires the `typst` binary on PATH — it is invoked as a subprocess.
-- Document content is in Russian (`doc/ru/`). The tool itself is
+- Document content is in English (`doc/en/`). The tool itself is
   language-agnostic.
 - `doc/` is user-facing documentation for document writers on how to use this
   system — not test fixtures or sample data. Treat it as product content.

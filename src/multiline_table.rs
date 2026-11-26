@@ -1782,7 +1782,9 @@ Following paragraph.
 
     #[test]
     fn pandoc_parity_with_header_russian() {
-        // Sample from doc/ru/markdown/tables-lists.md "Таблица с заголовком".
+        // Russian text of the sample "Table with a header" from
+        // doc/en/markdown/tables-lists.md. The Cyrillic text checks the
+        // column-to-byte mapping of multi-byte UTF-8 characters.
         let input = "\
 ---------------------------------------------------------------------
   Выровнен    По          Вправо  Влево
@@ -1824,7 +1826,9 @@ Following paragraph.
 
     #[test]
     fn pandoc_parity_headerless_russian() {
-        // Sample from doc/ru/markdown/tables-lists.md "Таблица без заголовка".
+        // Russian text of the sample "Table without a header" from
+        // doc/en/markdown/tables-lists.md. The Cyrillic text checks the
+        // column-to-byte mapping of multi-byte UTF-8 characters.
         let input = "\
 ------------ ----------- ------- ------------------------------------
   Первая      строка       12.0  Пример многострочной строки без
