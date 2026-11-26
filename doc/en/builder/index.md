@@ -489,9 +489,11 @@ rewritten blocks.
 
 You can install the Builder in one of these ways:
 
-- On macOS and Linux, use [Homebrew]:
+- On macOS and Linux, use [Homebrew]. Homebrew loads formulas only from trusted
+  taps, so trust the tap first:
 
     ~~~
+  $ brew trust growler/tap
   $ brew install growler/tap/docbake
     ~~~
 

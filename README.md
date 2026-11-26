@@ -24,9 +24,11 @@ documentation for the latest release is at
 
 ## Installation
 
-On macOS and Linux, install docbake with Homebrew:
+On macOS and Linux, install docbake with Homebrew. Homebrew loads formulas
+only from trusted taps, so trust the tap first:
 
 ```bash
+brew trust growler/tap
 brew install growler/tap/docbake
 ```
 
