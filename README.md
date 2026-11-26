@@ -6,7 +6,9 @@ and Google Docs.
 
 You can run it in a CI pipeline to build and publish documentation.
 
-The [documentation](doc/en/index.md) describes the supported syntax.
+The [documentation](doc/en/index.md) describes the supported syntax. The
+documentation for the latest release is at
+<https://growler.github.io/docbake/>.
 
 ## Features
 

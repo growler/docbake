@@ -90,6 +90,13 @@ GitHub Actions workflows are in `.github/workflows/`:
   `x86_64-pc-windows-msvc`), creates a GitHub release with the archives and
   `SHA256SUMS`, and publishes the crate to crates.io. The crates.io job uses the
   `crates-io` environment and the `CARGO_REGISTRY_TOKEN` secret.
+- `pages.yml` runs when a `vX.Y.Z` tag is pushed, or by hand. It installs
+  PlantUML, D2, and Draw.io (through `xvfb-run`), runs `docbake check`, builds
+  `doc/en/index.md` with `-f site -b doc`, and deploys the result to GitHub
+  Pages at <https://growler.github.io/docbake/>. `docbake build` exits 0 when
+  a diagram tool fails, so `check` is the gate. Tool versions are pinned in the
+  workflow `env`. Pages source is "GitHub Actions", and the `github-pages`
+  environment allows deployment from `v*` tags.
 
 ## Constraints
 
